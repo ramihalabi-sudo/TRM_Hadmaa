@@ -1,0 +1,3 @@
+[submodule "detector_lookup_HTML/Detectors_Atlas"]
+	path = detector_lookup_HTML/Detectors_Atlas
+	url = https://github.com/ramihalabi-sudo/Detectors_Atlas.git

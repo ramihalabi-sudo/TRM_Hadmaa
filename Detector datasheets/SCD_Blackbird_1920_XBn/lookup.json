@@ -1,0 +1,151 @@
+{
+  "query": "SCD Blackbird 1920 XBn",
+  "detector_name": "SCD Blackbird 1920 XBn",
+  "manufacturer": "SCD (SemiConductor Devices)",
+  "summary": "MWIR XBn-InAsSb barrier (HOT) cooled FPA, 1920\u00d71536 at 10 \u00b5m pitch, operating at 150 K. No dedicated product datasheet was found; values come mainly from SCD's technical paper on its 10 \u00b5m InSb/XBn family, and some are taken from sibling devices (1280 XBn, 640 XBn).",
+  "category": "Thermal",
+  "values": {
+    "imager_type": "cooled",
+    "n_h": 1920,
+    "n_v": 1536,
+    "pitch_h_um": 10,
+    "pitch_v_um": 10,
+    "active_h_um": null,
+    "active_v_um": null,
+    "frame_rate_hz": 120,
+    "well_capacity_e": 2000000,
+    "readout_noise_e": 330,
+    "dark_current_A": 2e-13,
+    "adc_lsb_e": 244,
+    "netd_mK": null,
+    "operating_temp_K": 150,
+    "cold_shield_F": null,
+    "thermal_time_ms": null,
+    "cut_on_um": 3.6,
+    "cut_off_um": 4.2
+  },
+  "notes": [
+    {
+      "field": "n_h",
+      "note": "[B] Gershon et al. (SCD): 10 \u00b5m XBn arrays made in 1920\u00d71536."
+    },
+    {
+      "field": "n_v",
+      "note": "[B]: 1536 rows."
+    },
+    {
+      "field": "pitch_h_um",
+      "note": "[B]: 10 \u00b5m pitch."
+    },
+    {
+      "field": "pitch_v_um",
+      "note": "[B]: 10 \u00b5m pitch."
+    },
+    {
+      "field": "frame_rate_hz",
+      "note": "[B] ROIC table: full frame at 120 Hz with 4 video ports (60 Hz with 2 ports, 30 Hz with 1). The InSb datasheet [A] says \u2265120 Hz, but its features list says \u226590 Hz. 2\u00d72 binning supports up to 450 Hz [B]."
+    },
+    {
+      "field": "well_capacity_e",
+      "note": "[B]: 2.0 Me\u207b mode, the mode used for the XBn NETD measurement. Other ROIC modes are 0.3, 0.5 and 4.0 Me\u207b."
+    },
+    {
+      "field": "readout_noise_e",
+      "note": "[B]: 330 e\u207b in the 2.0 Me\u207b mode (260 e\u207b in ITR mode), measured at 77 K. At 150 K the noise may increase by up to 30%, i.e. up to about 430 e\u207b (derived)."
+    },
+    {
+      "field": "dark_current_A",
+      "note": "[B]: typical 0.2 pA per pixel at 150 K, measured on the 1280\u00d71024 XBn FPA with the same 10 \u00b5m pixel, not on the 1920."
+    },
+    {
+      "field": "adc_lsb_e",
+      "note": "Derived: 2.0e6 e\u207b / 2^13 for a 13-bit ADC [B], giving about 244 e\u207b."
+    },
+    {
+      "field": "operating_temp_K",
+      "note": "[B]: 150 K (HOT XBn)."
+    },
+    {
+      "field": "cut_on_um",
+      "note": "[C] SCD MWIR web page / Blackbird 1280 family datasheet search snippets: XBn band 3.6\u20134.2 \u00b5m, filter-defined. 1\u20134.2 \u00b5m available on request."
+    },
+    {
+      "field": "cut_off_um",
+      "note": "[B]: XBn cut-off about 4.2 \u00b5m; also [C]."
+    },
+    {
+      "field": "netd_mK",
+      "note": "No value for the 1920 XBn. [B] gives 36 mK average (std 4 mK) for the Blackbird-640 XBn at F/3, 150 K, 50% well fill, 2.0 Me\u207b mode; no scene temperature stated. The InSb 1920 is <28 mK at 70% well fill, 2.5 Me\u207b [A]."
+    },
+    {
+      "field": "cold_shield_F",
+      "note": "Not stated for the XBn 1920. The InSb 1920 standard is f/3 (f/2 and f/4 optional). The XBn Mini Blackbird 1280 offers F/3.4 and F/4."
+    },
+    {
+      "field": "active_h_um",
+      "note": "Not stated; no fill factor is given."
+    },
+    {
+      "field": "thermal_time_ms",
+      "note": "Not applicable: photon detector, not a microbolometer."
+    },
+    {
+      "field": "qe_curve",
+      "note": "Approximation by the note-taker, based on the typical XBn QE of 70% [B] and the 3.6\u20134.2 \u00b5m band. Not a published curve."
+    },
+    {
+      "field": "general",
+      "note": "The XBn pixel MTF is 0.36 at half Nyquist [B]. A 2017 SCD journal paper calls the device 'HOT Blackbird' and says it has been developed. SCD's current Blackbird 1920 datasheet covers only the InSb version (80 K, 1\u20135.4 \u00b5m)."
+    }
+  ],
+  "qe_curve": [
+    {
+      "lambda_um": 3.5,
+      "qe_pct": 0
+    },
+    {
+      "lambda_um": 3.6,
+      "qe_pct": 35
+    },
+    {
+      "lambda_um": 3.7,
+      "qe_pct": 70
+    },
+    {
+      "lambda_um": 4.1,
+      "qe_pct": 70
+    },
+    {
+      "lambda_um": 4.2,
+      "qe_pct": 35
+    },
+    {
+      "lambda_um": 4.3,
+      "qe_pct": 0
+    }
+  ],
+  "datasheet_urls": [
+    {
+      "title": "SCD Blackbird 1920 datasheet (InSb version)",
+      "url": "https://www.scd-infrared.com/wp-content/uploads/2026/03/Blackbird-1920.pdf"
+    },
+    {
+      "title": "SCD BB 1920 datasheet (older InSb version)",
+      "url": "https://www.scd.co.il/wp-content/uploads/2019/07/BB_1920.pdf"
+    },
+    {
+      "title": "SCD Blackbird 1280 family datasheet (includes XBn)",
+      "url": "https://www.scd-infrared.com/wp-content/uploads/2026/03/Blackbird-1280.pdf"
+    },
+    {
+      "title": "SCD Mini Blackbird datasheet (XBn 1280)",
+      "url": "https://scdusa-ir.com/wp-content/uploads/2021/11/Mini-Blackbird.pdf"
+    }
+  ],
+  "sources": [
+    "[A] SCD Blackbird 1920 datasheet (InSb only): https://www.scd-infrared.com/wp-content/uploads/2026/03/Blackbird-1920.pdf",
+    "[B] Gershon et al. (SCD), 10 \u00b5m pitch family of InSb and XBn detectors for MWIR imaging: https://scdusa-ir.com/wp-content/uploads/2022/06/10um-pitch-family-of-InSb-and-XBn-detectors-for-MWIR-imaging.pdf",
+    "[C] SCD MWIR web page and Blackbird 1280 family datasheet (search snippets only)",
+    "SCD, Development and production of array barrier detectors at SCD, JEM 2017: https://scdusa-ir.com/wp-content/uploads/2022/06/DEVELOPMENT-AND-PRODUCTION-OF-ARRAY-BARRIER-DETECTORS-AT-SCD_published-in-JEM-2017.pdf"
+  ]
+}

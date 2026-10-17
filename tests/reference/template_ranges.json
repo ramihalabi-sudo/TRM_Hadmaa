@@ -1,0 +1,133 @@
+{
+ "Thermal - LWIR cooled staring 640x512 (CMT)": {
+  "time_s": 0.54,
+  "ranges": {
+   "Atm 1 (sigma=0.2/km)": {
+    "Detection": 9.12779512136544,
+    "Recognition": 3.414703539744763,
+    "Identification": 1.7351580378551053
+   },
+   "Atm 2 (sigma=1/km)": {
+    "Detection": 4.285722312789627,
+    "Recognition": 2.606079301366289,
+    "Identification": 1.5725299043090106
+   }
+  },
+  "fom_nyq_h": 0.13714336821518816,
+  "n_warn": 0
+ },
+ "Thermal - MWIR cooled staring 640x512 (InSb)": {
+  "time_s": 0.46,
+  "ranges": {
+   "Atm 1 (sigma=0.2/km)": {
+    "Detection": 14.477496963314534,
+    "Recognition": 6.419085799095153,
+    "Identification": 3.3461359625550084
+   },
+   "Atm 2 (sigma=1/km)": {
+    "Detection": 5.319969317086568,
+    "Recognition": 3.670693122954803,
+    "Identification": 2.614595327969284
+   }
+  },
+  "fom_nyq_h": 0.10584036900344748,
+  "n_warn": 0
+ },
+ "Thermal - MWIR cooled staring 640x512 (XBn 3.6-4.2 um)": {
+  "time_s": 0.47,
+  "ranges": {
+   "Atm 1 (sigma=0.2/km)": {
+    "Detection": 13.197880394994517,
+    "Recognition": 6.52187249107043,
+    "Identification": 3.4903497587841046
+   },
+   "Atm 2 (sigma=1/km)": {
+    "Detection": 4.786059978323418,
+    "Recognition": 3.37444868238443,
+    "Identification": 2.477957880954386
+   }
+  },
+  "fom_nyq_h": 0.14638776433873169,
+  "n_warn": 1
+ },
+ "Thermal - LWIR uncooled microbolometer 640x480": {
+  "time_s": 0.48,
+  "ranges": {
+   "Atm 1 (sigma=0.2/km)": {
+    "Detection": 5.246632403282042,
+    "Recognition": 1.800891185859468,
+    "Identification": 0.9073154438323526
+   },
+   "Atm 2 (sigma=1/km)": {
+    "Detection": 2.890380211027408,
+    "Recognition": 1.6201049685191724,
+    "Identification": 0.8807306241416658
+   }
+  },
+  "fom_nyq_h": 0.12859748190349385,
+  "n_warn": 0
+ },
+ "Visible - CMOS daylight camera 1920x1080": {
+  "time_s": 5.86,
+  "ranges": {
+   "Atm 1 (V=23 km)": {
+    "Detection": 14.732441558600467,
+    "Recognition": 8.183842175079148,
+    "Identification": 5.002860917763891
+   },
+   "Atm 2 (V=5 km)": {
+    "Detection": 5.777384624616689,
+    "Recognition": 4.223476152299264,
+    "Identification": 3.112571082853086
+   }
+  },
+  "fom_nyq_h": 374.95259877247025,
+  "n_warn": 0
+ },
+ "Visible/SWIR - InGaAs night camera 640x512": {
+  "time_s": 0.61,
+  "ranges": {
+   "Atm 1 (V=23 km)": {
+    "Detection": 9.036136561983866,
+    "Recognition": 4.779613389112995,
+    "Identification": 2.6565555574582085
+   },
+   "Atm 2 (V=5 km)": {
+    "Detection": 3.864230197618122,
+    "Recognition": 2.5250704260085097,
+    "Identification": 1.8052139651243158
+   }
+  },
+  "fom_nyq_h": 76.43118946972587,
+  "n_warn": 0
+ },
+ "General - MWIR sun-lit scene (emission + reflection)": {
+  "time_s": 0.54,
+  "ranges": {
+   "Atm 1 (sigma=0.2/km)": {
+    "Detection": 18.27199097006264,
+    "Recognition": 7.627662324886094,
+    "Identification": 3.982892063048393
+   },
+   "Atm 2 (sigma=1/km)": {
+    "Detection": 6.201146719533738,
+    "Recognition": 4.51045798133806,
+    "Identification": 3.25117819378116
+   }
+  },
+  "fom_nyq_h": 8019.348649673664,
+  "n_warn": 0
+ },
+ "NIIRS - airborne visible camera (slant path)": {
+  "time_s": 1.41,
+  "ranges": {
+   "Atm 1 (V=23 km)": {
+    "Detection": 28.519021264253592,
+    "Recognition": 21.10105967302131,
+    "Identification": 15.411621570936092
+   }
+  },
+  "fom_nyq_h": 881.706437654369,
+  "n_warn": 0
+ }
+}
