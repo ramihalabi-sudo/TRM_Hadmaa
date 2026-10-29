@@ -30,7 +30,7 @@ class Pages(unittest.TestCase):
         meta = self.page("Metadata")
         doc = ["optics.mtf_meta", "optics.mtf_band", "atmosphere.meta.source", "atmosphere.meta.resolution",
                "detector.op_mode", "detector.netd_nuc", "basic.roi", "dsp.pl_order", "dsp.pl_version",
-               "display.algo_roc", "target.clutter", "target.scene_id"]
+               "display.algo_roc", "target.scene_id"]
         for path in doc:
             self.assertIn(path, meta)
         engineering = [p for n, _f in G.TABS if n not in ("Metadata", "Validation data") for p in self.page(n)]
@@ -92,6 +92,26 @@ class Pages(unittest.TestCase):
         q = merged(LWIR)
         q["detector"].update(square=False, pitch_v_um=20.0)
         self.assertEqual(G.apply_square(q)["detector"]["pitch_v_um"], 20.0)
+
+    def test_phase3_inputs(self):
+        # clutter and compression act on the ranges (extensions) and moved from 'Metadata' to the pages they act on
+        self.assertIn("target.clutter", self.page("Target & scenario"))
+        self.assertIn("dsp.comp_blur_px", self.page("Signal processing"))
+        self.assertNotIn("dsp.pl_compression", self.page("Metadata"))
+        p = merged(MWIR)
+        self.assertFalse(self.visible("turbulence.on", p))                     # TRM4: no turbulence in Thermal
+        self.assertTrue(self.visible("turbulence.thermal", p))
+        self.assertTrue(self.visible("turbulence.on", merged(MWIR, turbulence__thermal=True)))
+        self.assertFalse(self.visible("atmosphere.atm.0.rh_pct", p))
+        w = merged(MWIR, atmosphere__mode="weather")
+        self.assertTrue(self.visible("atmosphere.atm.0.rh_pct", w))
+        self.assertFalse(self.visible("atmosphere.atm.0.sigma", w))
+        self.assertFalse(self.visible("display.algo_cnr_min", merged(MWIR, display__observer="algorithm"), True))
+        pot = merged(MWIR, display__observer="algorithm", display__algo_criterion="pot")
+        self.assertTrue(self.visible("display.algo_cnr_min", pot, True))
+        self.assertTrue(self.visible("target.tasks.0.pot", pot))
+        self.assertFalse(self.visible("target.clutter_model", p))
+        self.assertTrue(self.visible("target.clutter_model", merged(MWIR, target__clutter="high")))
 
     def test_square_flag_does_not_reach_the_ranges(self):
         p = template(LWIR)

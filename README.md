@@ -50,6 +50,32 @@ the local copy in `detector_lookup_HTML/`) a few seconds after start-up and ever
 good (ids stored under `atlas_news` in `%APPDATA%\TRM4\settings.json`). *News > Detector Atlas news...* reopens the
 window, including already-read items.
 
+## Version 2.6 - roadmap phase 3: extensions beyond TRM4 (reports/)
+
+TRM4 is line-pair deterministic: one range per task criterion, no probability, no clutter, no meteorological
+extinction, no turbulence in the Thermal category and no machine observer. The ten capabilities of the report's
+phase 3 are added as **extensions** (`trm4/extensions.py`, each with its source and limits of validity). Every one
+is off by default or an extra output next to the TRM4 result, so the template DRI ranges are unchanged (engine
+version 2.6). The Summary, the text and Hebrew reports and the DRI context list the extensions in use.
+
+| Capability | Implementation | Source / limits |
+|---|---|---|
+| P50 / P80 / P90 | The TRM4 criterion is the 50 % value N50; the P80 / P90 ranges use N50 x 1.45 / x 1.75 (Johnson / Lawson TTPF, *Also report P80 / P90 ranges*, on by default). Shown on the Summary cards, in System data and both reports. Where the range is resolution-limited R90 = 0.57 R50 (LWIR Identification 1.735 -> 0.998 km). | Sandia SAND2015-6368; not a TRM4 output, the observer scatter is not modelled |
+| Range bands | Sensitivity tab *Range bands*: every active atmosphere x Cn2 / 10, nominal, x 10 (r0 scaled by 10^-+3/5 in the r0 mode); cards, band chart, table, CSV, report. Daylight template: Detection 5.4 - 16.5 km around 14.7 km. | Scenario envelope, not a probability interval |
+| Clutter | *Clutter raises the Detection criterion*: ACQUIRE-LC factor C [(C/dT)^2 + 1] / [(1/dT)^2 + 1], C = 1 / 1.5 / 2 / 2.7 (6.1 for high clutter at dT = 2 K); C outside the Thermal category. Acts on the first task (Detection) only and is capped at the Recognition criterion. The clutter level moved from *Metadata* to *Target & scenario*. | The entered criterion is taken as the low-clutter value; dT_RSS approximated by dT |
+| Extinction from the weather | Atmosphere mode *Visual range + humidity + air temperature*: spectral extinction = aerosol (3.912 / V)(lambda / 0.55)^-q (Kruse; Kim et al. below 6 km) + water-vapour continuum 8-14 um (Roberts, Selby & Biberman 1976), Beer-Lambert per wavelength. LWIR at 15 C / 50 %: 0.044 /km; 30 C / 80 %: 0.47 /km at 10 um. New input *relative humidity* per slot (also an uncertainty and advisor input). | No gas-line absorption: a lower bound in clear air; MWIR is aerosol only and warned; fog below 1 km warned |
+| Turbulence in the Thermal category | *Apply turbulence in the Thermal category*: MTDP_R = MTDP_0 AMOP_0 / AMOP_R with AMOP simulated at 9 ranges. MWIR: Cn2 1e-14 Detection -4 %, 1e-13 Detection -21 %, Identification -7 % (run ~2.6 s). | TRM4 neglects it by design (Sec. 2.28) |
+| Jitter | Preset *Typical residual LOS jitter, 70 urad rms* (US Army NV-IPM practice). Without jitter, an assumption flags fields of view where 70 urad exceeds 1/3 IFOV. The template defaults stay 0. | NV-IPM practice value; Gaussian MTF valid below ~1/3 IFOV |
+| Scan smear | Smear of the linear motion per thermal time constant (microbolometer) or integration time in pixels: System data, derived panel, warning above 1 pixel (uncooled, 10 deg/s: 5.1 pixels). The first-order smear MTF was already applied. | - |
+| Algorithm observer | *Algorithm task criterion*: TRM4 line pairs (uncalibrated, as before) or **pixels on target + pixel CNR**: 60 / 250 / 350 pixels on the projected area per task, pixel CNR of the processed frame >= 3; the shorter range counts and its limit is named. LWIR: Detection 1.98 km (human 9.13 km, uncalibrated line-pair algorithm 16.4 km). | Holst & Mahalanobis 2023; thresholds generic until calibrated |
+| Global sensitivity | Uncertainty methods *Global: Morris screening* (r trajectories, mu* / sigma per task) and *Global: Sobol indices* (S_i Saltelli 2010, S_Ti Jansen 1999, 95 % bootstrap) over the stated +/- intervals (uniform), with a run cache and the process pool. MWIR, 15 inputs, r = 6: 94 runs, 15 s. | Estimators checked against an analytic function |
+| Compression, turbulence mitigation | Lossy compression as an equivalent Gaussian blur in pixels on the digital frame (*Signal processing*, moved from *Metadata*); daylight template 0.5 px: Recognition -19 %. Mitigation as an effective r0 gain: x2 / x3 give Recognition +12 / +16 % (published +10 to +25 %). | O'Shea et al. 2008; empirical, to be fitted to the codec / processing |
+
+The P80 / P90 ranges roughly double the run time of a Visible run with turbulence (1.7 -> 3.2 s); the analyses
+(sweeps, uncertainty, advisor, bands) skip them (`analysis.fast`). Not done: gas-line absorption in the weather
+mode, aerosol MTF, a TTP / V50 path and a geometric quick mode (report phase 3 items outside the roadmap list).
+`tests/test_extensions.py` covers these items; `tests/test_gui_layout.py` the new inputs.
+
 ## Version 2.5 - corrections from the parameter-sensitivity study (reports/)
 
 A one-at-a-time and 2-D sensitivity study over four representative systems (about 2,500 runs) found results
@@ -100,7 +126,7 @@ form and is collected back without a difference):
 
 | Item | Change |
 |---|---|
-| Metadata page | New page for traceability only: description of the imported optics MTF and atmosphere, sensor operating mode, NETD test state, ROI, processing pipeline, algorithm ID / ROC definition, clutter and scene ID (24 fields, before spread over 7 pages). The original places point to it. |
+| Metadata page | New page for traceability only: description of the imported optics MTF and atmosphere, sensor operating mode, NETD test state, ROI, processing pipeline, algorithm ID / ROC definition and scene ID (24 fields in 2.5, before spread over 7 pages; clutter and compression act on the ranges since 2.6 and moved to the pages they act on). The original places point to it. |
 | One entry per pixel pair | *Square pixels* (Detector geometry): one entry for pitch and active size; the vertical values follow. Set from the values whenever a project, template, profile or datasheet is loaded, so rectangular pixels keep their vertical values. GUI state only - the engine reads the h / v values. |
 | Active values not hidden | The fixed pattern noise group opens when FPN is estimated (it acts on the ranges), the ADC group whenever an ADC step is set, the read noise is a base input for photon detectors, threshold SNR and eye integration time are shown as *observer calibration constants*. |
 | Checks and overrides out of the way | Measured-FOV cross-check is advanced, CCD charge transfer is legacy (shown only while used), *Neglect eye MTF* only in laboratory mode (or while ticked), target depth only for side / diagonal aspect or an oblique line of sight. |

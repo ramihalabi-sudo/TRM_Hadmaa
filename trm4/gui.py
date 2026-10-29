@@ -36,6 +36,7 @@ from . import derived as DV
 from . import profiles as PR
 from . import analysis as AN
 from . import advisor as ADV
+from . import extensions as X
 from . import atlas_news as NEWS
 from .help_text import help_for
 from . import __version__
@@ -248,6 +249,11 @@ SPEC_ATM = lambda p: p["atmosphere"]["mode"] == "spectral"
 CAM_NETD = lambda p: THERMAL(p) and (p["detector"]["noise_mode"] == "measured" and p["imager_type"] == "cooled" or
                                      UNCOOLED(p) and p["detector"]["noise_mode"] == "device")
 ALGO = lambda p: p["display"].get("observer", "legacy") == "algorithm"
+POT = lambda p: ALGO(p) and p["display"].get("algo_criterion", "lp") == "pot"
+WEATHER = lambda p: p["atmosphere"]["mode"] == "weather"
+# turbulence acts outside the Thermal category (TRM4) and, as an extension, in it
+TURB_CAT = lambda p: NOT_THERMAL(p) or p["turbulence"].get("thermal", False)
+TURB_ON = lambda p: TURB_CAT(p) and p["turbulence"]["on"]
 R0_MODE = lambda p: p["turbulence"]["cn2_mode"] == "r0"
 ATM_DOC = lambda p: SPEC_ATM(p) or NOT_THERMAL(p) and p["atmosphere"].get("path_mode") == "import"
 # the target depth is seen only from the side / diagonal or on an oblique line of sight (Eqs. 3.81-3.84)
@@ -303,12 +309,16 @@ def _atm_rows():
         on = (lambda i=i: lambda p: p["atmosphere"]["atm"][i]["on"] and not SPEC_ATM(p))()
         out += [F("atmosphere.atm.%d.on" % i, "Atmosphere %d" % (i + 1), "bool", cond=lambda p: not SPEC_ATM(p)),
                 F("atmosphere.atm.%d.sigma" % i, "  extinction coefficient", unit="1/km",
-                  cond=(lambda on=on: lambda p: on(p) and not (VISIBLE(p) and p["atmosphere"]["mode"] == "visibility"))()),
+                  cond=(lambda on=on: lambda p: on(p) and not WEATHER(p) and
+                        not (VISIBLE(p) and p["atmosphere"]["mode"] == "visibility"))()),
                 F("atmosphere.atm.%d.V_km" % i, "  visual range", unit="km",
-                  cond=(lambda on=on: lambda p: on(p) and VISIBLE(p) and p["atmosphere"]["mode"] == "visibility")()),
+                  cond=(lambda on=on: lambda p: on(p) and (WEATHER(p) or VISIBLE(p) and
+                                                           p["atmosphere"]["mode"] == "visibility"))()),
+                F("atmosphere.atm.%d.rh_pct" % i, "  relative humidity", unit="%",
+                  cond=(lambda on=on: lambda p: on(p) and WEATHER(p))()),
                 F("atmosphere.atm.%d.tau0" % i, "  initial transmission", cond=on),
                 F("atmosphere.atm.%d.T_air_K" % i, "  air temperature", unit="K",
-                  cond=(lambda on=on: lambda p: on(p) and GENERAL(p))()),
+                  cond=(lambda on=on: lambda p: on(p) and (GENERAL(p) or WEATHER(p)))()),
                 F("atmosphere.atm.%d.F_PR" % i, "  path radiance factor",
                   cond=(lambda on=on: lambda p: on(p) and NOT_THERMAL(p) and p["atmosphere"].get("path_mode") != "import")())]
     return out
@@ -595,6 +605,11 @@ TABS = [
         F("dsp.lrep_type", "Line replication type", "choice", [("pixel", "Pixel replication"), ("linear", "Linear interpolation")]),
         F("dsp.crep", "Column replication factor (adds no information)", "int"),
         F("dsp.crep_type", "Column replication type", "choice", [("pixel", "Pixel replication"), ("linear", "Linear interpolation")]),
+        H("Compression", level="adv", active=lambda p: p["dsp"].get("pl_compression", "none") != "none"),
+        F("dsp.pl_compression", "Compression", "choice", [("none", "None"), ("lossless", "Lossless"),
+                                                          ("lossy", "Lossy")]),
+        F("dsp.comp_blur_px", "Equivalent blur of the lossy codec (0 = not modelled, extension)", unit="pixels rms",
+          cond=lambda p: p["dsp"].get("pl_compression") == "lossy"),
     ]),
     ("Display & observer", [
         H("Observer model", level="adv", active=lambda p: p["display"].get("observer", "legacy") != "legacy"),
@@ -602,6 +617,10 @@ TABS = [
                                                      ("human", "Human - user-defined viewing conditions"),
                                                      ("algorithm", "Algorithm (reads the digital frames)")]),
         F("display.algo_calib", "Calibration data set ID (empty = uncalibrated)", "text", cond=ALGO),
+        F("display.algo_criterion", "Algorithm task criterion", "choice",
+          [("lp", "TRM4 line pairs, display and eye removed (uncalibrated)"),
+           ("pot", "Pixels on target + pixel CNR (extension)")], cond=ALGO),
+        F("display.algo_cnr_min", "  minimum pixel CNR (processed frame)", cond=POT),
         H("Observation (standard observer profile)", cond=lambda p: not ALGO(p)),
         F("display.observation", "Observation", "choice", [("direct", "Direct observation"), ("eyepiece", "Through eyepiece")],
           cond=lambda p: not ALGO(p)),
@@ -639,6 +658,9 @@ TABS = [
         F("stab.jitter_unit", "Motion unit in file", "choice", [("urad", "microradian"), ("mrad", "milliradian"),
                                                                 ("pixels", "detector pixels")], cond=JIT_MEAS),
         F("stab.jitter_rate_hz", "Sample rate (0 = time column in file)", unit="Hz", cond=JIT_MEAS),
+        F("stab.jitter_preset", "Random jitter preset", "choice",
+          [("custom", "User values"), ("nvipm70", "Typical residual LOS jitter, 70 urad rms (NV-IPM practice)")],
+          cond=JIT_MODEL),
         F("stab.random_on", "Random vibrations", "bool", cond=JIT_MODEL),
         F("stab.rand_h_mrad", "Horizontal random vibration rms", cond=lambda p: JIT_MODEL(p) and p["stab"]["random_on"], unit="mrad"),
         F("stab.rand_v_mrad", "Vertical random vibration rms", cond=lambda p: JIT_MODEL(p) and p["stab"]["random_on"], unit="mrad"),
@@ -700,7 +722,16 @@ TABS = [
         F("target.task_preset", "Criteria preset (version)", "choice", [(k, v[0]) for k, v in P.TASK_PRESETS.items()]),
     ] + [f for i in range(3) for f in (F("target.tasks.%d.on" % i, "Task %d active" % (i + 1), "bool"),
                                         F("target.tasks.%d.name" % i, "  name", "text"),
-                                        F("target.tasks.%d.lp" % i, "  number of line pairs"))]),
+                                        F("target.tasks.%d.lp" % i, "  number of line pairs"),
+                                        F("target.tasks.%d.pot" % i, "  pixels on target (algorithm)", cond=POT))] + [
+        H("Probability and clutter (extensions - TRM4 gives the 50 % range of an uncluttered scene)"),
+        F("target.prob_levels", "Also report P80 / P90 ranges (Johnson TTPF)", "bool", cond=lambda p: not POT(p)),
+        F("target.clutter", "Background clutter", "choice", [("not_specified", "Not specified"), ("low", "Low"),
+                                                             ("medium_low", "Medium-low"), ("medium", "Medium"),
+                                                             ("high", "High")]),
+        F("target.clutter_model", "Clutter raises the Detection criterion (ACQUIRE-LC)", "bool",
+          cond=lambda p: p["target"].get("clutter", "not_specified") != "not_specified"),
+    ]),
     ("Irradiance", [
         H("Illumination source (Sec. 2.26)", cond=NOT_THERMAL),
         F("irradiance.mode", "Irradiance", "choice", [("none", "No irradiance (General only)"),
@@ -739,6 +770,8 @@ TABS = [
         F("atmosphere.preset", "Fast-mode preset", "choice", P.ATM_PRESET_NAMES, cond=lambda p: not SPEC_ATM(p)),
         F("atmosphere.mode", "Transmission via", "choice", [("extinction", "Extinction coefficient (fast, Beer-Lambert)"),
                                                            ("visibility", "Visual range (Visible category only)"),
+                                                           ("weather", "Visual range + humidity + air temperature "
+                                                                       "(extension)"),
                                                            ("spectral", "Spectral data import (e.g. MODTRAN)")]),
         F("atmosphere.spec_file", "Transmission vs wavelength (x range)", "file",
           {"check": IM.atmosphere_summary, "title": "Import spectral atmospheric transmission"}, cond=SPEC_ATM),
@@ -756,31 +789,27 @@ TABS = [
         F("atmosphere.path_L_km", "Path length of the data (single column)", unit="km",
           cond=lambda p: NOT_THERMAL(p) and p["atmosphere"].get("path_mode") == "import"),
         H("Description of the imported data: page 'Metadata'", cond=ATM_DOC),
-        H("Turbulence (Sec. 2.28)", cond=NOT_THERMAL),
-        F("turbulence.on", "Consider turbulence", "bool", cond=NOT_THERMAL),
+        H("Turbulence (Sec. 2.28)", cond=FIELD),
+        F("turbulence.thermal", "Apply turbulence in the Thermal category (extension - TRM4 neglects it)", "bool",
+          cond=lambda p: THERMAL(p) and FIELD(p)),
+        F("turbulence.on", "Consider turbulence", "bool", cond=TURB_CAT),
         F("turbulence.cn2_preset", "Scenario default (Table C.2)", "choice",
-          [("custom", "Custom")] + [(k, k) for k in P.CN2_PRESETS], cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"]),
+          [("custom", "Custom")] + [(k, k) for k in P.CN2_PRESETS], cond=TURB_ON),
         F("turbulence.exposure", "Type of MTF", "choice", [("short", "Short exposure (image motion removed)"),
-                                                           ("long", "Long exposure (incl. image wander)")],
-          cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"]),
+                                                           ("long", "Long exposure (incl. image wander)")], cond=TURB_ON),
         F("turbulence.cn2_mode", "Turbulence specified via", "choice",
           [("fixed", "Cn2 - fixed value"), ("height", "Cn2 - simplified height dependence"),
-           ("r0", "Fried parameter r0 with reference conditions")],
-          cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"]),
-        F("turbulence.cn2", "Cn2", cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"] and not R0_MODE(p),
-          unit="m^-2/3"),
-        F("turbulence.r0_cm", "Fried parameter r0", cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"] and R0_MODE(p),
-          unit="cm"),
-        F("turbulence.r0_lambda_um", "  r0 reference wavelength", unit="um",
-          cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"] and R0_MODE(p)),
-        F("turbulence.r0_L_km", "  r0 reference path length", unit="km",
-          cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"] and R0_MODE(p)),
-        F("turbulence.h_ref_m", "Cn2 specified at height", cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"]
+           ("r0", "Fried parameter r0 with reference conditions")], cond=TURB_ON),
+        F("turbulence.cn2", "Cn2", cond=lambda p: TURB_ON(p) and not R0_MODE(p), unit="m^-2/3"),
+        F("turbulence.r0_cm", "Fried parameter r0", cond=lambda p: TURB_ON(p) and R0_MODE(p), unit="cm"),
+        F("turbulence.r0_lambda_um", "  r0 reference wavelength", unit="um", cond=lambda p: TURB_ON(p) and R0_MODE(p)),
+        F("turbulence.r0_L_km", "  r0 reference path length", unit="km", cond=lambda p: TURB_ON(p) and R0_MODE(p)),
+        F("turbulence.h_ref_m", "Cn2 specified at height", cond=lambda p: TURB_ON(p)
           and p["turbulence"]["cn2_mode"] == "height", unit="m"),
         F("turbulence.time", "Day / night", "choice", [("day", "Day"), ("night", "Night")],
-          cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"] and p["turbulence"]["cn2_mode"] == "height"),
-        F("turbulence.L0_m", "Outer scale L0, von Karman (0 = Kolmogorov)", unit="m",
-          cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"]),
+          cond=lambda p: TURB_ON(p) and p["turbulence"]["cn2_mode"] == "height"),
+        F("turbulence.L0_m", "Outer scale L0, von Karman (0 = Kolmogorov)", unit="m", cond=TURB_ON),
+        F("turbulence.mitigation", "Mitigation processing: effective r0 gain (1 = none, extension)", cond=TURB_ON),
     ]),
     ("Metadata", [
         H("Imported optics MTF", cond=OPT_FILE),
@@ -802,18 +831,14 @@ TABS = [
         F("detector.op_mode", "Operating mode (gain, conversion gain, readout, temperature)", "text", cond=COOLED),
         F("detector.netd_nuc", "Camera NETD test: gain / NUC / processing state", "text", cond=CAM_NETD),
         F("basic.roi", "ROI / window mode", "text"),
-        H("Processing pipeline (not modelled)"),
+        H("Processing pipeline (not modelled; compression: page 'Signal processing')"),
         F("dsp.pl_denoise", "Denoising active (not modelled)", "bool"),
-        F("dsp.pl_compression", "Compression", "choice", [("none", "None"), ("lossless", "Lossless"),
-                                                          ("lossy", "Lossy (not modelled)")]),
         F("dsp.pl_order", "Order of steps (e.g. NUC > denoise > sharpen > zoom)", "text"),
         F("dsp.pl_version", "Kernel / algorithm version", "text"),
         H("Algorithm observer", cond=ALGO),
         F("display.algo_id", "Algorithm / model version ID", "text", cond=ALGO),
         F("display.algo_roc", "ROC / false-alarm definition", "text", cond=ALGO),
-        H("Scene and background clutter (not modelled)"),
-        F("target.clutter", "Background clutter", "choice", [("not_specified", "Not specified"), ("low", "Low"),
-                                                             ("medium", "Medium"), ("high", "High")]),
+        H("Scene (clutter level: page 'Target & scenario')"),
         F("target.scene_id", "Scene / clutter measurement ID", "text"),
     ]),
     ("Validation data", [
@@ -888,11 +913,12 @@ QUICK = ("Quick setup", [
     H("Atmosphere", cond=FIELD),
     pick("atmosphere.preset", cond=lambda p: FIELD(p) and not SPEC_ATM(p)),
     pick("atmosphere.atm.0.sigma", "Extinction coefficient (atm 1)", cond=lambda p: FIELD(p) and not SPEC_ATM(p) and not (
-        VISIBLE(p) and p["atmosphere"]["mode"] == "visibility")),
-    pick("atmosphere.atm.0.V_km", "Visual range (atm 1)", cond=lambda p: FIELD(p) and VISIBLE(p) and
-         p["atmosphere"]["mode"] == "visibility"),
-    pick("turbulence.on", cond=lambda p: FIELD(p) and NOT_THERMAL(p)),
-    pick("turbulence.cn2_preset", cond=lambda p: FIELD(p) and NOT_THERMAL(p) and p["turbulence"]["on"]),
+        VISIBLE(p) and p["atmosphere"]["mode"] == "visibility") and not WEATHER(p)),
+    pick("atmosphere.atm.0.V_km", "Visual range (atm 1)", cond=lambda p: FIELD(p) and (WEATHER(p) or VISIBLE(p) and
+         p["atmosphere"]["mode"] == "visibility")),
+    pick("atmosphere.atm.0.rh_pct", "Relative humidity (atm 1)", cond=lambda p: FIELD(p) and WEATHER(p)),
+    pick("turbulence.on", cond=lambda p: FIELD(p) and TURB_CAT(p)),
+    pick("turbulence.cn2_preset", cond=lambda p: FIELD(p) and TURB_ON(p)),
     H("Task and observation"),
     pick("mode.environment"), pick("mode.stream"),
 ] + [pick("target.tasks.%d.%s" % (i, k)) for i in range(3) for k in ("on", "name", "lp")] + [D()])
@@ -1360,7 +1386,7 @@ class SensitivityTab(ttk.Frame):
     """
 
     MODES = (("advisor", "Improve performance"), ("limiting", "Limiting factors"), ("sweep", "Parameter sweep"),
-             ("uncertainty", "Uncertainty"), ("scenarios", "Scenarios"))
+             ("uncertainty", "Uncertainty"), ("bands", "Range bands"), ("scenarios", "Scenarios"))
     MODE_NAME = dict(MODES)
 
     def __init__(self, master, app):
@@ -1461,11 +1487,13 @@ class SensitivityTab(ttk.Frame):
         self.adv_open = tk.BooleanVar(value=False)
         self.unc_rows, self.corr = [], []
         self.u_method = tk.StringVar(value="rss")
-        self.u_adv = {k: tk.StringVar() for k in ("mc_n", "seed", "coverage", "k", "deriv_step_pct")}
+        self.u_adv = {k: tk.StringVar() for k in ("mc_n", "seed", "coverage", "k", "deriv_step_pct", "morris_r",
+                                                  "sobol_n")}
         self.adv_task = tk.StringVar()
         self.adv_minfov = tk.StringVar(value="0")
         self.adv_step = tk.StringVar(value="25")
         self.adv_robust = tk.BooleanVar(value=True)
+        self.band_factor = tk.StringVar(value="10")
         self.show_mode("limiting")
 
     # ------------------------------------------------------------------ state
@@ -1483,6 +1511,8 @@ class SensitivityTab(ttk.Frame):
             extra = [s["name"] for s in self.app.project.get("scenarios", [])]
         elif mode == "advisor":
             extra = [self.adv_task.get(), self.adv_minfov.get(), self.adv_step.get(), self.adv_robust.get()]
+        elif mode == "bands":
+            extra = [self.band_factor.get()]
         return json.dumps([p, extra], sort_keys=True, default=str)
 
     def check_stale(self, p=None):
@@ -1515,10 +1545,13 @@ class SensitivityTab(ttk.Frame):
         if a["mode"] == "spectral":
             self._atm_slots, labels = [0], ["Imported spectral atmosphere"]
         else:
-            vis = a["mode"] == "visibility" and p.get("category") == "Visible"
+            vis = a["mode"] == "visibility" and p.get("category") == "Visible" or a["mode"] == "weather"
             self._atm_slots = [i for i, at in enumerate(a["atm"]) if at.get("on")]
             labels = [("Atm %d (V %g km)" if vis else "Atm %d (sigma %g/km)") %
                       (i + 1, float(a["atm"][i]["V_km" if vis else "sigma"])) for i in self._atm_slots]
+            if a["mode"] == "weather":
+                labels = [l[:-1] + ", RH %g %%)" % float(a["atm"][i].get("rh_pct", 50.0))
+                          for l, i in zip(labels, self._atm_slots)]
         self.atm_cb.configure(values=labels)
         slot = AN.analysis_slot(p)
         self.atm_cb.set(labels[self._atm_slots.index(slot)] if slot in self._atm_slots else "")
@@ -1599,6 +1632,17 @@ class SensitivityTab(ttk.Frame):
         ttk.Checkbutton(fr, text="Paired robustness under assumption ranges (top 3)", variable=self.adv_robust).grid(
             row=1, column=2, columnspan=3, sticky="w", pady=(4, 0))
 
+    def _opts_bands(self):
+        self._section_label(self.opts, "Range bands: the DRI ranges of every active atmosphere (weather) and, when "
+                                       "turbulence acts, of the turbulence strength divided and multiplied by the "
+                                       "factor below - one decade of Cn2 moves visible ranges by about +/-35 %. The "
+                                       "band is a scenario envelope, not a probability interval; use 'Uncertainty' "
+                                       "for that.")
+        fr = ttk.Frame(self.opts)
+        fr.pack(fill="x", pady=(6, 0))
+        ttk.Label(fr, text="Turbulence factor (Cn2 / f, x f)").pack(side="left")
+        ttk.Entry(fr, textvariable=self.band_factor, width=7).pack(side="left", padx=(6, 0))
+
     def _opts_limiting(self):
         self._section_label(self.opts, "What limits the nominal range? Each degradation of the imaging chain is "
                                        "removed in turn (ideal optics, clear atmosphere, half the temporal noise, ...) "
@@ -1660,11 +1704,18 @@ class SensitivityTab(ttk.Frame):
         ttk.Radiobutton(top, text="RSS approximation (GUM)", value="rss", variable=self.u_method).pack(side="left",
                                                                                                    padx=(8, 0))
         ttk.Radiobutton(top, text="Monte Carlo", value="mc", variable=self.u_method).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(top, text="Global: Morris screening", value="morris", variable=self.u_method).pack(
+            side="left", padx=(8, 0))
+        ttk.Radiobutton(top, text="Global: Sobol indices", value="sobol", variable=self.u_method).pack(
+            side="left", padx=(8, 0))
         ttk.Checkbutton(top, text="Advanced", variable=self.adv_open,
                         command=lambda: self.show_mode("uncertainty")).pack(side="right")
         self._section_label(self.opts, "State what each +/- value means and its distribution. One-at-a-time runs give "
                                        "the range change for each input (tornado); RSS combines standard "
-                                       "uncertainties and local sensitivities; Monte Carlo samples all inputs together.")
+                                       "uncertainties and local sensitivities; Monte Carlo samples all inputs together. "
+                                       "The global methods vary all inputs over their +/- intervals at once and "
+                                       "capture interactions and regime changes: Morris ranks the inputs with "
+                                       "r (k + 1) runs, Sobol splits the range variance with N (k + 2) runs.")
         sf = ScrollFrame(self.opts)
         sf.pack(fill="x")
         sf.canvas.configure(height=int(min(26 * (len(s["inputs"]) + 1), 190) * self.app.k))
@@ -1692,10 +1743,12 @@ class SensitivityTab(ttk.Frame):
             adv = ttk.Frame(self.opts)
             adv.pack(fill="x", pady=(6, 0))
             for key, val in (("mc_n", s["mc_n"]), ("seed", s["seed"]), ("coverage", 100 * float(s["coverage"])),
-                             ("k", s["k"]), ("deriv_step_pct", s["deriv_step_pct"])):
+                             ("k", s["k"]), ("deriv_step_pct", s["deriv_step_pct"]), ("morris_r", s["morris_r"]),
+                             ("sobol_n", s["sobol_n"])):
                 self.u_adv[key].set(fmt(val))
             for i, (key, lab) in enumerate((("mc_n", "MC samples"), ("seed", "Random seed"), ("coverage", "Coverage %"),
-                                            ("k", "Coverage factor k"), ("deriv_step_pct", "Derivative step %"))):
+                                            ("k", "Coverage factor k"), ("deriv_step_pct", "Derivative step %"),
+                                            ("morris_r", "Morris trajectories r"), ("sobol_n", "Sobol base samples N"))):
                 ttk.Label(adv, text=lab).grid(row=i // 3, column=2 * (i % 3), sticky="w", pady=2)
                 ttk.Entry(adv, textvariable=self.u_adv[key], width=7).grid(row=i // 3, column=2 * (i % 3) + 1,
                                                                           sticky="w", padx=(4, 12))
@@ -1821,7 +1874,8 @@ class SensitivityTab(ttk.Frame):
         s = dict(AN.uncertainty_settings(self.app.project))
         s.pop("inputs", None)
         s["method"] = self.u_method.get()
-        for key, conv in (("mc_n", int), ("seed", int), ("coverage", float), ("k", float), ("deriv_step_pct", float)):
+        for key, conv in (("mc_n", int), ("seed", int), ("coverage", float), ("k", float), ("deriv_step_pct", float),
+                          ("morris_r", int), ("sobol_n", int)):
             try:
                 val = conv(float(self.u_adv[key].get())) if self.u_adv[key].get() else None
             except ValueError:
@@ -1899,6 +1953,12 @@ class SensitivityTab(ttk.Frame):
                                                  robustness=rob)
         if mode == "limiting":
             return lambda prog, stop: AN.limiting_factors(p, prog, stop=stop)
+        if mode == "bands":
+            try:
+                fac = float(self.band_factor.get())
+            except ValueError:
+                raise ValueError("Enter a numeric turbulence factor.")
+            return lambda prog, stop: AN.range_bands(p, prog, stop=stop, factor=fac)
         if mode == "uncertainty":
             if not AN.items_from_settings(AN.uncertainty_settings(p)):
                 raise ValueError("Tick at least one input with a non-zero uncertainty.")
@@ -1950,7 +2010,7 @@ class SensitivityTab(ttk.Frame):
         self.results[mode] = r
         self.shown[mode] = r
         self.sigs[id(r)] = sig
-        self.app.analyses[mode if mode != "sweep" or r["kind"] == "sweep" else "sweep2d"] = r
+        self.app.analyses[r["kind"] if r["kind"] in ("sweep2d", "global") else mode] = r
         label = "%s  %s" % (time.strftime("%H:%M:%S"), self.MODE_NAME[mode])
         if r["kind"] == "sweep":
             label += ": " + r["path"].split(".")[-1]
@@ -1958,6 +2018,8 @@ class SensitivityTab(ttk.Frame):
             label += ": %s x %s" % (r["px"].split(".")[-1], r["py"].split(".")[-1])
         elif r["kind"] == "uncertainty":
             label += " (%s)" % ("MC" if r["method"] == "mc" else "RSS")
+        elif r["kind"] == "global":
+            label += " (%s)" % r["method"].capitalize()
         elif r["kind"] == "advisor":
             label += ": " + r["rank_task"]
         self.history.append({"mode": mode, "result": r, "label": label})
@@ -1974,7 +2036,7 @@ class SensitivityTab(ttk.Frame):
             self.app._show_summary(self.app.result)
 
     _KIND_MODE = {"advisor": "advisor", "limiting": "limiting", "sweep": "sweep", "sweep2d": "sweep", "uncertainty": "uncertainty",
-                  "scenarios": "scenarios"}
+                  "global": "uncertainty", "bands": "bands", "scenarios": "scenarios"}
 
     def is_stale(self, r, p=None):
         sig = self.sigs.get(id(r))
@@ -2345,6 +2407,104 @@ class SensitivityTab(ttk.Frame):
         self.nb.select(self.details)
 
     # --- scenarios
+    def _show_bands(self, r, tasks):
+        self._card_row([(t, "%s - %s km" % (self._f(r["band"][t]["min"], "%.2f"), self._f(r["band"][t]["max"], "%.2f")),
+                         "nominal %s km (%s)" % (self._f(r["base"][t], "%.2f"), r["analysis_atm"]),
+                         TASK_COLORS[i % len(TASK_COLORS)]) for i, t in enumerate(tasks)])
+        self.method_lbl.configure(text="Method: %s Scenario envelope - not a probability interval.%s" % (
+            r["method"], " Invalid cases: %s." % ", ".join(r["invalid"]) if r["invalid"] else ""))
+        ax = self.plot.axes(1, 1)[0]
+        marks = ["o", "s", "^", "D", "v"]
+        n_c = len(r["atms"]) * len(r["turb"])
+        for i, t in enumerate(tasks):
+            col = TASK_COLORS[i % len(TASK_COLORS)]
+            b = r["band"][t]
+            ax.plot([i, i], [b["min"], b["max"]], color=col, lw=6, alpha=0.25, solid_capstyle="butt")
+            k = 0
+            for jt, lab in enumerate(r["turb"]):
+                for ja, atm in enumerate(r["atms"]):
+                    v = r["grid"][t][jt][ja]
+                    x = i - 0.25 + 0.5 * (k + 0.5) / n_c
+                    ax.plot(x, v, marks[ja % len(marks)], color=col, ms=6, alpha=0.5 + 0.5 * (jt + 1) / len(r["turb"]),
+                            label="%s, %s" % (atm, lab) if i == 0 else None)
+                    k += 1
+            ax.plot([i - 0.3, i + 0.3], [b["nominal"]] * 2, color=col, lw=2)
+        ax.set_xticks(range(len(tasks)))
+        ax.set_xticklabels(tasks)
+        ax.set_yscale("log")
+        ax.set_ylabel("range [km]")
+        ax.set_title("DRI range bands: weather x turbulence (bar = nominal, %s)" % r["analysis_atm"])
+        ax.grid(alpha=0.3, axis="y", which="both")
+        ax.legend(fontsize=7, ncol=max(1, len(r["turb"])))
+        self.plot.draw()
+        rows = [[t, lab] + [self._f(v) for v in row] for t in tasks for lab, row in zip(r["turb"], r["grid"][t])]
+        rows += [[t, "band (min - max)", "%s - %s" % (self._f(r["band"][t]["min"]), self._f(r["band"][t]["max"]))]
+                 for t in tasks]
+        self._fill_table(["Task", "Turbulence"] + ["%s km" % a for a in r["atms"]], rows,
+                         [110, 170] + [150] * len(r["atms"]))
+        self._details([("Method", [r["method"], "Engine: " + r["engine"], "Calculated: " + r["time"]]),
+                       ("Interpretation", ["Weather (extinction / visual range) dominates long-range Detection; "
+                                           "turbulence dominates visible Identification. The width of the band says "
+                                           "how much a nominal range depends on the scene conditions."])])
+
+    def _show_global(self, r, tasks):
+        task = self.task_var.get() if self.task_var.get() in tasks else tasks[-1]
+        morris = r["method"] == "morris"
+        key = "mu_star" if morris else "ST"
+        top = sorted(r["rows"], key=lambda x: -np.nan_to_num(x[key][task], nan=-1.0))
+        self._card_row([(t, "%.3f km" % r["base"][t], "top input: %s" % max(
+            r["rows"], key=lambda x: np.nan_to_num(x[key][t], nan=-1.0))["label"], TASK_COLORS[i % len(TASK_COLORS)])
+            for i, t in enumerate(tasks)])
+        self.method_lbl.configure(text="Method: %s; %d model runs%s. %s" % (
+            r["label"], r["n_runs"], " (%d invalid)" % r["n_fail"] if r["n_fail"] else "", " ".join(r["notes"])))
+        self._outcome_selector(tasks)
+        ax = self.plot.axes(1, 1)[0]
+        if morris:
+            xs = [x["mu_star"][task] for x in r["rows"]]
+            ys = [x["sigma"][task] for x in r["rows"]]
+            ax.scatter(xs, ys, color=TASK_COLORS[tasks.index(task) % len(TASK_COLORS)])
+            for x, y, row in zip(xs, ys, r["rows"]):
+                if np.isfinite(x) and np.isfinite(y):
+                    ax.annotate(row["label"], (x, y), fontsize=7, xytext=(3, 3), textcoords="offset points")
+            lim = max([v for v in xs + ys if np.isfinite(v)] + [1e-6])
+            ax.plot([0, lim], [0, lim], color="#999", lw=0.8, ls="--")
+            ax.set_xlabel("mu* - mean |elementary effect| over the input interval [km]")
+            ax.set_ylabel("sigma - spread of the effects [km]")
+            ax.set_title("Morris screening, %s (above the dashed line: interactions / non-linearity)" % task)
+        else:
+            rows = top[::-1]
+            y = np.arange(len(rows))
+            ax.barh(y - 0.2, [np.nan_to_num(x["S1"][task]) for x in rows], height=0.4, label="first order S_i")
+            ax.barh(y + 0.2, [np.nan_to_num(x["ST"][task]) for x in rows], height=0.4, label="total S_Ti")
+            ax.set_yticks(y)
+            ax.set_yticklabels([x["label"] for x in rows], fontsize=8)
+            ax.axvline(0, color="#555", lw=0.8)
+            ax.set_xlabel("share of the range variance")
+            ax.set_title("Sobol indices, %s (S_Ti - S_i = interactions)" % task)
+            ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        self.plot.draw()
+        if morris:
+            cols = ["Input", "Interval"] + ["%s mu* km" % t for t in tasks] + ["%s sigma km" % t for t in tasks]
+            vals = [[x["label"], "%.4g - %.4g" % (x["lo"], x["hi"])] + [self._f(x["mu_star"][t]) for t in tasks] +
+                    [self._f(x["sigma"][t]) for t in tasks] for x in top]
+        else:
+            cols = ["Input", "Interval"] + ["%s S1" % t for t in tasks] + ["%s ST" % t for t in tasks]
+            vals = [[x["label"], "%.4g - %.4g" % (x["lo"], x["hi"])] +
+                    ["%s [%s, %s]" % (self._f(x["S1"][t], "%.2f"), self._f(x["S1_ci"][t][0], "%.2f"),
+                                      self._f(x["S1_ci"][t][1], "%.2f")) for t in tasks] +
+                    ["%s [%s, %s]" % (self._f(x["ST"][t], "%.2f"), self._f(x["ST_ci"][t][0], "%.2f"),
+                                      self._f(x["ST_ci"][t][1], "%.2f")) for t in tasks] for x in top]
+        self._fill_table(cols, vals, [240, 130] + [120] * (2 * len(tasks)))
+        self._details([("Method", [r["label"], "Engine: " + r["engine"], "Calculated: " + r["time"],
+                                   "Model runs: %d unique (%d planned)" % (r["n_runs"], r["n_planned"])] + r["notes"]),
+                       ("Interpretation", [
+                           "Morris: mu* ranks the inputs by their effect over the whole interval; a sigma comparable "
+                           "to mu* means the effect depends on the other inputs (regime change, interaction)."
+                           if morris else
+                           "Sobol: S_i is the share of the range variance explained by the input alone, S_Ti "
+                           "includes its interactions; with small N the bootstrap intervals are wide."])])
+
     def _show_scenarios(self, r, tasks):
         rows = r["rows"]
         self._card_row([(x["name"], " / ".join("%.2f" % x["ranges"][t] for t in tasks) + " km" if x["ok"] else "invalid",
@@ -2983,6 +3143,9 @@ class App(tk.Tk):
         if path in ("turbulence.cn2", "turbulence.cn2_mode", "turbulence.h_ref_m", "turbulence.time") and \
                 get_path(self.project, "turbulence.cn2_preset") != "custom":
             self._set_value("turbulence.cn2_preset", "custom")
+        if path in ("stab.random_on", "stab.rand_h_mrad", "stab.rand_v_mrad") and \
+                get_path(self.project, "stab.jitter_preset") != "custom":
+            self._set_value("stab.jitter_preset", "custom")
         if path in ("target.W_m", "target.H_m", "target.D_m", "target.dT_K", "target.T_bg_K") and \
                 get_path(self.project, "target.preset") != "custom" and self.project["category"] == "Thermal":
             self._set_value("target.preset", "custom")
@@ -3073,6 +3236,13 @@ class App(tk.Tk):
                 win = P.qe_window(cur)
                 self.status.set("Atmosphere preset '%s' for the %s band applied (typical engineering values)" % (
                     which, P.band_of(*win) if win else "LWIR"))
+        if path == "stab.jitter_preset" and json.loads(var.get()) == "nvipm70":
+            for key, val in (("random_on", True), ("rand_h_mrad", X.TYPICAL_JITTER_MRAD),
+                             ("rand_v_mrad", X.TYPICAL_JITTER_MRAD)):
+                self._set_value("stab." + key, val)
+                self._set_source("stab." + key, "preset")
+            self.status.set("Random jitter preset applied: %.0f urad rms in both axes (US Army NV-IPM practice)" %
+                            (X.TYPICAL_JITTER_MRAD * 1e3))
         if path == "turbulence.cn2_preset":
             name = json.loads(var.get())
             if name in P.CN2_PRESETS:
@@ -3807,12 +3977,25 @@ class App(tk.Tk):
             unc = self.analyses.get("uncertainty")
             for i, t in enumerate(a0["tasks"]):
                 txt = self._range_txt(t["R0"], a0)
-                cap = "%s  (%g lp)" % (t["name"], t["lp"])
+                cap = "%s  (%s)" % (t["name"], "%g px on target" % t["pot"] if "pot" in t else
+                                    "%g lp" % t["lp"] + (" incl. clutter x%.2g" % t["clutter"]
+                                                         if t.get("clutter", 1.0) != 1.0 else ""))
                 if unc and t["name"] in unc["base"]:
                     lo, hi, _txt = AN.interval(unc, t["name"])
                     cap += "  ·  %s %.2f - %.2f km" % ("MC" if unc.get("method") == "mc" else "+/-U", lo, hi)
                 cards.append(((cap, txt, "km"), {"color": TASK_COLORS[i % len(TASK_COLORS)]}))
             self._grid_cards(fr, cards, cols=max(1, min(3, len(cards))))
+            lv = [(t["name"], "%s km" % self._range_txt(t["R0"], a0)) + tuple(
+                "%s km" % self._range_txt(l["R0"], a0) for l in t["levels"]) +
+                (" / ".join("%.3g" % x for x in [t["lp"]] + [l["lp"] for l in t["levels"]]),)
+                for t in a0["tasks"] if t.get("levels")]
+            if lv:
+                ttk.Label(fr, text="Probability levels  ·  Johnson TTPF on the task criterion (extension - the TRM4 "
+                                   "range is P50)", style="Muted.TLabel").pack(anchor="w", pady=(8, 0))
+                tv = self._table(fr, ("Task", "P50 (TRM4)", "P80", "P90", "Criterion N50 / N80 / N90 [lp]"), lv,
+                                 (110, 95, 95, 95, 200))
+                tv.column("c0", stretch=False)
+                tv.column("c4", stretch=True)
             rows = []
             for t in db.get("tasks", []):
                 if "mtf_task" in t:
@@ -3829,7 +4012,9 @@ class App(tk.Tk):
                 tv = self._table(fr, ("Task", "Range", "Target px h × v", "Cycles @Nyq / req.", "MTF @task",
                                       "CNR", "Indicative limiter"), rows, (95, 70, 95, 105, 70, 60, 170))
                 tv.bind("<Double-1>", lambda e, tv=tv, db=db: self._explain_task(tv, db))
-            st_lines = [("Model", db.get("model", "")), ("Calibration status", db.get("calibration", "")),
+            st_lines = [("Model", db.get("model", "")),
+                        ("Extensions (not TRM4)", "; ".join(db.get("extensions") or []) or "none - TRM4 model only"),
+                        ("Calibration status", db.get("calibration", "")),
                         ("Confidence / uncertainty method", (unc["label"] if unc else
                                                              "nominal - input uncertainties not specified")),
                         ("Input provenance", ", ".join("%s %d" % (SRC_STYLE.get(k, (k,))[0], n) for k, n in sorted(

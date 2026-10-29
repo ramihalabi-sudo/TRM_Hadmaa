@@ -71,7 +71,7 @@ def geometry(project):
 
 def _ranges(project):
     """Full model run -> (ranges in the analysis atmosphere, warnings, dashboard tasks, run result)."""
-    _m, res = run_project(project)
+    _m, res = run_project(AN.fast(project))
     rg = res.get("range")
     if not rg or not rg["atm"]:
         raise ModelError("The advisor needs 'Field performance' mode and at least one task.")
@@ -188,8 +188,10 @@ def sensitivity_params(p):
     if cat == "Visible" and p["detector"]["tint_mode"] == "direct":
         out.append(("detector.tint_ms", "Integration time", "plain"))
     n_atm = AN.analysis_slot(p) + 1
-    if p["atmosphere"]["mode"] == "visibility" and cat == "Visible":
+    if p["atmosphere"]["mode"] == "visibility" and cat == "Visible" or p["atmosphere"]["mode"] == "weather":
         out.append((AN.atm_path(p, "V_km"), "Visual range (atm %d)" % n_atm, "plain"))
+        if p["atmosphere"]["mode"] == "weather":
+            out.append((AN.atm_path(p, "rh_pct"), "Relative humidity (atm %d)" % n_atm, "plain"))
     elif p["atmosphere"]["mode"] != "spectral":
         out.append((AN.atm_path(p, "sigma"), "Extinction coefficient (atm %d)" % n_atm, "plain"))
     if cat != "Visible":
@@ -403,7 +405,7 @@ def catalogue(project, step=0.25):
                 ["Use measured jitter (time series or PSD) if available."], ["Gimbal / stabilizer cost and mass"])
     atm = p["atmosphere"]
     at = atm["atm"][AN.analysis_slot(p)]
-    if atm["mode"] == "visibility" and cat == "Visible":
+    if atm["mode"] == "visibility" and cat == "Visible" or atm["mode"] == "weather":
         add("env_clear", "environment", "environment", "Clearer atmosphere: visual range x2 (scenario)",
             [(AN.atm_path(p, "V_km"), float(at["V_km"]) * 2.0, "plain")], "model",
             ["Environment scenario, not a hardware improvement (T-08)."], [])

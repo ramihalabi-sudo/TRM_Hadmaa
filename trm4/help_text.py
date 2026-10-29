@@ -238,6 +238,10 @@ HELP = {
     # ---------------------------------------------------------------- Stabilization & MTFs
     "stab.neglect": "Ignore all line-of-sight motion (perfectly stable platform).",
     "stab.random_on": "Include random vibration (jitter) of the line of sight.",
+    "stab.jitter_preset": "Fills the random jitter: 70 urad rms in both axes is the residual line-of-sight jitter "
+                          "commonly assumed in US Army NV-IPM calculations. Without jitter, narrow fields of view "
+                          "(IFOV below about 210 urad) are predicted optimistically. Editing a value returns to "
+                          "'User values'.",
     "stab.rand_h_mrad": "RMS amplitude of the random horizontal jitter during integration. Causes blur.",
     "stab.rand_v_mrad": "RMS amplitude of the random vertical jitter during integration. Causes blur.",
     "stab.lin_on": "Include linear image motion during the integration time (smear).",
@@ -307,12 +311,18 @@ HELP = {
 
     # ---------------------------------------------------------------- Atmosphere & turbulence
     "atmosphere.mode": "Fast mode: effective extinction coefficient (Beer's law).\nVisual range: Visible category "
-                       "only - it is not a valid infrared extinction.\nSpectral: imported wavelength- and "
-                       "range-dependent transmission (e.g. MODTRAN).",
+                       "only - it is not a valid infrared extinction.\nVisual range + humidity + air temperature "
+                       "(extension, all categories): spectral extinction = aerosol scattering from the visual range "
+                       "(Kruse; Kim et al. 2001 below 6 km) + water-vapour continuum in 8-14 um (Roberts et al. "
+                       "1976). Gas line absorption is not included - a lower bound in clear air, aerosol only in "
+                       "the MWIR.\nSpectral: imported wavelength- and range-dependent transmission (e.g. MODTRAN).",
     "atmosphere.atm.N.on": "Calculate ranges for this atmosphere (up to three weather conditions are compared).",
     "atmosphere.atm.N.sigma": "Extinction coefficient: transmission = tau0 * exp(-sigma * range). Larger value "
                               "= worse weather, shorter range.",
     "atmosphere.atm.N.V_km": "Meteorological visual range; converted to an extinction coefficient.",
+    "atmosphere.atm.N.rh_pct": "Relative humidity of the air (with the air temperature it gives the water-vapour "
+                               "density that drives the 8-14 um continuum absorption). Used only when the extinction "
+                               "is derived from the weather.",
     "atmosphere.atm.N.tau0": "Transmission at zero range (losses that do not depend on range, e.g. "
                              "absorption lines). Usually 1.",
     "atmosphere.atm.N.T_air_K": "Air temperature along the path. The atmosphere emits path radiance at this "
@@ -320,6 +330,14 @@ HELP = {
     "atmosphere.atm.N.F_PR": "Factor for scattered light (path radiance) added along the line of sight. It "
                              "reduces target contrast.",
     "turbulence.on": "Include the blur caused by air turbulence (important for long horizontal paths).",
+    "turbulence.thermal": "TRM4 neglects turbulence in the Thermal category. Tick to apply it there (extension): "
+                          "the MTDP is degraded by the turbulence MTF along the range. lambda/r0 hardly depends on the "
+                          "band, so in strong turbulence it reaches the IFOV of MWIR / LWIR imagers as well.",
+    "turbulence.mitigation": "Turbulence-mitigation processing (frame registration, lucky imaging, deconvolution) as "
+                             "an effective Fried-parameter gain: the turbulence MTF uses r0 x this factor (1 = no "
+                             "mitigation). Empirical: published systems report +10 to +25 % recognition range; in "
+                             "the daylight template a gain of 2 - 4 gives about +12 to +19 %. Use the short-exposure "
+                             "MTF with it.",
     "turbulence.exposure": "Short exposure: image motion removed (only blur).\nLong exposure: includes image "
                            "wander (stronger blur).",
     "turbulence.cn2_mode": "Turbulence strength Cn2 constant along the path, or varying with height.",
@@ -407,7 +425,11 @@ HELP = {
                         "the ranges (the filter is then ignored); tick to include the TRM4 model of the filter.",
     "dsp.pl_denoise": "Denoising is part of the pipeline. It is not modelled - documented so that the prediction is "
                       "marked as not covering this processing.",
-    "dsp.pl_compression": "Video compression. Lossy compression is not modelled.",
+    "dsp.pl_compression": "Video compression. Lossy compression acts on the ranges only with an equivalent blur "
+                          "(below); otherwise it is documented as not modelled.",
+    "dsp.comp_blur_px": "Lossy compression as an equivalent Gaussian blur of the digital frame, sigma in pixels "
+                        "(O'Shea, Jacobs & Espinola 2008: the loss is well modelled by a per-pixel blur). Fit it to "
+                        "the codec and bit rate in use; 0 = not modelled (extension).",
     "dsp.pl_order": "Order of the processing steps, for traceability.",
     "dsp.pl_version": "Version of the processing kernel / algorithm.",
     "display.observer": "Legacy-neutral: TRM4 standard observer (Johnson-type legacy baseline).\n"
@@ -416,6 +438,14 @@ HELP = {
                         "The TRM4 criteria are human calibrations, so the result is an uncalibrated estimate.",
     "display.algo_id": "Identifier / version of the detection algorithm or model.",
     "display.algo_calib": "Calibration data set of the algorithm. Empty = uncalibrated estimate.",
+    "display.algo_criterion": "TRM4 line pairs: the human criteria with display and eye removed - an uncalibrated "
+                              "estimate, typically much longer than for a human.\nPixels on target + pixel CNR "
+                              "(extension): the task needs a number of pixels on the projected target area (Holst & "
+                              "Mahalanobis 2023: 50-70 detection, 150 classification, 250 recognition, 350 "
+                              "identification) and a minimum contrast-to-noise per pixel; the shorter range counts.",
+    "display.algo_cnr_min": "Minimum contrast-to-noise ratio per pixel of the processed frame (target-background "
+                            "difference / noise) that the algorithm needs. A generic assumption until calibrated "
+                            "for the algorithm.",
     "display.algo_roc": "How detection is defined for the algorithm (ROC point, false-alarm rate).",
     "stab.jitter_mode": "Motion source:\nNone: no image motion.\nRMS-jitter assumption: random / linear / "
                         "sinusoidal vibration models.\nMeasured time series: line-of-sight samples.\n"
@@ -429,7 +459,20 @@ HELP = {
     "target.task_preset": "Version of the task criteria (line pairs across the critical dimension for detection / "
                           "recognition / identification). The legacy preset 1/3/6 is the default and is never "
                           "changed automatically; editing a value switches to 'Custom'.",
-    "target.clutter": "Background clutter level - documentation only: TRM4 assumes a uniform background.",
+    "target.clutter": "Background clutter level. TRM4 assumes a uniform background; the level acts on the ranges "
+                      "only with the clutter model below (otherwise documentation).",
+    "target.clutter_model": "Extension: the Detection criterion (first task) is multiplied by the ACQUIRE-LC factor "
+                            "C [(C/dT)^2 + 1] / [(1/dT)^2 + 1] with C = 1 / 1.5 / 2 / 2.7 (low to high clutter); the "
+                            "entered criterion is the low-clutter value. Outside the Thermal category the factor is "
+                            "C. High clutter needs up to about 6x more cycles; the Detection criterion is capped at "
+                            "the Recognition criterion.",
+    "target.prob_levels": "Extension: TRM4 criteria are 50 % values (N50). The P80 / P90 ranges use N50 x 1.45 and "
+                          "x 1.75 from the Johnson / Lawson TTPF P = x^E / (1 + x^E), E = 2.7 + 0.7 x. Where the "
+                          "range is resolution-limited, R90 is about 0.57 R50. Safety-critical uses should quote P50 "
+                          "and P90 together.",
+    "target.tasks.N.pot": "Algorithm observer with the pixels-on-target criterion: pixels needed on the projected "
+                          "target area for this task (Holst & Mahalanobis 2023: about 60 detection, 250 recognition, "
+                          "350 identification).",
     "target.scene_id": "Identifier of the scene or clutter measurement (traceability).",
     "atmosphere.meta.geometry": "Path of the imported atmospheric data: horizontal or slant, altitudes, range.",
     "atmosphere.meta.source": "Model or source that produced the data, e.g. MODTRAN version and settings.",

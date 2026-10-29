@@ -82,6 +82,27 @@ def format_analyses(analyses):
         elif key == "advisor":
             from . import advisor as ADV
             L.extend(ADV.format_text(an))
+        elif key == "bands":
+            L.append("[Range bands - weather x turbulence; scenario envelope, not a probability interval]")
+            L.append("  Method: %s  Calculated %s. Engine: %s" % (an["method"], an["time"], an["engine"]))
+            for t in an["tasks"]:
+                b = an["band"][t]
+                L.append("  %-18s nominal %s km (%s), band %s - %s km" % (t, _km(b["nominal"]), an["analysis_atm"],
+                                                                         _km(b["min"]), _km(b["max"])))
+                for lab, row in zip(an["turb"], an["grid"][t]):
+                    L.append("    %-28s %s" % (lab, "  ".join("%s %s" % (a, _km(v)) for a, v in zip(an["atms"], row))))
+        elif key == "global":
+            L.append("[Global sensitivity - %s]" % an["label"])
+            L.append("  Calculated %s, %d model runs. Engine: %s" % (an["time"], an["n_runs"], an["engine"]))
+            for r in an["rows"]:
+                if an["method"] == "morris":
+                    val = "  ".join("%s mu* %.3f / sigma %.3f km" % (t, r["mu_star"][t], r["sigma"][t])
+                                    for t in an["tasks"])
+                else:
+                    val = "  ".join("%s S1 %.2f / ST %.2f" % (t, r["S1"][t], r["ST"][t]) for t in an["tasks"])
+                L.append("  %-34s %.4g - %.4g  %s" % (r["label"], r["lo"], r["hi"], val))
+            for n in an["notes"]:
+                L.append("  Note: " + n)
         elif key == "scenarios":
             L.append("[Scenario comparison - deltas relative to '%s']" % an["rows"][0]["name"])
             for r in an["rows"]:
@@ -140,7 +161,13 @@ def format_report(project, res, analyses=None):
         L.append("")
         L.append("[DRI summary - %s%s]" % (rg["atm"][0]["label"], ", from " + rg["source"] if rg.get("source") else ""))
         for t in db["tasks"]:
-            line = "  %-18s %5g lp  R = %-12s" % (t["name"], t["lp"], _fmt_range(t["R0"], rg["atm"][0]))
+            line = "  %-18s %5g %s  R = %-12s" % (t["name"], t["pot"] if "pot" in t else t["lp"],
+                                                 "px" if "pot" in t else "lp", _fmt_range(t["R0"], rg["atm"][0]))
+            if t.get("levels"):
+                line += "  " + "  ".join("P%d %s" % (round(100 * l["p"]), _fmt_range(l["R0"], rg["atm"][0]))
+                                         for l in t["levels"])
+            if t.get("clutter", 1.0) != 1.0:
+                line += "  (criterion %g lp x%.3g clutter)" % (t["lp_input"], t["clutter"])
             if "pix_h" in t:
                 line += "  target pixels %.1f x %.1f, Nyquist-limited cycles %.1f%s" % (
                     t["pix_h"], t["pix_v"], t["cyc_nyq"], "  (sampling limited)" if t["sampling_limited"] else "")
@@ -150,6 +177,9 @@ def format_report(project, res, analyses=None):
                          "limiter: %s" % ("", t["pix_h"], t["pix_v"], t["cyc_nyq"], t["mtf_task"], t["f_task"],
                                           t["cnr_task"], t["limiter"]))
         L.append("  Model: %s" % db.get("model", ""))
+        L.append("  Extensions (not TRM4): %s" % ("; ".join(db.get("extensions") or []) or "none"))
+        if db.get("extensions") and any(t.get("levels") for t in db["tasks"]):
+            L.append("  R is the TRM4 range (P50 criterion); P80 / P90 from the Johnson TTPF are an extension.")
         L.append("  Calibration status: %s" % db.get("calibration", ""))
         L.append("  Confidence / uncertainty method: %s" % ("nominal (input uncertainties not specified)" if not (
             analyses or {}).get("uncertainty") else "with stated input uncertainties (see below)"))
@@ -160,7 +190,8 @@ def format_report(project, res, analyses=None):
             L.append("[DRI context - reported with every range]")
             for k, lab in (("task", "Task"), ("target", "Target geometry"), ("operating_point", "Operating point"),
                            ("scene", "Illumination / atmosphere"), ("mtf_source", "MTF source"),
-                           ("observer", "Observer"), ("uncertainty", "Uncertainty"), ("validation", "Validation status")):
+                           ("observer", "Observer"), ("extensions", "Extensions (not TRM4)"),
+                           ("uncertainty", "Uncertainty"), ("validation", "Validation status")):
                 L.append("  %-30s %s" % (lab, ctx.get(k, "")))
             L.append("  " + ctx.get("statement", ""))
     ex = (db or {}).get("exposure")

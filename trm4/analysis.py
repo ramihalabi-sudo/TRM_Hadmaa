@@ -20,6 +20,8 @@ Analyses
                                          standard uncertainties and correlations; expanded U = k u(R)
       Monte Carlo (JCGM 101)           -> percentiles of the simulated range distribution with stated coverage
 * compare_scenarios - DRI ranges of several saved configurations.
+* range_bands       - DRI ranges over weather (all active atmospheres) x turbulence (Cn2 / 10, nominal, x 10).
+* global_sensitivity - Morris screening (mu*, sigma) or Sobol indices (S_i, S_Ti) over the stated input intervals.
 
 Ranges are those of the first active atmosphere.  Standard task criteria (line pairs) are never changed.
 These are numerical recalculations of the TRM performance model - not image simulations.
@@ -172,10 +174,17 @@ def atm_path(project, key):
     return "atmosphere.atm.%d.%s" % (analysis_slot(project), key)
 
 
+def fast(project):
+    """Shallow copy that skips outputs the analyses do not use (P80 / P90 ranges): same TRM4 ranges, less run time."""
+    p = dict(project)
+    p["_what_if"] = dict(project.get("_what_if") or {}, no_prob=True)
+    return p
+
+
 def model_ranges(project):
     """Full model run -> ({task: range km}, warnings) in the analysis atmosphere.  Raises ModelError for invalid
     cases."""
-    _m, res = run_project(project)
+    _m, res = run_project(fast(project))
     rg = res.get("range")
     if not rg or not rg["atm"]:
         raise ModelError("Range analyses need 'Field performance' mode and at least one task.")
@@ -377,7 +386,7 @@ def factor_list(project):
 
 def _classify(project):
     """What limits the nominal range: sampling vs sensitivity/MTF per task (from the base run)."""
-    _m, res = run_project(project)
+    _m, res = run_project(fast(project))
     out = {}
     for t in (res.get("dashboard") or {}).get("tasks", []):
         if "cyc_nyq" not in t:
@@ -549,6 +558,7 @@ UNCERTAINTY_DEFAULTS = [
     ("target.H_m", "Target height", 10.0),
     ("atmosphere.atm.*.sigma", "Extinction coefficient (atm %d)", 30.0),      # the analysis atmosphere slot
     ("atmosphere.atm.*.V_km", "Visual range (atm %d)", 30.0),
+    ("atmosphere.atm.*.rh_pct", "Relative humidity (atm %d)", 20.0),
     ("optics.f_mm", "Focal length", 2.0),
     ("optics.tau_opt", "Optics transmission", 5.0),
     ("optics.q", "Aberration parameter q", 10.0),
@@ -588,10 +598,10 @@ def applicable_inputs(project):
         if path in ("target.t_refl", "target.b_refl") and (cat != "Visible" or
                                                            p["target"][path.split(".")[1] + "_mode"] != "effective"):
             continue
-        visib = cat == "Visible" and p["atmosphere"]["mode"] == "visibility"
+        visib = cat == "Visible" and p["atmosphere"]["mode"] == "visibility" or p["atmosphere"]["mode"] == "weather"
         if path == "atmosphere.atm.*.sigma" and (visib or p["atmosphere"]["mode"] == "spectral"):
             continue
-        if path == "atmosphere.atm.*.V_km" and not visib:
+        if path in ("atmosphere.atm.*.V_km", "atmosphere.atm.*.rh_pct") and not visib or                 path == "atmosphere.atm.*.rh_pct" and p["atmosphere"]["mode"] != "weather":
             continue
         if path.startswith("atmosphere.atm.*."):
             slot = analysis_slot(p)
@@ -600,7 +610,8 @@ def applicable_inputs(project):
             continue
         if path.startswith("stab.rand") and not p["stab"]["random_on"]:
             continue
-        if path == "turbulence.cn2" and not (p["turbulence"]["on"] and cat != "Thermal"):
+        if path == "turbulence.cn2" and not (p["turbulence"]["on"] and (cat != "Thermal" or
+                                                                        p["turbulence"].get("thermal"))):
             continue
         if path == "optics.D_mm" and p["optics"].get("aperture") == "general":
             continue
@@ -629,7 +640,8 @@ def _set_input(case, path, value):
 # Derivative step 5 %: ranges are quantised by the AMOP / range grids (steps of a few %), so a 1 % central
 # difference can return a wrong sign for target size, focal length and pitch in sampling-limited systems.
 UNC_DEFAULTS = {"method": "rss", "mc_n": 200, "seed": 1, "coverage": 0.95, "k": 2.0, "deriv_step_pct": 5.0,
-                "correlations": []}
+                "correlations": [], "morris_r": 10, "sobol_n": 32}
+GLOBAL_METHODS = ("morris", "sobol")
 
 
 def uncertainty_settings(project):
@@ -668,6 +680,9 @@ def run_uncertainty(project, progress=None, stop=None):
     items = items_from_settings(s)
     if not items:
         raise ValueError("Select at least one input with a non-zero uncertainty.")
+    if s["method"] in GLOBAL_METHODS:
+        return global_sensitivity(project, items, s["method"], r=int(s["morris_r"]), n=int(s["sobol_n"]),
+                                  seed=int(s["seed"]), progress=progress, stop=stop)
     return uncertainty(project, items, progress, method=s["method"], correlations=s["correlations"],
                        mc_n=int(s["mc_n"]), seed=int(s["seed"]), coverage=float(s["coverage"]), k=float(s["k"]),
                        stop=stop, deriv_step=float(s["deriv_step_pct"]) / 100.0)
@@ -688,7 +703,9 @@ def standard_uncertainty(pct, meaning="bound", dist="normal"):
 def _clip(path, v):
     if any(k in path for k in _UNIT_INTERVAL):
         return min(max(v, 0.0), 1.0)
-    return max(v, 1e-12)                        # all offered inputs are positive physical quantities
+    if path.endswith(".rh_pct"):
+        return min(max(v, 0.0), 100.0)
+    return max(v, 1e-30)        # all offered inputs are positive physical quantities (dark currents ~1e-15 A)
 
 
 def _sample(dist, u, z):
@@ -888,6 +905,240 @@ def oat_envelope(u, task):
 
 
 # ---------------------------------------------------------------------------------------------
+# range bands: weather x turbulence (report phase 3)
+# ---------------------------------------------------------------------------------------------
+def _turbulence_on(p):
+    tb = p["turbulence"]
+    return p["mode"]["environment"] == "field" and bool(tb["on"]) and (p["category"] != "Thermal" or
+                                                                          bool(tb.get("thermal")))
+
+
+def _scale_turbulence(project, scale):
+    """Copy of the project with the turbulence strength Cn2 x scale (r0 x scale^-3/5 in the r0 mode)."""
+    case = copy.deepcopy(project)
+    tb = case.setdefault("turbulence", {})
+    if tb.get("cn2_mode") == "r0":
+        tb["r0_cm"] = float(tb.get("r0_cm", 5.0)) * scale ** (-0.6)
+    else:
+        tb["cn2"] = float(tb.get("cn2", 1e-14)) * scale
+    return case
+
+
+def _all_atm_ranges(project):
+    """[(atmosphere label, {task: range km})] of every active atmosphere, None for an invalid case (worker)."""
+    try:
+        _m, res = run_project(fast(project))
+    except ModelError:
+        return None
+    rg = res.get("range")
+    if not rg or not rg["atm"]:
+        return None
+    return [(a["label"], task_ranges(a)) for a in rg["atm"]]
+
+
+def range_bands(project, progress=None, stop=None, factor=10.0, runner=None):
+    """DRI ranges over weather x turbulence: every active atmosphere slot (one run computes all of them) and, when
+    turbulence acts, Cn2 / factor, Cn2 and Cn2 x factor (one decade of Cn2 ~ +/-35 % range in the visible, report
+    Sec. 4.3).  The band of a task is the smallest / largest range of the grid - a scenario envelope, not a
+    probability interval."""
+    progress = progress or _noop
+    p = P.deep_merge(P.DEFAULT_PROJECT, project)
+    if p["mode"]["environment"] != "field":
+        raise ModelError("Range bands need 'Field performance' mode.")
+    factor = float(factor)
+    if not factor > 1:
+        raise ValueError("The turbulence factor must be > 1.")
+    levels = [("Cn2 / %g" % factor, 1.0 / factor), ("Cn2 nominal", 1.0), ("Cn2 x %g" % factor, factor)] \
+        if _turbulence_on(p) else [("no turbulence" if p["category"] != "Thermal" or p["turbulence"].get("thermal")
+                                    else "no turbulence (Thermal, TRM4)", 1.0)]
+    calls = [(_all_atm_ranges, (_scale_turbulence(project, s) if s != 1.0 else project,)) for _l, s in levels]
+    res = (runner or Runner(1)).map(calls, progress, stop, "Range bands")
+    nominal = res[[s for _l, s in levels].index(1.0)]
+    if nominal is None:
+        raise ModelError("The nominal case has no valid ranges.")
+    atms = [lab for lab, _r in nominal]
+    tasks = list(nominal[0][1])
+    grid_ = {t: [[r[i][1][t] if r is not None else np.nan for i in range(len(atms))] for r in res] for t in tasks}
+    i_an = min(sum(1 for at in p["atmosphere"]["atm"][:analysis_slot(p)] if at.get("on")), len(atms) - 1) \
+        if p["atmosphere"]["mode"] != "spectral" else 0
+    base = {t: nominal[i_an][1][t] for t in tasks}
+    band = {}
+    for t in tasks:
+        v = np.array(grid_[t], float)
+        ok = v[np.isfinite(v)]
+        band[t] = {"min": float(ok.min()) if ok.size else np.nan, "max": float(ok.max()) if ok.size else np.nan,
+                   "nominal": base[t]}
+    progress("Range bands: done", 1.0)
+    return {"kind": "bands", "tasks": tasks, "base": base, "atms": atms, "turb": [l for l, _s in levels],
+            "factor": factor, "grid": grid_, "band": band, "analysis_atm": atms[i_an], "time": _now(),
+            "invalid": [l for (l, _s), r in zip(levels, res) if r is None], "engine": describe_engine(project),
+            "method": "Scenario envelope over the active atmospheres%s (full model run per turbulence level)." % (
+                " x Cn2 / %g, nominal, x %g" % (factor, factor) if len(levels) > 1 else "")}
+
+
+# ---------------------------------------------------------------------------------------------
+# global sensitivity (report phase 3): Morris screening and Sobol variance indices
+# ---------------------------------------------------------------------------------------------
+def _case_ranges(project, changes):
+    """Ranges with [(path, value)] applied, None for an invalid case (worker function)."""
+    case = copy.deepcopy(project)
+    for path, v in changes:
+        _set_input(case, path, v)
+    try:
+        return model_ranges(case)[0]
+    except ModelError:
+        return None
+
+
+def _input_box(project, items):
+    """Interval [lo, hi] of each input: its stated +/- limits (sampled uniformly by the global methods)."""
+    box = []
+    for it in items:
+        x0 = float(get_path(project, it["path"]))
+        a = abs(float(it["pct"])) / 100.0
+        lo, hi = _clip(it["path"], x0 * (1 - a)), _clip(it["path"], x0 * (1 + a))
+        box.append((min(lo, hi), max(lo, hi), x0))
+    return box
+
+
+class _Cache:
+    """Model runs keyed by the input vector: repeated points (Morris trajectories, Sobol matrices) run once."""
+
+    def __init__(self, project, items, box):
+        self.project, self.items, self.box = project, items, box
+        self.store, self.n_unique = {}, 0
+
+    def point(self, u):
+        return tuple(float("%.12g" % (lo + float(ui) * (hi - lo))) for ui, (lo, hi, _x0) in zip(u, self.box))
+
+    def evaluate(self, points, runner, progress, stop, label, f0, f1):
+        new = [x for x in dict.fromkeys(points) if x not in self.store]
+        calls = [(_case_ranges, (self.project, [(it["path"], v) for it, v in zip(self.items, x)])) for x in new]
+        for x, r in zip(new, runner.map(calls, progress, stop, label, f0, f1) if calls else []):
+            self.store[x] = r
+        self.n_unique += len(new)
+        return [self.store[x] for x in points]
+
+
+def global_sensitivity(project, items, method="morris", r=10, n=32, seed=1, progress=None, stop=None, runner=None,
+                       levels=4):
+    """Global sensitivity of the DRI ranges over the stated input intervals (each input uniform on x0 +/- pct).
+
+    morris: r one-at-a-time trajectories on a `levels`-level grid (Morris 1991; mu* = mean |elementary effect|, sigma =
+            their spread - a large sigma flags interactions / regime changes); r (k + 1) runs.
+    sobol:  first-order S_i (Saltelli 2010) and total S_Ti (Jansen 1999) indices from N (k + 2) runs, with 95 %
+            bootstrap intervals; S_Ti - S_i is the share of interactions.
+    Runs go through a cache keyed by the input vector and a process pool (Runner)."""
+    progress = progress or _noop
+    items = _normalize_items(items)
+    if not items:
+        raise ValueError("Select at least one input with a non-zero uncertainty.")
+    base, _w = model_ranges(project)
+    tasks = list(base)
+    box = _input_box(project, items)
+    k = len(items)
+    rng = np.random.default_rng(int(seed))
+    own = runner is None
+    runner = runner or Runner()
+    cache = _Cache(project, items, box)
+    small = []
+    try:
+        rows = [{"path": it["path"], "label": it["label"], "pct": it["pct"], "lo": lo, "hi": hi, "x0": x0}
+                for it, (lo, hi, x0) in zip(items, box)]
+        if method == "morris":
+            delta = levels / (2.0 * (levels - 1))
+            starts = np.arange(levels // 2) / (levels - 1.0)             # grid values from which +delta stays in [0, 1]
+            ee = {t: [[] for _ in range(k)] for t in tasks}
+            traj = []
+            for _j in range(int(r)):
+                x = rng.choice(starts, size=k)
+                pts, order = [x.copy()], rng.permutation(k)
+                for i in order:
+                    x = x.copy()
+                    x[i] += delta
+                    pts.append(x)
+                traj.append((order, pts))
+            flat = [cache.point(u) for _o, pts in traj for u in pts]
+            vals = cache.evaluate(flat, runner, progress, stop, "Morris screening", 0.0, 1.0)
+            pos = 0
+            for order, pts in traj:
+                ys = vals[pos:pos + len(pts)]
+                pos += len(pts)
+                for step, i in enumerate(order):
+                    a, b = ys[step], ys[step + 1]
+                    if a is None or b is None:
+                        continue
+                    for t in tasks:
+                        ee[t][i].append((b[t] - a[t]) / delta)
+            for i, row in enumerate(rows):
+                row["mu_star"] = {t: float(np.mean(np.abs(ee[t][i]))) if ee[t][i] else np.nan for t in tasks}
+                row["mu"] = {t: float(np.mean(ee[t][i])) if ee[t][i] else np.nan for t in tasks}
+                row["sigma"] = {t: float(np.std(ee[t][i], ddof=1)) if len(ee[t][i]) > 1 else np.nan for t in tasks}
+                row["n_effects"] = len(ee[tasks[0]][i]) if tasks else 0
+            n_planned = int(r) * (k + 1)
+            label = "Morris screening, %d trajectories x %d levels" % (int(r), levels)
+        elif method == "sobol":
+            N = int(n)
+            A, B = rng.random((N, k)), rng.random((N, k))
+            mats = [A, B] + [np.where(np.arange(k) == i, B, A) for i in range(k)]
+            flat = [cache.point(u) for M_ in mats for u in M_]
+            vals = cache.evaluate(flat, runner, progress, stop, "Sobol indices", 0.0, 1.0)
+            blocks = [vals[j * N:(j + 1) * N] for j in range(len(mats))]
+            for t in tasks:
+                def col(block):
+                    return np.array([np.nan if v is None else v[t] for v in block], float)
+                fA, fB = col(blocks[0]), col(blocks[1])
+                for i, row in enumerate(rows):
+                    fAB = col(blocks[2 + i])
+                    ok = np.isfinite(fA) & np.isfinite(fB) & np.isfinite(fAB)
+                    s1, st, ci1, cit = _sobol_indices(fA[ok], fB[ok], fAB[ok], rng)
+                    row.setdefault("S1", {})[t], row.setdefault("ST", {})[t] = s1, st
+                    row.setdefault("S1_ci", {})[t], row.setdefault("ST_ci", {})[t] = ci1, cit
+            n_planned = N * (k + 2)
+            label = "Sobol indices, N = %d base samples (Saltelli 2010 / Jansen 1999), 95 %% bootstrap" % N
+            if N < 32:
+                small = ["N = %d is small: the indices are indicative only (see the bootstrap intervals)." % N]
+        else:
+            raise ValueError("Unknown global method %r" % method)
+    finally:
+        if own:
+            runner.close()
+    n_fail = sum(1 for v in cache.store.values() if v is None)
+    key = tasks[-1] if tasks else None
+    score = "mu_star" if method == "morris" else "ST"
+    rows.sort(key=lambda x: -(x[score].get(key, 0.0) if np.isfinite(x[score].get(key, np.nan)) else -1.0))
+    progress("Global sensitivity: done", 1.0)
+    return {"kind": "global", "method": method, "label": label, "tasks": tasks, "base": base, "rows": rows,
+            "rank_task": key, "n_planned": n_planned, "n_runs": cache.n_unique, "n_fail": n_fail, "time": _now(),
+            "engine": describe_engine(project), "settings": {"r": int(r), "n": int(n), "seed": int(seed),
+                                                             "levels": levels},
+            "notes": ["Each input is sampled uniformly on its stated +/- interval (whatever its stated meaning)."] + small +
+                     (["%d of %d model runs were invalid and are left out." % (n_fail, cache.n_unique)] if n_fail else [])}
+
+
+def _sobol_indices(fA, fB, fAB, rng, n_boot=200):
+    """S_i (Saltelli 2010) and S_Ti (Jansen 1999) with 95 % bootstrap intervals.  The outputs are centred first:
+    same expectation, much smaller estimator variance when the range is large compared with its spread."""
+    def est(a, b, ab):
+        both = np.concatenate([a, b])
+        V = float(np.var(both, ddof=1)) if a.size > 1 else 0.0
+        if V <= 0:
+            return 0.0, 0.0
+        m = float(both.mean())
+        return float(np.mean((b - m) * (ab - a)) / V), float(0.5 * np.mean((a - ab) ** 2) / V)
+    if fA.size < 4:
+        return np.nan, np.nan, (np.nan, np.nan), (np.nan, np.nan)
+    s1, st = est(fA, fB, fAB)
+    bs = []
+    for _ in range(n_boot):
+        j = rng.integers(0, fA.size, fA.size)
+        bs.append(est(fA[j], fB[j], fAB[j]))
+    bs = np.array(bs)
+    q = lambda c: (float(np.quantile(bs[:, c], 0.025)), float(np.quantile(bs[:, c], 0.975)))
+    return s1, st, q(0), q(1)
+
+
+# ---------------------------------------------------------------------------------------------
 # scenarios
 # ---------------------------------------------------------------------------------------------
 def compare_scenarios(scenarios, progress=None, stop=None, evaluate=None):
@@ -960,6 +1211,24 @@ def to_csv_rows(an):
         rows = [["factor"] + ["%s_gain_pct" % t for t in tasks]]
         rows += [[r["factor"]] + [r["gain_pct"][t] for t in tasks] for r in an["rows"]]
         rows += [["# limit type", t, v] for t, v in an.get("limit_type", {}).items()]
+        return head + rows
+    if k == "bands":
+        tasks = an["tasks"]
+        head += [["# method", an["method"]]]
+        rows = [["task", "turbulence"] + ["%s_km" % a for a in an["atms"]]]
+        for t in tasks:
+            for lab, row in zip(an["turb"], an["grid"][t]):
+                rows.append([t, lab] + ["" if not np.isfinite(v) else v for v in row])
+        rows.append([])
+        rows.append(["task", "nominal_km", "band_min_km", "band_max_km"])
+        rows += [[t, an["band"][t]["nominal"], an["band"][t]["min"], an["band"][t]["max"]] for t in tasks]
+        return head + rows
+    if k == "global":
+        tasks = an["tasks"]
+        head += [["# method", an["label"]], ["# runs", an["n_runs"]]] + [["# note", n] for n in an["notes"]]
+        keys = ("mu_star", "mu", "sigma") if an["method"] == "morris" else ("S1", "ST")
+        rows = [["input", "path", "low", "high"] + ["%s_%s" % (t, q) for t in tasks for q in keys]]
+        rows += [[r["label"], r["path"], r["lo"], r["hi"]] + [r[q][t] for t in tasks for q in keys] for r in an["rows"]]
         return head + rows
     if k == "scenarios":
         tasks = an["tasks"]

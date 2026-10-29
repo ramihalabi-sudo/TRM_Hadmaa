@@ -8,6 +8,7 @@ physical calculation.  The full model (model.py) uses the same equations (TRM4 3
 """
 import math
 
+from . import extensions as X
 from . import mtf as M
 from . import presets as P
 
@@ -184,6 +185,16 @@ def _merged_views(p, rows, warn, alpha, rN, fov, nv, t_max):
             elif p["atmosphere"]["mode"] == "extinction" and _f(at["sigma"]) > 0:
                 rows.append((A, "Atm %d: equivalent visual range (3.912 / sigma)" % (i + 1),
                              "%.4g" % (3.912 / _f(at["sigma"])), "km"))
+    win = P.qe_window(p)
+    if p["mode"]["environment"] == "field" and p["atmosphere"]["mode"] == "weather" and win:
+        lam_c = 0.5 * (win[0] + win[1])
+        for i, at in enumerate(p["atmosphere"]["atm"]):
+            if not at.get("on") or _f(at["V_km"]) <= 0 or _f(at["T_air_K"]) <= 0:
+                continue
+            tot, aer, wv = (float(v) for v in X.weather_extinction(lam_c, _f(at["V_km"]), _f(at["T_air_K"]),
+                                                                    _f(at.get("rh_pct", 50.0))))
+            rows.append(("Atmosphere", "Atm %d: extinction from the weather at %.2f um (aerosol + water vapour)" % (
+                i + 1, lam_c), "%.4g = %.4g + %.4g" % (tot, aer, wv), "1/km"))
     T = "Timing"
     if t_max and photon and d["tint_mode"] == "duty":
         rows.append((T, "Integration time (duty x maximum)", "%.4g" % (1000.0 * _f(d["duty"]) * t_max), "ms"))
@@ -214,6 +225,23 @@ def _merged_views(p, rows, warn, alpha, rN, fov, nv, t_max):
                 if ratio > 1.0 / 3.0:
                     warn.append("Random jitter %s is %.2f IFOV (> 1/3): the motion MTF, not the pixel, limits the "
                                 "resolution." % (z, ratio))
+    if st.get("jitter_mode", "model") == "model" and not st["neglect"] and st["lin_on"]:
+        # smear of the linear motion (scan / pan) per exposure window: microbolometer time constant or integration time
+        if not photon:
+            t_e, what = _f(d["t_th_ms"]) * 1e-3, "thermal time constant"
+        elif d["tint_mode"] == "direct":
+            t_e, what = _f(d["tint_ms"]) * 1e-3, "integration time"
+        elif d["tint_mode"] == "duty" and t_max:
+            t_e, what = _f(d["duty"]) * t_max, "integration time"
+        else:
+            t_e, what = t_max, "maximum integration time"
+        if t_e:
+            sm = {z: abs(_f(st["lin_" + z])) * t_e / alpha[z] for z in "hv"}
+            rows.append(("Motion", "Linear motion smear per %s h / v" % what, "%.3g / %.3g" % (sm["h"], sm["v"]),
+                         "pixels"))
+            if not photon and max(sm.values()) > 1.0:
+                warn.append("Microbolometer scan smear: %.2f pixels within one thermal time constant - the exponential "
+                            "detector response blurs the scanned image." % max(sm.values()))
     if photon and not (cat == "Thermal" and d["noise_mode"] == "measured") and d.get("dark_mode", "value") == "value":
         I = _f(d["dark_A"])
         if I > 0:

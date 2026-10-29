@@ -162,8 +162,9 @@ SOURCE_NAMES = list(NATURAL_SOURCES.keys())
 # ---------------------------------------------------------------------------------------------
 # Default project and templates
 # ---------------------------------------------------------------------------------------------
-def _atm(on, sigma, tau0=1.0, T_air=288.0, F_PR=0.15, V=20.0):
-    return {"on": on, "sigma": sigma, "tau0": tau0, "T_air_K": T_air, "F_PR": F_PR, "V_km": V}
+def _atm(on, sigma, tau0=1.0, T_air=288.0, F_PR=0.15, V=20.0, rh=50.0):
+    # rh_pct: relative humidity, used only when the extinction is derived from the weather (atmosphere mode 'weather')
+    return {"on": on, "sigma": sigma, "tau0": tau0, "T_air_K": T_air, "F_PR": F_PR, "V_km": V, "rh_pct": rh}
 
 
 _NOFILE = {"name": "", "text": ""}
@@ -378,20 +379,25 @@ DEFAULT_PROJECT = {
             "frames_on": False, "n_frames": 1, "iir_on": False, "iir_alpha": 0.0,
             # sharpening (boost) is credited in the ranges only on request (field map SP-01)
             "credit_boost": False,
-            # processing pipeline documentation (field map Sec. 15.2.7)
-            "pl_denoise": False, "pl_compression": "none", "pl_order": "", "pl_version": ""},
+            # processing pipeline documentation (field map Sec. 15.2.7); lossy compression acts as an equivalent
+            # Gaussian blur of comp_blur_px pixels (extension, 0 = not modelled)
+            "pl_denoise": False, "pl_compression": "none", "pl_order": "", "pl_version": "", "comp_blur_px": 0.0},
     "display": {"n_h": 1280, "n_v": 1024, "pitch_h_mm": 0.27, "pitch_v_mm": 0.27, "luminance": 50.0,
                 "observation": "direct", "f_eyepiece_mm": 25.0, "distance_cm": 50.0, "snr_th": 2.5,
                 "t_eye_s": 0.1, "neglect_eye": False,
                 # observer (field map Sec. 15.2.8): legacy = TRM4 standard observer
-                "observer": "legacy", "algo_id": "", "algo_calib": "", "algo_roc": ""},
+                "observer": "legacy", "algo_id": "", "algo_calib": "", "algo_roc": "",
+                # algorithm criterion: lp = TRM4 line pairs (uncalibrated), pot = pixels on target + pixel CNR
+                "algo_criterion": "lp", "algo_cnr_min": 3.0},
     "stab": {"neglect": False, "random_on": False, "rand_h_mrad": 0.0, "rand_v_mrad": 0.0,
              "lin_on": False, "lin_h": 0.0, "lin_v": 0.0, "sin_on": False, "sin_h": 0.0, "sin_v": 0.0,
              "jitter_mode": "model", "jitter_file": dict(_NOFILE), "jitter_unit": "urad", "jitter_rate_hz": 0.0,
              # angular PSD of the residual line-of-sight motion (field map Sec. 15.2.9)
              "psd_file": dict(_NOFILE), "psd_unit": "urad2", "residual_los": True,
              # allowed image smear during one exposure for the exposure budget [pixels] (review Sec. 4.3)
-             "smear_allow_px": 0.5},
+             "smear_allow_px": 0.5,
+             # GUI preset that fills the random jitter (custom = user values)
+             "jitter_preset": "custom"},
     "additional": {"pre_h_type": "none", "pre_h_par": 10.0, "pre_v_type": "none", "pre_v_par": 10.0,
                    "post_h_type": "none", "post_h_par": 10.0, "post_v_type": "none", "post_v_par": 10.0},
     "target": {"preset": "STANAG 4347", "alt_m": 1.0, "dT_K": 2.0, "W_m": 2.3, "H_m": 2.3, "D_m": 0.0,
@@ -400,10 +406,12 @@ DEFAULT_PROJECT = {
                "b_emis_mode": "blackbody", "b_emis": 0.9, "b_emis_preset": "Green grassland",
                "b_refl_mode": "effective", "b_refl": 0.15, "b_refl_preset": "Green grassland",
                "T_bg_K": 288.0, "aspect": "front", "flight": "altitude", "altitude_m": 0.0, "angle_deg": 0.0,
-               "tasks": [{"name": "Detection", "on": True, "lp": 1.0},
-                         {"name": "Recognition", "on": True, "lp": 3.0},
-                         {"name": "Identification", "on": True, "lp": 6.0}],
-               "task_preset": "legacy", "clutter": "not_specified", "scene_id": ""},
+               "tasks": [{"name": "Detection", "on": True, "lp": 1.0, "pot": 60.0},
+                         {"name": "Recognition", "on": True, "lp": 3.0, "pot": 250.0},
+                         {"name": "Identification", "on": True, "lp": 6.0, "pot": 350.0}],
+               "task_preset": "legacy", "clutter": "not_specified", "scene_id": "",
+               # extensions: P80 / P90 ranges (Johnson TTPF), clutter multiplier of the Detection criterion
+               "prob_levels": True, "clutter_model": False},
     "irradiance": {"mode": "none", "type": "broadband", "spectrum": "colour", "T_colour_K": 5800.0,
                    "E_peak": 1239.0, "E_eff": 100.0, "preset": "Direct sunlight", "lambda_um": 0.85,
                    "E_mono": 1.0, "T_bb_K": 6000.0, "geometry": "extended", "beta_h_deg": 0.0,
@@ -421,7 +429,9 @@ DEFAULT_PROJECT = {
                    # Fried parameter input with its reference conditions (cn2_mode = "r0")
                    "r0_cm": 5.0, "r0_lambda_um": 0.55, "r0_L_km": 1.0,
                    # von Karman outer scale [m], 0 = Kolmogorov (infinite outer scale) - review Sec. 3.20
-                   "L0_m": 0.0},
+                   "L0_m": 0.0,
+                   # extensions: turbulence in the Thermal category; mitigation processing as an effective r0 gain
+                   "thermal": False, "mitigation": 1.0},
     # measured system data (Laboratory & Image Evaluation workflow)
     "measured": {"fom_file": dict(_NOFILE), "fom_kind": "MTDP", "fom_unit": "mrad", "fom_vunit": "K", "fom_use": "compare",
                  "sfr_file": dict(_NOFILE), "sfr_kind": "device", "sfr_unit": "mrad",

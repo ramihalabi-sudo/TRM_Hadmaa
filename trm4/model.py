@@ -19,9 +19,10 @@ from . import mtf as M
 from . import presets as P
 from . import zemax as Z
 from . import imports as IM
+from . import extensions as X
 from .amop import amop as amop_sim
 
-MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.5"
+MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.6"
 MODEL_REFERENCE = "Fraunhofer IOSB TR 2021/04 (TRM4.v3 parameter description and model documentation)"
 # version of the acceptance/regression suite (kept separate from the model version, field map App. D)
 VALIDATION_VERSION = "acceptance suite FM-1.1 (field map v1.1, 14.10.2026)"
@@ -100,10 +101,10 @@ class Atmosphere:
             return self.tau(R_km)
         R, tab = self.spec["R"], self.spec["tau"]
         if len(R) == 1:
-            # Beer-Lambert per wavelength from one path length
+            # Beer-Lambert per wavelength from one path length (initial transmission: weather-derived extinction)
             with np.errstate(divide="ignore"):
                 k = -np.log(np.maximum(tab[:, 0], 1e-300)) / R[0]
-            return np.exp(-k * R_km)
+            return self.tau0 * np.exp(-k * R_km)
         if R_km <= R[0]:
             # between 0 and the first tabulated range: log-linear towards tau = 1
             return np.maximum(tab[:, 0], 1e-300) ** (R_km / R[0]) if R[0] > 0 else tab[:, 0]
@@ -629,6 +630,9 @@ class TRM4Model:
             for i, at in enumerate(a["atm"]):
                 if not at.get("on"):
                     continue
+                if a["mode"] == "weather":
+                    self.atms.append(self._weather_atmosphere(i, at, path))
+                    continue
                 if a["mode"] == "visibility" and self.cat == "Visible":
                     V = float(at["V_km"])
                     if V <= 0:
@@ -680,6 +684,40 @@ class TRM4Model:
                 tg["flight"] == "angle" and float(tg["angle_deg"]) < 0:
             self.warn("Upward looking geometry (sky background) is not implemented; the background is "
                       "treated as a Lambertian plane.")
+
+    def _weather_atmosphere(self, i, at, path):
+        """Atmosphere slot from visual range, relative humidity and air temperature (extension): spectral extinction
+        = aerosol (Kruse / Kim) + water-vapour continuum (Roberts 1976, 8-14 um), Beer-Lambert per wavelength."""
+        V, T, rh = float(at["V_km"]), float(at["T_air_K"]), float(at.get("rh_pct", 50.0))
+        if V <= 0 or T <= 0 or not 0 <= rh <= 100:
+            raise ModelError("Atmosphere %d from the weather: visual range and air temperature must be > 0, relative "
+                             "humidity in [0, 100] %%" % (i + 1))
+        if not 0 < float(at["tau0"]) <= 1:
+            raise ModelError("Atmosphere %d: initial transmission must be in (0, 1]" % (i + 1))
+        total, aer, wv = X.weather_extinction(self.lam, V, T, rh)
+        if not hasattr(self, "weather"):
+            self.weather = []
+            lo, hi = self.lam[0], self.lam[-1]
+            if hi > 2.6 and lo < X.CONTINUUM_BAND_UM[0]:
+                self.warn("Extinction from the weather: below 8 um (MWIR, edge of the 6.3 um water band) gas and "
+                          "water-vapour absorption is not modelled - the derived extinction is aerosol only there and "
+                          "optimistic in clear air; import a spectral transmission (e.g. MODTRAN) or enter the "
+                          "extinction coefficient.")
+            self.assume("Extinction from the weather (%s): aerosol from the visual range, wavelength exponent Kruse "
+                        "(V > 6 km) / Kim et al. 2001 (V < 6 km); water-vapour continuum 8-14 um after Roberts, Selby "
+                        "& Biberman 1976 at sea-level pressure; line absorption of H2O, CO2 and O3 is not included "
+                        "(a lower bound of the clear-air infrared extinction); horizontal homogeneous path." %
+                        X.EXTENSION)
+        if V < 1.0:
+            self.warn("Atmosphere %d: visual range %.3g km < 1 km (fog) - the aerosol model is weak there; use measured "
+                      "extinction." % (i + 1, V))
+        spec = {"lam": self.lam, "R": np.array([1.0]), "tau": np.exp(-total)[:, None]}
+        T_air = self.T_B if self.cat == "Thermal" else T
+        F_PR = 0.0 if self.cat == "Thermal" else float(at["F_PR"])
+        x = Atmosphere("Atm %d (V=%g km, RH %g %%)" % (i + 1, V, rh), 0.0, at["tau0"], T_air, F_PR, spec=spec, path=path)
+        self.weather.append({"slot": i, "V_km": V, "T_K": T, "rh_pct": rh, "aerosol": aer, "water": wv,
+                             "rho_w": X.water_vapour_density(T, rh), "atm": x})
+        return x
 
     def _spectral_on_grid(self, lam_f, table, what):
         lo, hi = self.lam[0], self.lam[-1]
@@ -1248,8 +1286,13 @@ class TRM4Model:
                     self.warn("Digital filter boosts the MTF up to %.2f (sharpening): it is NOT credited in the ranges "
                               "(no calibrated noise / task model). Tick 'Credit sharpening in the ranges' to include "
                               "it." % self.boost)
+        comp = self.compression_blur_px()
         unmodelled = [s for s, on in (("denoising", dsp.get("pl_denoise")),
-                                      ("lossy compression", dsp.get("pl_compression") == "lossy")) if on]
+                                      ("lossy compression", dsp.get("pl_compression") == "lossy" and not comp)) if on]
+        if comp:
+            self.assume("Lossy compression (%s) as an equivalent Gaussian blur of %.3g pixels rms applied to the "
+                        "digital frame (signal and noise), O'Shea, Jacobs & Espinola 2008 - the blur must be fitted to "
+                        "the codec and bit rate in use." % (X.EXTENSION, comp))
         if unmodelled:
             self.assume("Processing not modelled: %s - the prediction does not include these steps; compare with a "
                         "measured end-to-end SFR of this processing state (Lab)." % ", ".join(unmodelled))
@@ -1510,8 +1553,14 @@ class TRM4Model:
         return M.mtf_additional(r, kind, float(a["%s_%s_par" % (where, z)]))
 
     def turbulence_active(self):
-        return self.cat != "Thermal" and not self.lab and bool(self.p["turbulence"]["on"]) and \
+        # TRM4 neglects turbulence in the Thermal category (Sec. 2.28); applying it there is an extension
+        tb = self.p["turbulence"]
+        return (self.cat != "Thermal" or bool(tb.get("thermal"))) and not self.lab and bool(tb["on"]) and \
             not self.wi.get("no_turb")
+
+    def mitigation_gain(self):
+        """Effective Fried-parameter gain of turbulence-mitigation processing (extension, 1 = none)."""
+        return max(float(self.p["turbulence"].get("mitigation", 1.0) or 1.0), 1.0)
 
     def _turb_table(self, R_km):
         key = round(R_km, 9)
@@ -1552,12 +1601,20 @@ class TRM4Model:
         r_max = max(self.opt_tab["h"][0][-1], self.opt_tab["v"][0][-1])
         r = np.linspace(0.0, r_max, 1200)
         L0 = max(float(tb.get("L0_m", 0.0) or 0.0), 0.0)
+        if self.mitigation_gain() > 1.0 and not self._turb_cache:
+            self.assume("Turbulence mitigation processing (%s): the turbulence MTF uses an effective Fried parameter "
+                        "%.3g x r0 - an empirical factor; published systems report +10 to +25 %% recognition range."
+                        % (X.EXTENSION, self.mitigation_gain()))
+            if tb["exposure"] == "long":
+                self.warn("Turbulence mitigation with the long-exposure MTF: mitigation registers the frames (image "
+                          "wander removed) - the short-exposure MTF is the consistent choice.")
         if L0 > 0:
             self.assume("Turbulence with a von Karman outer scale L0 = %.3g m (first-order correction of the phase "
                         "structure function, valid for pupil separations << L0)." % L0)
         vals = []
+        gain = self.mitigation_gain()        # mitigation: effective r0 of the processed image (physical r0 reported)
         for lam_i in lam_s:
-            r0 = r0_ref * lam_i ** 1.2
+            r0 = r0_ref * lam_i ** 1.2 * gain
             vals.append(M.mtf_turbulence(r, lam_i, r0, self.D_eff, tb["exposure"], L0))
         m = np.abs(ph.trapz(w[None, :] * np.array(vals).T, lam_s, axis=1))
         self._turb_cache[key] = (r, m, r0_ref * self.lam_peak ** 1.2)
@@ -1584,10 +1641,17 @@ class TRM4Model:
         kind = dsp["h_type"] if z == "h" else dsp["v_type"]
         return M.mtf_digital_filter(r, coef, kind, self.alpha_s[z])
 
+    def compression_blur_px(self):
+        """Equivalent Gaussian blur of lossy compression [pixels] (extension, 0 = none)."""
+        dsp = self.p["dsp"]
+        return max(float(dsp.get("comp_blur_px", 0.0) or 0.0), 0.0) if dsp.get("pl_compression") == "lossy" else 0.0
+
     def mtf_dig(self, r, z):
-        if self.boost_off:
-            return np.ones_like(np.asarray(r, float))      # sharpening not credited (field map SP-01)
-        return self._fir(r, z)
+        m = np.ones_like(np.asarray(r, float)) if self.boost_off else self._fir(r, z)   # sharpening (field map SP-01)
+        s = self.compression_blur_px()
+        if s > 0:
+            m = m * X.mtf_compression(r, s, self.alpha_s[z])      # lossy compression as per-pixel blur
+        return m
 
     def mtf_display(self, r, z):
         if self.algo:
@@ -1789,6 +1853,7 @@ class TRM4Model:
         self._setup_atmospheres()
         self._setup_optics()
         self._setup_noise()
+        self._setup_criteria()
         R_ref = 0.0 if (self.lab or self.cat == "Thermal") else max(float(self.p["mode"]["ref_range_km"]), 0.0)
         if R_ref > 0 and R_ref < self.min_range():
             self.warn("Reference range is shorter than the imager altitude; the minimum slant range is used.")
@@ -1910,11 +1975,35 @@ class TRM4Model:
                 self.warn("Low signal at the reference range: %.3g background carriers per frame - the read noise "
                           "(%.3g e-) dominates the photon shot noise (read-noise limited)." % (st["N_B"], rn))
 
+    def scan_smear_px(self):
+        """Image smear per exposure window of the linear motion (scan / pan) in pixels {h, v}: velocity x
+        thermal time constant (microbolometer) or x integration time (photon detector); None without linear motion."""
+        st = self.p["stab"]
+        if self.motion_active() != "model" or not st["lin_on"]:
+            return None
+        t = self.t_exposure()
+        return {z: abs(float(st["lin_" + z])) * t / self.alpha_s[z] for z in "hv"}
+
     def _motion_checks(self):
-        """Rolling shutter: the row-to-row delay distorts geometry; it is not blur (field map Sec. 15.2.3)."""
+        """Scan smear (report phase 3) and rolling shutter: the row-to-row delay distorts geometry; it is not blur
+        (field map Sec. 15.2.3)."""
+        st = self.p["stab"]
+        sm = self.scan_smear_px()
+        if sm and self.uncooled and max(sm.values()) > 1.0:
+            self.warn("Microbolometer scan smear: the linear image motion moves the image by %.2f (h) / %.2f (v) pixels "
+                      "within one thermal time constant (%.3g ms) - the exponential smear MTF of the detector response "
+                      "is applied; an image velocity below %.3g mrad/s keeps it below one pixel." % (
+                          sm["h"], sm["v"], self.t_th * 1e3, min(self.alpha_s.values()) / self.t_th))
+        jit = self.motion_active()
+        if not self.lab and (jit is None or jit == "model" and not st["random_on"]):
+            ifov = min(self.alpha_s.values())
+            if X.TYPICAL_JITTER_MRAD > ifov / 3.0:
+                self.assume("No line-of-sight jitter: a typical residual jitter of %.0f urad rms (US Army NV-IPM "
+                            "practice) is %.2f IFOV here (> 1/3) and would shorten the ranges - without it the ranges "
+                            "of this narrow field of view are optimistic (preset on page 'Stabilization & MTFs')." % (
+                                X.TYPICAL_JITTER_MRAD * 1e3, X.TYPICAL_JITTER_MRAD / ifov))
         if self.readout != "rolling":
             return
-        st = self.p["stab"]
         self.assume("Rolling-shutter readout %.3g ms: each row is exposed for the integration time (motion blur uses "
                     "the exposure); the row-to-row delay only distorts the frame geometry." % (self.t_readout * 1e3))
         if self.motion_active() == "model" and st["lin_on"]:
@@ -2442,10 +2531,18 @@ class TRM4Model:
                         row["limiter"] = "resolution (MTF)"
                     else:
                         row["limiter"] = "contrast / noise"
+                    if "pot" in t:
+                        row["limiter"] = "%s (algorithm criterion)" % t["limit"]
+                for key in ("pot", "levels", "lp_input", "clutter"):
+                    if key in t:
+                        row[key] = t[key]
                 d["tasks"].append(row)
         d["nominal"] = True
         d["model"] = "TRM4 line-pair criterion (Johnson-type legacy), preset '%s'" % P.TASK_PRESETS.get(
             self.p["target"].get("task_preset", "legacy"), ("custom",))[0]
+        if self.pot_mode:
+            d["model"] = "Algorithm criterion: pixels on target and pixel CNR >= %g (%s)" % (self.algo_cnr, X.EXTENSION)
+        d["extensions"] = self.extensions()
         fm = res.get("fom_measured")
         if self.algo:
             d["calibration"] = "Uncalibrated estimate - algorithm observer%s" % (
@@ -2458,6 +2555,26 @@ class TRM4Model:
         d["exposure"] = self.exposure
         d["context"] = self._dri_context(res)
         return d
+
+    def extensions(self):
+        """Active TRM_HADMAA extensions (each labelled where its result is shown; empty = TRM4 model only)."""
+        out = []
+        if self.prob_levels and not self.lab:
+            out.append("P80 / P90 ranges (Johnson TTPF; the TRM4 range is P50)")
+        if self.clutter_mult != 1.0:
+            out.append("clutter '%s': Detection criterion x%.3g (ACQUIRE-LC)" % (self.p["target"]["clutter"],
+                                                                                self.clutter_mult))
+        if getattr(self, "weather", None):
+            out.append("extinction from visual range / humidity (Kruse-Kim + water-vapour continuum)")
+        if self.cat == "Thermal" and self.turbulence_active():
+            out.append("turbulence in the Thermal category")
+        if self.turbulence_active() and self.mitigation_gain() > 1.0:
+            out.append("turbulence mitigation: effective r0 x%.3g" % self.mitigation_gain())
+        if self.compression_blur_px() > 0:
+            out.append("lossy compression as %.3g px Gaussian blur" % self.compression_blur_px())
+        if self.pot_mode:
+            out.append("algorithm observer: pixels-on-target criterion")
+        return out
 
     def _dri_context(self, res):
         """Context every DRI range is reported with (research review Sec. 3.22 / spec wording Sec. 7.7)."""
@@ -2489,6 +2606,7 @@ class TRM4Model:
             "scene": "%s; atmosphere %s" % (scene, atm),
             "mtf_source": "mode %s - %s" % (self.mtf_mode, getattr(self, "mtf_doc", "")),
             "observer": self.observer + (" (algorithm '%s')" % p["display"].get("algo_id", "") if self.algo else ""),
+            "extensions": "; ".join(self.extensions()) or "none (TRM4 model only)",
             "uncertainty": "nominal prediction - no uncertainty statement unless the Sensitivity analysis is run",
             "validation": "not validated (no measured data)",
             "statement": "A nominal range is not, by itself, an assured operational outcome."}
@@ -2679,6 +2797,120 @@ class TRM4Model:
             else:
                 self.progress("Range calculation - %s" % atm.label, 0.45 + 0.45 * ia / max(n_atm, 1))
                 out["atm"].append(self._ranges_signal(atm, tasks))
+        if self.prob_levels:
+            out["prob_levels"] = list(X.PROB_LEVELS)
+        return out
+
+    # --- task criteria (TRM4 line pairs; clutter, probability and pixels-on-target are extensions) -------------
+    def _setup_criteria(self):
+        tg, disp = self.p["target"], self.p["display"]
+        self.clutter_mult = 1.0
+        if tg.get("clutter_model") and tg.get("clutter") in X.CLUTTER_C:
+            dT = abs(float(tg["dT_K"])) if self.cat == "Thermal" else None
+            self.clutter_mult = X.clutter_factor(tg["clutter"], dT)
+            self.assume("Background clutter '%s' (%s): the Detection criterion (first task) is multiplied by %.3g - "
+                        "ACQUIRE-LC N50 = 0.75 C [(C / dT)^2 + 1], C = %g, relative to low clutter%s; the entered "
+                        "criterion is taken as the low-clutter value." % (
+                            tg["clutter"], X.EXTENSION, self.clutter_mult, X.CLUTTER_C[tg["clutter"]],
+                            " at dT = %.3g K (dT_RSS approximated by the entered dT)" % dT if dT else
+                            " in the high-contrast limit (factor C)"))
+        self.pot_mode = self.algo and disp.get("algo_criterion", "lp") == "pot"
+        self.algo_cnr = float(disp.get("algo_cnr_min", X.ALGO_CNR_DEFAULT))
+        if self.pot_mode:
+            if not self.algo_cnr > 0:
+                raise ModelError("Minimum pixel CNR of the algorithm observer must be > 0")
+            for i, t in enumerate(self._tasks()):
+                if not float(t.get("pot", 1.0)) > 0:
+                    raise ModelError("Pixels on target of task '%s' must be > 0" % t["name"])
+            self.assume("Algorithm observer criterion (%s): pixels on the projected target area (Holst & Mahalanobis "
+                        "2023: 50-70 detection, 150 classification, 250 recognition, 350 identification) and a pixel "
+                        "CNR >= %.3g (difference signal / noise of the processed frame); the range is the shorter of "
+                        "the two. Thresholds are generic until calibrated for the algorithm." % (X.EXTENSION,
+                                                                                                  self.algo_cnr))
+        # probability levels: Johnson / Lawson TTPF on the (N50) criterion; not for pixels-on-target criteria
+        self.prob_levels = bool(tg.get("prob_levels", True)) and not self.pot_mode and not self.wi.get("no_prob")
+        if self.prob_levels and not self.lab:
+            self.assume("P80 / P90 ranges (%s): the task criterion is the 50 %% value N50; the criterion for "
+                        "probability P is N50 x %.3g (P80) and x %.3g (P90) from the Johnson / Lawson TTPF "
+                        "P = x^E / (1 + x^E), E = 2.7 + 0.7 x (SAND2015-6368)." % (
+                            X.EXTENSION, X.ttpf_ratio(0.8), X.ttpf_ratio(0.9)))
+
+    def _criterion(self, t):
+        """Criterion entry of a task: line pairs actually used (entered x clutter factor), entered value, factor.
+
+        The clutter factor acts on the Detection task (first task of the project); in heavy clutter the target is
+        found only by recognising it, so the factor is capped at the Recognition criterion."""
+        all_t = self.p["target"]["tasks"]
+        i = next(k for k, x in enumerate(all_t) if x is t)
+        n = float(t["lp"])
+        c = {"lp": n, "lp_input": n, "clutter": 1.0}
+        if i == 0 and self.clutter_mult != 1.0:
+            n_c = n * self.clutter_mult
+            if len(all_t) > 1 and all_t[1].get("on") and n_c > float(all_t[1]["lp"]) >= n:
+                n_c = float(all_t[1]["lp"])
+                self.warn("Clutter '%s' would raise the Detection criterion above the Recognition criterion (%g lp); "
+                          "it is capped there - in this clutter the target is found only by recognising it." % (
+                              self.p["target"]["clutter"], n_c))
+            c.update(lp=n_c, clutter=n_c / n)
+        if self.pot_mode:
+            c["pot"] = float(t.get("pot", X.pot_default(i)))
+        return c
+
+    def _pot_range(self, R, dims, cnr, n_pot):
+        """Range of a pixels-on-target criterion with the pixel-CNR condition -> (R0, limiting condition)."""
+        npot = np.array([dm[2] / (x * x * self.alpha_s["h"] * self.alpha_s["v"]) for x, dm in zip(R, dims)])
+        r_geo = X.last_range_at_or_above(R, npot, n_pot)
+        r_cnr = X.last_range_at_or_above(R, np.maximum(cnr, 1e-300), self.algo_cnr)
+        if r_geo is None or r_cnr is None:
+            return None, "pixels on target" if r_geo is None else "pixel CNR"
+        return (r_geo, "pixels on target") if r_geo <= r_cnr else (r_cnr, "pixel CNR")
+
+    @staticmethod
+    def _nbar_range(R, nbar, n_perc):
+        """Range at which the resolved line pairs on target fall below the criterion (Thermal, Eq. 3.212)."""
+        below = np.nonzero(nbar < n_perc)[0]
+        if below.size and below[0] > 0:
+            i = below[0]
+            y0, y1 = math.log(nbar[i - 1]), math.log(max(nbar[i], 1e-300))
+            tt = (math.log(n_perc) - y0) / (y1 - y0)
+            return math.exp(math.log(R[i - 1]) + tt * (math.log(R[i]) - math.log(R[i - 1])))
+        if below.size == 0:
+            return float("inf")
+        return None
+
+    def _thermal_turbulence(self, R):
+        """MTDP versus range with the turbulence MTF (extension; TRM4 neglects turbulence in the Thermal category).
+
+        Turbulence only changes the pre-sampling MTF, so MTDP_R(rp) = MTDP_0(rp) AMOP_0(rp) / AMOP_R(rp).  AMOP_R is
+        simulated at nine ranges on the AMOP frequency grid and interpolated linearly in log range."""
+        fom = self._fom_res
+        Rk = np.logspace(math.log10(R[0]), math.log10(R[-1]), 9)
+        out = {}
+        for z in "hv":
+            rt, a0t = self.amop_tab[z]
+            ak = []
+            for x in Rk:
+                vals, zeros = [], 0
+                for f in rt:
+                    a = 0.0 if zeros >= 3 else self.amop_direct(x, f, z)
+                    vals.append(a)
+                    zeros = zeros + 1 if a <= 0.001 else 0
+                ak.append(np.array(vals))
+            ak = np.array(ak)
+            rp, val = fom[z]["rp"], fom[z]["val"]
+            a0 = np.interp(rp, rt, a0t, right=0.0)
+            lr, lk = np.log(R), np.log(Rk)
+            rows = []
+            for x in lr:
+                j = int(np.clip(np.searchsorted(lk, x) - 1, 0, len(Rk) - 2))
+                t = (x - lk[j]) / (lk[j + 1] - lk[j])
+                aR = np.interp(rp, rt, (1 - t) * ak[j] + t * ak[j + 1], right=0.0)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    v = np.where((aR > 0.001) & (a0 > 0.001), val * a0 / np.maximum(aR, 1e-300), np.inf)
+                rows.append(v)
+            out[z] = np.array(rows)
+        self.assume("Turbulence in the Thermal category (%s): the MTDP is degraded by the turbulence MTF along the "
+                    "range (MTDP_R = MTDP_0 AMOP_0 / AMOP_R, AMOP simulated at 9 ranges)." % X.EXTENSION)
         return out
 
     def _ranges_thermal(self, atm, tasks):
@@ -2689,14 +2921,16 @@ class TRM4Model:
         fom = self._fom_res
         dims = [self.target_dims(self.los_angle(x)) for x in R]
         res = {"label": atm.label, "R": R, "signal": etd, "tasks": []}
+        turb = self._thermal_turbulence(R) if self.turbulence_active() else None
         # resolved line pairs vs range, Eqs. (3.210), (3.211)
         nlp = {}
         for z, zi in (("h", 0), ("v", 1)):
-            rp, val = fom[z]["rp"], fom[z]["val"]
-            finite = np.isfinite(val)
-            r_last = rp[finite][-1] if finite.any() else 0.0
+            rp = fom[z]["rp"]
             n = []
-            for x, e, dm in zip(R, etd, dims):
+            for k, (x, e, dm) in enumerate(zip(R, etd, dims)):
+                val = fom[z]["val"] if turb is None else turb[z][k]
+                finite = np.isfinite(val)
+                r_last = rp[finite][-1] if finite.any() else 0.0
                 rs = ph.inverse_first_crossing(rp, val, e)
                 if rs is None:
                     rs = r_last
@@ -2707,28 +2941,35 @@ class TRM4Model:
         nbar = np.sqrt(nlp["h"] * nlp["v"])
         res["nlp"] = nbar
         res["npix"] = nlp["h"] * nlp["v"]                                         # Eq. (3.214)
+        st = self.ref_state
+        cnr = etd / math.sqrt(st["nes"] ** 2 / self.n_int_frames + st["ies"] ** 2) if self.pot_mode else None
         for t in tasks:
-            n_perc = float(t["lp"])
-            R0 = None
-            below = np.nonzero(nbar < n_perc)[0]
-            if below.size and below[0] > 0:
-                i = below[0]
-                y0, y1 = math.log(nbar[i - 1]), math.log(max(nbar[i], 1e-300))
-                tt = (math.log(n_perc) - y0) / (y1 - y0)
-                R0 = math.exp(math.log(R[i - 1]) + tt * (math.log(R[i]) - math.log(R[i - 1])))
-            elif below.size == 0:
-                R0 = float("inf")
+            c = self._criterion(t)
+            n_perc = c["lp"]
+            if self.pot_mode:
+                R0, c["limit"] = self._pot_range(R, dims, cnr, c["pot"])
+            else:
+                R0 = self._nbar_range(R, nbar, n_perc)
+                if self.prob_levels:
+                    c["levels"] = [{"p": pr, "lp": n_perc * X.ttpf_ratio(pr),
+                                    "R0": self._nbar_range(R, nbar, n_perc * X.ttpf_ratio(pr))} for pr in X.PROB_LEVELS[1:]]
             # MNTD curves, Eq. (3.215) and average (3.216)-(3.218)
             mn = {}
             for z, zi in (("h", 0), ("v", 1)):
-                rp, val = fom[z]["rp"], fom[z]["val"]
+                rp = fom[z]["rp"]
                 req = np.array([n_perc * x / dm[zi] for x, dm in zip(R, dims)])
-                big = np.where(np.isfinite(val), val, 1e30)
-                v = np.interp(req, rp, big, left=big[0], right=1e30)
+                if turb is None:
+                    big = np.where(np.isfinite(fom[z]["val"]), fom[z]["val"], 1e30)
+                    v = np.interp(req, rp, big, left=big[0], right=1e30)
+                else:
+                    v = []
+                    for q, row in zip(req, turb[z]):
+                        big = np.where(np.isfinite(row), row, 1e30)
+                        v.append(np.interp(q, rp, big, left=big[0], right=1e30))
+                    v = np.array(v)
                 mn[z] = np.where(v >= 1e30, np.inf, v)
             Ra, Sa = self._avg_curve(R, mn["h"], mn["v"])
-            res["tasks"].append({"name": t["name"], "lp": n_perc, "R0": R0, "R_avg": Ra, "mn_avg": Sa,
-                                 "mn_h": mn["h"], "mn_v": mn["v"]})
+            res["tasks"].append(dict(c, name=t["name"], R0=R0, R_avg=Ra, mn_avg=Sa, mn_h=mn["h"], mn_v=mn["v"]))
         return res
 
     def _ranges_signal(self, atm, tasks):
@@ -2737,8 +2978,8 @@ class TRM4Model:
         states = [self.signal_state(x, atm) for x in R]
         eds = np.array([s["eds"] for s in states])
         res = {"label": atm.label, "R": R, "signal": eds, "tasks": []}
-        for it, t in enumerate(tasks):
-            n_perc = float(t["lp"])
+
+        def solve(n_perc):
             mn = {}
             for z, zi in (("h", 0), ("v", 1)):
                 vals = []
@@ -2765,8 +3006,20 @@ class TRM4Model:
                     R0 = float(Ra[-1]) if dead else float("inf")
                 elif R0 == "below":
                     R0 = None
-            res["tasks"].append({"name": t["name"], "lp": n_perc, "R0": R0, "R_avg": Ra, "mn_avg": Sa,
-                                 "mn_h": mn["h"], "mn_v": mn["v"]})
+            return R0, Ra, Sa, mn
+
+        if self.pot_mode:
+            dims = [self.target_dims(self.los_angle(x)) for x in R]
+            cnr = np.array([s["eds"] / math.sqrt(s["nes"] ** 2 / self.n_int_frames + s["ies"] ** 2) for s in states])
+        for t in tasks:
+            c = self._criterion(t)
+            R0, Ra, Sa, mn = solve(c["lp"])
+            if self.pot_mode:
+                R0, c["limit"] = self._pot_range(R, dims, cnr, c["pot"])
+            elif self.prob_levels:
+                c["levels"] = [{"p": pr, "lp": c["lp"] * X.ttpf_ratio(pr), "R0": solve(c["lp"] * X.ttpf_ratio(pr))[0]}
+                               for pr in X.PROB_LEVELS[1:]]
+            res["tasks"].append(dict(c, name=t["name"], R0=R0, R_avg=Ra, mn_avg=Sa, mn_h=mn["h"], mn_v=mn["v"]))
         res["states"] = {"t_int": np.array([s["t_int"] for s in states]),
                          "nes": np.array([s["nes"] for s in states]),
                          "wellfill": np.array([s.get("wellfill", np.nan) for s in states])}
@@ -2828,6 +3081,58 @@ class TRM4Model:
             out["atm"].append({"label": atm.label, "R": R, "niirs": np.array(vals), "gsd": np.array(gsds),
                                "rer": np.array(rers), "dsnr": np.array(dsnrs)})
 
+
+    def _turb_info(self, add, s, res):
+        """r0, D/r0 and lambda/r0 in IFOV units; without a reference range the turbulence is evaluated at the range of
+        the most demanding task."""
+        rg = res.get("range") or {}
+        R_t, at = self.R_ref, "reference range"
+        if R_t <= 0 and rg.get("atm"):
+            done = [t for t in rg["atm"][0]["tasks"] if t["R0"] is not None and np.isfinite(t["R0"])]
+            if done:
+                R_t, at = float(done[-1]["R0"]), "the %s range (%.3g km)" % (done[-1]["name"], done[-1]["R0"])
+        if self.turbulence_active() and R_t > 0:
+            r0 = self._turb_table(R_t)[2]
+            add(s, "Fried parameter r0 at %s" % at, "%.4g" % (r0 * 100), "cm")
+            if r0 > 0:
+                # D/r0 > 1: the aperture is turbulence-limited; lambda/r0 against the IFOV says whether a longer
+                # focal length still resolves more (blur angle >> IFOV: optics gains are eaten by turbulence)
+                blur = self.lam_peak * 1e-3 / r0                                  # mrad
+                ifov = math.sqrt(self.alpha_s["h"] * self.alpha_s["v"])
+                add(s, "Aperture / r0 (D/r0, > 1 = turbulence-limited aperture)", "%.3g" % (self.D_eff / 1000.0 / r0))
+                add(s, "Turbulence blur lambda/r0 vs IFOV", "%.4g urad = %.2f IFOV" % (blur * 1e3, blur / ifov))
+                if self.mitigation_gain() > 1.0:
+                    add(s, "Effective r0 after mitigation processing (extension)", "%.4g" % (
+                        r0 * 100 * self.mitigation_gain()), "cm")
+
+    def _extension_info(self, add, res):
+        """System-data rows of the TRM_HADMAA extensions (report phase 3)."""
+        e = "Extensions (not TRM4)"
+        lw = float(ph.trapz(self.lam * self.w, self.lam))
+        for wx in getattr(self, "weather", None) or []:
+            a = wx["atm"]
+            t1 = a.tau(1.0) / a.tau0
+            add(e, "Atm %d from the weather: band extinction over 1 km" % (wx["slot"] + 1), "%.4g" % (
+                -math.log(max(t1, 1e-300))), "1/km")
+            add(e, "Atm %d: aerosol / water-vapour continuum at %.2f um" % (wx["slot"] + 1, lw), "%.4g / %.4g" % (
+                float(np.interp(lw, self.lam, wx["aerosol"])), float(np.interp(lw, self.lam, wx["water"]))), "1/km")
+            add(e, "Atm %d: absolute humidity" % (wx["slot"] + 1), "%.3g" % wx["rho_w"], "g/m^3")
+        if self.clutter_mult != 1.0:
+            add(e, "Clutter factor on the Detection criterion (ACQUIRE-LC)", "%.3g" % self.clutter_mult)
+        sm = self.scan_smear_px()
+        if sm:
+            add(e, "Smear of the linear motion per %s h / v" % (
+                "thermal time constant" if self.uncooled else "integration time"), "%.3g / %.3g" % (sm["h"], sm["v"]),
+                "pixels")
+        if self.compression_blur_px() > 0:
+            add(e, "Compression equivalent blur", "%.3g" % self.compression_blur_px(), "pixels rms")
+        rg = res.get("range")
+        if rg and rg["atm"] and self.prob_levels:
+            for t in rg["atm"][0]["tasks"]:
+                lv = t.get("levels") or []
+                add(e, "%s P50 / P80 / P90 (Johnson TTPF)" % t["name"], " / ".join(
+                    "-" if x is None else ("> grid" if not np.isfinite(x) else "%.3f" % x)
+                    for x in [t["R0"]] + [l["R0"] for l in lv]), "km")
 
     def _info(self, res):
         I = []
@@ -2944,23 +3249,8 @@ class TRM4Model:
                 add(s, "SNR (difference signal / NES)", "%.3g" % (st["ds"] / st["nes"]))
             if st["N_T"] + st["N_B"] > 0:
                 add(s, "Target contrast (N_T-N_B)/(N_T+N_B)", "%.4f" % ((st["N_T"] - st["N_B"]) / (st["N_T"] + st["N_B"])))
-            # without a reference range the turbulence is evaluated at the range of the most demanding task
-            rg = res.get("range") or {}
-            R_t, at = self.R_ref, "reference range"
-            if R_t <= 0 and rg.get("atm"):
-                done = [t for t in rg["atm"][0]["tasks"] if t["R0"] is not None and np.isfinite(t["R0"])]
-                if done:
-                    R_t, at = float(done[-1]["R0"]), "the %s range (%.3g km)" % (done[-1]["name"], done[-1]["R0"])
-            if self.turbulence_active() and R_t > 0:
-                r0 = self._turb_table(R_t)[2]
-                add(s, "Fried parameter r0 at %s" % at, "%.4g" % (r0 * 100), "cm")
-                if r0 > 0:
-                    # D/r0 > 1: the aperture is turbulence-limited; lambda/r0 against the IFOV says whether a longer
-                    # focal length still resolves more (blur angle >> IFOV: optics gains are eaten by turbulence)
-                    blur = self.lam_peak * 1e-3 / r0                                  # mrad
-                    ifov = math.sqrt(self.alpha_s["h"] * self.alpha_s["v"])
-                    add(s, "Aperture / r0 (D/r0, > 1 = turbulence-limited aperture)", "%.3g" % (self.D_eff / 1000.0 / r0))
-                    add(s, "Turbulence blur lambda/r0 vs IFOV", "%.4g urad = %.2f IFOV" % (blur * 1e3, blur / ifov))
+        self._turb_info(add, s, res)
+        self._extension_info(add, res)
         if not self.uncooled:
             op = "Detector operating point"
             add(op, "Operating mode (gain / readout / temperature)", self.op_mode or "not stated")

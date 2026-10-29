@@ -634,7 +634,9 @@ ALIAS_HE = {"low": "נמוך", "moderate": "בינוני", "high": "גבוה"}
 SUPPORT_HE = {"model":"נתמכת מודל", "approx": "אומדן מקורב", "measure": "מדוד תחילה"}
 KIND_HE = {"hardware": "שינוי חומרה", "operational": "שינוי תפעולי", "environment": "תרחיש סביבתי"}
 LIMITER_HE = {"sampling (beyond Nyquist)": "דגימה (מעבר לנייקוויסט)", "sampling (near Nyquist)": "דגימה (סמוך לנייקוויסט)",
-              "resolution (MTF)": "רזולוציה (MTF)", "contrast / noise": "ניגודיות / רעש"}
+              "resolution (MTF)": "רזולוציה (MTF)", "contrast / noise": "ניגודיות / רעש",
+              "pixels on target (algorithm criterion)": "פיקסלים על המטרה (קריטריון אלגוריתמי)",
+              "pixel CNR (algorithm criterion)": "CNR פיקסל (קריטריון אלגוריתמי)"}
 FACTOR_HE = {
     "Optics aberrations (diffraction-limited optics)": "אברציות אופטיות (אופטיקה מוגבלת־עקיפה)",
     "Detector footprint / crosstalk (ideal pixel MTF)": "טביעת פיקסל / זליגה (MTF פיקסל אידיאלי)",
@@ -667,6 +669,8 @@ for _n in (2, 3):
     PARAM_HE["Extinction coefficient (atm %d)" % _n] = "מקדם דעיכה (אטמוספרה %d)" % _n
     PARAM_HE["Path radiance factor (atm %d)" % _n] = "גורם קרינת מסלול (אטמוספרה %d)" % _n
 PARAM_HE["Path radiance factor (atm 1)"] = "גורם קרינת מסלול (אטמוספרה 1)"
+for _n in (1, 2, 3):
+    PARAM_HE["Relative humidity (atm %d)" % _n] = "לחות יחסית (אטמוספרה %d)" % _n
 SOURCE_HE = {"preset": "ברירת מחדל", "assumption": "הנחה", "user": "משתמש", "manufacturer": "גיליון נתונים",
              "measurement": "מדידה", "import": "יבוא", "profile": "פרופיל מצלמה"}
 UNIT_HE = {"um": "µm", "1/km": "1/km", "e-": "e⁻"}
@@ -1244,7 +1248,8 @@ def build(project, res, adv):
                  "בתדר המשימה, ה־CNR והגורם המגביל שזיהה המנוע. מודל המשימה מפורט בטבלה 2." % a0["label"])
         trows = []
         for t in db.get("tasks", []):
-            trows.append(["%s (%s)" % (tn(t["name"]), t["name"]), "%g" % t["lp"], _range_text(t["R0"], a0),
+            trows.append(["%s (%s)" % (tn(t["name"]), t["name"]), "%g px" % t["pot"] if "pot" in t else "%g" % t["lp"],
+                          _range_text(t["R0"], a0),
                           "%.1f × %.1f" % (t["pix_h"], t["pix_v"]) if "pix_h" in t else "-",
                           "%.2f" % t["cyc_nyq"] if "cyc_nyq" in t else "-",
                           "%.2f" % t["mtf_task"] if "mtf_task" in t else "-",
@@ -1254,6 +1259,14 @@ def build(project, res, adv):
                    "MTF בתדר המשימה", "CNR", "גורם מגביל"], trows,
                   [0.19, 0.09, 0.1, 0.13, 0.12, 0.11, 0.08, 0.18], caption="טווחי DRI בתרחיש הייחוס.",
                   aligns=["right"] + ["center"] * 6 + ["right"], bold_first=True)
+        lv_rows = [["%s (%s)" % (tn(t["name"]), t["name"]), _range_text(t["R0"], a0)] +
+                   [_range_text(l["R0"], a0) for l in t["levels"]] for t in db.get("tasks", []) if t.get("levels")]
+        if lv_rows:
+            doc.table(["משימה", "P50 – TRM4 [km]", "P80 [km]", "P90 [km]"], lv_rows, [0.4, 0.2, 0.2, 0.2],
+                      caption="טווחים ברמות הסתברות לפי פונקציית ההעברה של Johnson ‏(TTPF) – הרחבה של TRM_HADMAA, "
+                              "לא פלט של TRM4.", aligns=["right", "center", "center", "center"], bold_first=True)
+        if db.get("extensions"):
+            doc.para("**הרחבות פעילות (אינן חלק מ־TRM4):** %s." % "; ".join(db["extensions"]), size=9.8)
         doc.figure(_fig_range(res), 215, "האות הזמין במטרה לעומת סף כל משימה כפונקציה של הטווח; נקודת החיתוך היא "
                                          "טווח המשימה (קווים אנכיים).")
         if len(rg["atm"]) > 1:
