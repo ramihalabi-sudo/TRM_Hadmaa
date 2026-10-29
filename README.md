@@ -18,7 +18,12 @@ Requirements: Python 3 with `numpy`, `matplotlib`, `tkinter` (all already presen
 ```
 python run_trm4.py --cli 0 --limiting --uncertainty --out report.txt   -> batch run incl. analyses
 python -m unittest discover -s tests                                   -> regression / acceptance tests
+python tests/run_parallel.py                                           -> the same tests, modules in parallel
 python run_trm4.py --cli 0 --pdf-he report.pdf                         -> Hebrew DRI report (PDF, runs the advisor)
+python run_trm4.py --cli 0 --ttp                                       -> incl. TTP / V50 ranges
+python run_trm4.py --cli 0 --quick                                     -> geometric quick estimate, no model run
+python run_trm4.py --sfr edge.png --out sfr.txt                        -> slanted-edge SFR of an edge image
+packaging\build_exe.bat                                                -> Windows EXE (dist\TRM_HADMAAv1\)
 ```
 
 ### Hebrew DRI report (PDF)
@@ -49,6 +54,24 @@ the local copy in `detector_lookup_HTML/`) a few seconds after start-up and ever
 *Close* keeps an item unread (it is shown again at the next start); *Mark as read* / *Mark all as read* hide it for
 good (ids stored under `atlas_news` in `%APPDATA%\TRM4\settings.json`). *News > Detector Atlas news...* reopens the
 window, including already-read items.
+
+## Version 2.8 - Cn2 altitude profile, tone mapping, lab tools, CLI, CI and a Windows EXE
+
+Roadmap items P2 (Cn2 profiles) and P3 (nonlinear video processing) of "TRM4v3_Research_Improvements_English.pdf"
+and the laboratory frame tools. Engine version 2.8; the TRM4 template ranges are unchanged - both new model inputs
+are off by default.
+
+| Item | Implementation | Source / limits |
+|---|---|---|
+| Hufnagel-Valley Cn2 profile | *Turbulence specified via: Cn2 - Hufnagel-Valley altitude profile*. Cn2(h) = 0.00594 (v/27)^2 (1e-5 h)^10 e^(-h/1000) + 2.7e-16 e^(-h/1500) + A e^(-h/100) along the slant path (h above ground from the target altitude to the imager), A = the Cn2 field, new input *rms upper-altitude wind* v (21 m/s). r0 from the path integral with 801 points (the 100 m boundary-layer term). Range bands scale the whole profile. | HV 5/7 check: vertical r0 = 4.97 cm at 0.5 um (published 5 cm). A free-atmosphere model; near the ground the surface layer can differ by an order of magnitude - use the TRM4 height mode there. |
+| Tone mapping / AGC (HDR) | *Signal processing > Tone mapping / AGC of the output*: none (linear RAW, TRM4), linear AGC, gamma, logarithmic; output bit depth; Thermal: AGC span in K. Signal and noise share the curve's local slope, so only the rounding to the output levels is added: 1 / (sqrt(12) slope) referred to the input, in quadrature to the temporal noise (input range = usable capacity; Thermal: background at mid-span). The FPN estimate still refers to the sensor noise. | LWIR template, 8 bit: span 20 K -> Detection -1.7 %, 100 K -> -16 %, 14 bit -> no change. InGaAs night template: linear 8 bit -74 %, gamma 0.45 -6 %, log (k = 1000) -1 % - why such cameras use a compressive curve. Local / adaptive operators (CLAHE, HDR fusion) are not modelled. |
+| Slanted-edge SFR | `trm4/labtools.py`, *Run > Lab: slanted-edge SFR from an image...* and `--sfr`: ISO 12233 e-SFR (edge centroids per row with a windowed second / third pass, line fit, 4x oversampled ESF, Hamming-windowed LSF, derivative correction), near-vertical or near-horizontal edges, angle check. The result can go straight into *Validation data > Measured MTF / SFR* (cycles/pixel). Frames: .npy, .csv / .txt, PNG / TIFF. | Verified on synthetic edges (Gaussian PSF x pixel aperture): within 0.03 of the exact MTF to Nyquist without noise, 0.05 with noise. |
+| Photon transfer (EMVA 1288) | *Run > Lab: photon transfer (EMVA 1288) from flat / dark frames...*: frame pairs at several levels and a dark pair -> conversion gain K, read noise, saturation capacity, DSNU, PRNU, dark current (dark series), written on request into the detector inputs (ADC step, read noise, camera saturation capacity, PRNU, DSNU / dark current, FPN measured; source *measured*). Nonlinearity of the photon-transfer curve is flagged. | Verified on synthetic Poisson frames: K within 3 %, read noise, PRNU, DSNU and dark current recovered. The camera's operating mode, processing state and temperature have to be recorded separately (Metadata). |
+| Command line | `--ttp`, `--quick`, `--sfr IMAGE [--out]` in `run_trm4.py`. | - |
+| Tests and CI | `tests/run_parallel.py` runs the modules in parallel processes, longest first (12 cores: 148 s instead of 283 - 506 s serially). `.github/workflows/tests.yml` runs them on every push (Windows, Python 3.13). | - |
+| Windows EXE | `packaging/build_exe.bat` (PyInstaller spec `packaging/TRM_HADMAAv1.spec`): one folder `dist\TRM_HADMAAv1\` (~105 MB) with the GUI, the Detector Atlas, the datasheets and the model documentation; the command-line options work too. `freeze_support()` keeps the process pool of the analyses working in the frozen app. | Built and checked here: GUI starts; `--cli 0 --ttp --limiting` gives the same ranges as the Python run. |
+
+`tests/test_metrics.py` (HV profile, tone mapping) and `tests/test_labtools.py` cover these items.
 
 ## Version 2.7 - other range metrics: TTP / V50, geometric quick mode, aerosol MTF, parallel Monte Carlo
 

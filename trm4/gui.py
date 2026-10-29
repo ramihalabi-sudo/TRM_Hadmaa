@@ -37,6 +37,7 @@ from . import profiles as PR
 from . import analysis as AN
 from . import advisor as ADV
 from . import extensions as X
+from . import labtools as LT
 from . import atlas_news as NEWS
 from .help_text import help_for
 from . import __version__
@@ -251,6 +252,7 @@ CAM_NETD = lambda p: THERMAL(p) and (p["detector"]["noise_mode"] == "measured" a
 ALGO = lambda p: p["display"].get("observer", "legacy") == "algorithm"
 POT = lambda p: ALGO(p) and p["display"].get("algo_criterion", "lp") == "pot"
 TTP = lambda p: bool(p["target"].get("ttp")) and not POT(p)
+TONE = lambda p: p["dsp"].get("tone_mode", "none") != "none"
 WEATHER = lambda p: p["atmosphere"]["mode"] == "weather"
 # turbulence acts outside the Thermal category (TRM4) and, as an extension, in it
 TURB_CAT = lambda p: NOT_THERMAL(p) or p["turbulence"].get("thermal", False)
@@ -611,6 +613,14 @@ TABS = [
                                                           ("lossy", "Lossy")]),
         F("dsp.comp_blur_px", "Equivalent blur of the lossy codec (0 = not modelled, extension)", unit="pixels rms",
           cond=lambda p: p["dsp"].get("pl_compression") == "lossy"),
+        H("Tone mapping / AGC of the output (extension)", level="adv", active=TONE),
+        F("dsp.tone_mode", "Output tone curve", "choice", [("none", "None - linear RAW (TRM4)"),
+                                                           ("linear", "Linear AGC to the output levels"),
+                                                           ("gamma", "Gamma curve"), ("log", "Logarithmic (HDR)")]),
+        F("dsp.tone_bits", "  output bit depth", "int", cond=TONE, unit="bit"),
+        F("dsp.tone_gamma", "  gamma exponent", cond=lambda p: TONE(p) and p["dsp"]["tone_mode"] == "gamma"),
+        F("dsp.tone_k", "  log compression factor k", cond=lambda p: TONE(p) and p["dsp"]["tone_mode"] == "log"),
+        F("dsp.tone_span_K", "  AGC span mapped to the output", unit="K", cond=lambda p: TONE(p) and THERMAL(p)),
     ]),
     ("Display & observer", [
         H("Observer model", level="adv", active=lambda p: p["display"].get("observer", "legacy") != "legacy"),
@@ -804,8 +814,12 @@ TABS = [
                                                            ("long", "Long exposure (incl. image wander)")], cond=TURB_ON),
         F("turbulence.cn2_mode", "Turbulence specified via", "choice",
           [("fixed", "Cn2 - fixed value"), ("height", "Cn2 - simplified height dependence"),
+           ("hv", "Cn2 - Hufnagel-Valley altitude profile (extension)"),
            ("r0", "Fried parameter r0 with reference conditions")], cond=TURB_ON),
-        F("turbulence.cn2", "Cn2", cond=lambda p: TURB_ON(p) and not R0_MODE(p), unit="m^-2/3"),
+        F("turbulence.cn2", "Cn2 (Hufnagel-Valley: ground-level coefficient A)", cond=lambda p: TURB_ON(p) and
+          not R0_MODE(p), unit="m^-2/3"),
+        F("turbulence.hv_wind_ms", "  rms upper-altitude wind (HV 5/7: 21)", unit="m/s",
+          cond=lambda p: TURB_ON(p) and p["turbulence"]["cn2_mode"] == "hv"),
         F("turbulence.r0_cm", "Fried parameter r0", cond=lambda p: TURB_ON(p) and R0_MODE(p), unit="cm"),
         F("turbulence.r0_lambda_um", "  r0 reference wavelength", unit="um", cond=lambda p: TURB_ON(p) and R0_MODE(p)),
         F("turbulence.r0_L_km", "  r0 reference path length", unit="km", cond=lambda p: TURB_ON(p) and R0_MODE(p)),
@@ -2825,6 +2839,9 @@ class App(tk.Tk):
                            ("scenarios", "Scenario comparison")):
             mr.add_command(label=label + "...", command=lambda k=key: self.open_analysis(k))
         mr.add_separator()
+        mr.add_command(label="Lab: slanted-edge SFR from an image...", command=self.lab_sfr)
+        mr.add_command(label="Lab: photon transfer (EMVA 1288) from flat / dark frames...", command=self.lab_ptc)
+        mr.add_separator()
         mr.add_command(label="Detector lookup...", accelerator="Ctrl+D", command=self.detector_lookup)
         m.add_cascade(label="Run", menu=mr)
 
@@ -3880,6 +3897,71 @@ class App(tk.Tk):
             "and lambda / D; noise, contrast, MTF roll-off and the atmosphere are ignored, and TRM4 also credits bars "
             "beyond Nyquist - a first sizing, not a TRM4 range (extension)." % (q["ifov_mrad"], q["D_mm"],
                                                                                 q["lambda_um"])), parent=self)
+
+    _FRAME_TYPES = [("Frames", "*.npy *.csv *.txt *.png *.tif *.tiff"), ("All files", "*.*")]
+
+    def _apply_to_project(self, changes, source="measured"):
+        """Write {path: value} into the form (unsaved) and mark the values' data source."""
+        p = self.collect()
+        for path, v in changes.items():
+            set_path(p, path, v)
+        self._load_into_form(p, saved=False)
+        for path in changes:
+            self._set_source(path, source)
+
+    def lab_sfr(self):
+        """Slanted-edge SFR (ISO 12233 e-SFR) of an edge region -> measured MTF / SFR input (cycles/pixel)."""
+        fn = filedialog.askopenfilename(parent=self, title="Edge region (frame with one slanted edge)",
+                                        initialdir=self._start_dir(), filetypes=self._FRAME_TYPES)
+        if not fn:
+            return
+        try:
+            res = LT.slanted_edge_sfr(LT.load_frame(fn))
+        except (ValueError, OSError) as e:
+            messagebox.showerror("Slanted-edge SFR", str(e), parent=self)
+            return
+        name = os.path.basename(fn)
+        msg = "%s\n\nEdge %s, angle %.2f deg\nMTF50 %s cycles/pixel\nSFR at Nyquist (0.5) %.3f%s" % (
+            res["method"], res["orientation"], res["angle_deg"], "%.4f" % res["mtf50"] if res["mtf50"] else "-",
+            float(np.interp(0.5, res["f"], res["sfr"])), "\n\n" + "\n".join(res["notes"]) if res["notes"] else "")
+        if messagebox.askyesno("Slanted-edge SFR", msg + "\n\nUse it as the measured MTF / SFR (Validation data, "
+                               "cycles/pixel)? State on that page whether it is the device prefilter or the delivered "
+                               "image SFR.", parent=self):
+            self._apply_to_project({"measured.sfr_file": {"name": "SFR of " + name, "text": LT.sfr_to_text(res, name)},
+                                    "measured.sfr_unit": "pixel"})
+            self.goto_page("Validation data")
+
+    def lab_ptc(self):
+        """EMVA 1288 photon transfer from frame pairs -> detector inputs (read noise, ADC step, saturation, FPN)."""
+        flats = filedialog.askopenfilenames(parent=self, title="Flat frames: two per illumination level, sorted "
+                                            "(A1, B1, A2, B2, ...)", initialdir=self._start_dir(),
+                                            filetypes=self._FRAME_TYPES)
+        if not flats:
+            return
+        darks = filedialog.askopenfilenames(parent=self, title="Dark frames: one pair at the flat exposure",
+                                            initialdir=self._start_dir(), filetypes=self._FRAME_TYPES)
+        if not darks:
+            return
+        try:
+            if len(flats) % 2 or len(darks) != 2:
+                raise ValueError("Select an even number of flat frames (pairs) and exactly two dark frames.")
+            fr = [LT.load_frame(f) for f in flats]
+            t_ms = simpledialog.askfloat("Photon transfer", "Exposure of the dark pair [ms] (for DSNU as a current; "
+                                         "Cancel = skip)", parent=self, minvalue=0.0)
+            res = LT.photon_transfer(list(zip(fr[0::2], fr[1::2])), (LT.load_frame(darks[0]), LT.load_frame(darks[1])),
+                                     t_int_s=(t_ms or 0.0) * 1e-3)
+        except (ValueError, OSError) as e:
+            messagebox.showerror("Photon transfer", str(e), parent=self)
+            return
+        rows = "\n".join("  %s = %.4g" % (k, v) if isinstance(v, float) else "  %s = %s" % (k, v)
+                         for k, v in res["trm"].items())
+        msg = "%s\n\nConversion gain K %.4g DN/e-  (ADC step %.4g e-)\nRead noise %.3g e-\nSaturation capacity %.4g e-" \
+              "\nDSNU %.3g e-   PRNU %.3g %%%s\n\nTRM inputs:\n%s" % (
+                  res["method"], res["K_DN_per_e"], res["lsb_e"], res["read_noise_e"], res["sat_e"], res["dsnu_e"],
+                  res["prnu_pct"], "\n\n" + "\n".join(res["notes"]) if res["notes"] else "", rows)
+        if messagebox.askyesno("Photon transfer (EMVA 1288)", msg + "\n\nWrite these values into the detector "
+                               "inputs (source: measured)?", parent=self):
+            self._apply_to_project(res["trm"])
 
     def _done(self, model, res, err):
         self.busy = False

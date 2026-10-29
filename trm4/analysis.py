@@ -934,11 +934,14 @@ def _turbulence_on(p):
 
 
 def _scale_turbulence(project, scale):
-    """Copy of the project with the turbulence strength Cn2 x scale (r0 x scale^-3/5 in the r0 mode)."""
+    """Copy of the project with the turbulence strength Cn2 x scale (r0 x scale^-3/5 in the r0 mode, the whole
+    Hufnagel-Valley profile in the hv mode)."""
     case = copy.deepcopy(project)
     tb = case.setdefault("turbulence", {})
     if tb.get("cn2_mode") == "r0":
         tb["r0_cm"] = float(tb.get("r0_cm", 5.0)) * scale ** (-0.6)
+    elif tb.get("cn2_mode") == "hv":
+        tb["hv_scale"] = float(tb.get("hv_scale", 1.0)) * scale
     else:
         tb["cn2"] = float(tb.get("cn2", 1e-14)) * scale
     return case

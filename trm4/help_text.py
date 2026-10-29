@@ -340,7 +340,13 @@ HELP = {
                              "MTF with it.",
     "turbulence.exposure": "Short exposure: image motion removed (only blur).\nLong exposure: includes image "
                            "wander (stronger blur).",
-    "turbulence.cn2_mode": "Turbulence strength Cn2 constant along the path, or varying with height.",
+    "turbulence.cn2_mode": "Turbulence strength Cn2 constant along the path, or varying with height. Hufnagel-Valley "
+                           "(extension): Cn2(h) = 0.00594 (v/27)^2 (1e-5 h)^10 exp(-h/1000) + 2.7e-16 exp(-h/1500) + "
+                           "A exp(-h/100) along the slant path, A = the Cn2 field (HV 5/7: 1.7e-14 m^-2/3, v = 21 m/s; "
+                           "r0 = 5 cm at 0.5 um vertically). For airborne / high-altitude paths; near the ground the "
+                           "surface-layer Cn2 can differ by an order of magnitude.",
+    "turbulence.hv_wind_ms": "rms wind speed of the upper atmosphere in the Hufnagel-Valley profile (21 m/s for HV "
+                             "5/7); it sets the tropopause turbulence term.",
     "turbulence.cn2": "Refractive index structure constant: strength of turbulence (e.g. 1e-15 weak, 1e-13 "
                       "strong).",
     "turbulence.h_ref_m": "Height above ground where the Cn2 value is given.",
@@ -427,6 +433,19 @@ HELP = {
                       "marked as not covering this processing.",
     "dsp.pl_compression": "Video compression. Lossy compression acts on the ranges only with an equivalent blur "
                           "(below); otherwise it is documented as not modelled.",
+    "dsp.tone_mode": "Extension: tone curve or AGC that maps the signal to a quantized output stream (e.g. 8-bit "
+                     "video). Signal and noise share the curve's local slope, so the SNR is unchanged except for "
+                     "the rounding to the output levels: 1 / (sqrt(12) slope) referred to the input, added in "
+                     "quadrature to the temporal noise. It matters where the curve compresses (bright regions of a "
+                     "gamma / log curve, a wide thermal AGC span). None = linear RAW as in TRM4. Local / adaptive "
+                     "operators (CLAHE, HDR fusion) are not modelled.",
+    "dsp.tone_bits": "Bit depth of the tone-mapped output stream (8 for standard video).",
+    "dsp.tone_gamma": "Exponent of the gamma curve out = (x / x_max)^gamma (0.45 ~ video gamma 1 / 2.2); the input "
+                      "range x_max is the usable capacity of the detector.",
+    "dsp.tone_k": "Compression factor of the logarithmic curve out = ln(1 + k x / x_max) / ln(1 + k); larger k "
+                  "compresses the bright end more.",
+    "dsp.tone_span_K": "Thermal AGC: temperature span mapped linearly onto the output levels (background at "
+                       "mid-span). A 20 K span on 8 bits gives 23 mK of rounding noise.",
     "dsp.comp_blur_px": "Lossy compression as an equivalent Gaussian blur of the digital frame, sigma in pixels "
                         "(O'Shea, Jacobs & Espinola 2008: the loss is well modelled by a per-pixel blur). Fit it to "
                         "the codec and bit rate in use; 0 = not modelled (extension).",

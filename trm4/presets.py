@@ -381,7 +381,9 @@ DEFAULT_PROJECT = {
             "credit_boost": False,
             # processing pipeline documentation (field map Sec. 15.2.7); lossy compression acts as an equivalent
             # Gaussian blur of comp_blur_px pixels (extension, 0 = not modelled)
-            "pl_denoise": False, "pl_compression": "none", "pl_order": "", "pl_version": "", "comp_blur_px": 0.0},
+            "pl_denoise": False, "pl_compression": "none", "pl_order": "", "pl_version": "", "comp_blur_px": 0.0,
+            # tone mapping / AGC to a quantized output stream (extension): rounding noise of the output levels
+            "tone_mode": "none", "tone_bits": 8, "tone_gamma": 0.45, "tone_k": 100.0, "tone_span_K": 20.0},
     "display": {"n_h": 1280, "n_v": 1024, "pitch_h_mm": 0.27, "pitch_v_mm": 0.27, "luminance": 50.0,
                 "observation": "direct", "f_eyepiece_mm": 25.0, "distance_cm": 50.0, "snr_th": 2.5,
                 "t_eye_s": 0.1, "neglect_eye": False,
@@ -429,6 +431,8 @@ DEFAULT_PROJECT = {
                    "time": "day", "cn2_preset": "custom",
                    # Fried parameter input with its reference conditions (cn2_mode = "r0")
                    "r0_cm": 5.0, "r0_lambda_um": 0.55, "r0_L_km": 1.0,
+                   # Hufnagel-Valley profile (cn2_mode = "hv"): cn2 is the ground coefficient A, rms wind [m/s]
+                   "hv_wind_ms": 21.0,
                    # von Karman outer scale [m], 0 = Kolmogorov (infinite outer scale) - review Sec. 3.20
                    "L0_m": 0.0,
                    # extensions: turbulence in the Thermal category; mitigation processing as an effective r0 gain

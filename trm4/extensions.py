@@ -187,11 +187,67 @@ def mtf_compression(r, sigma_px, alpha_mrad):
 
 
 # ---------------------------------------------------------------------------------------------
+# Nonlinear output processing: tone mapping / AGC to a quantized display stream
+# ---------------------------------------------------------------------------------------------
+TONE_MODES = ("none", "linear", "gamma", "log")
+
+
+def tone_slope(x, x_max, mode, bits, gamma=0.45, k_log=100.0):
+    """Local slope dOut / dIn [output levels per input unit] of the tone curve at the input x (0 <= x <= x_max).
+
+    linear: out = L x / x_max;  gamma: out = L (x / x_max)^gamma;  log: out = L ln(1 + k x / x_max) / ln(1 + k),
+    L = 2^bits - 1.  Above x_max the output clips (slope 0)."""
+    L = 2.0 ** int(bits) - 1.0
+    x_max = float(x_max)
+    if not x_max > 0:
+        raise ValueError("Tone-mapping input range must be > 0")
+    u = float(x) / x_max
+    if u > 1.0:
+        return 0.0
+    u = max(u, 1e-9)
+    if mode == "linear":
+        return L / x_max
+    if mode == "gamma":
+        return L * float(gamma) * u ** (float(gamma) - 1.0) / x_max
+    if mode == "log":
+        k = float(k_log)
+        return L * k / ((1.0 + k * u) * math.log(1.0 + k) * x_max)
+    raise ValueError("Unknown tone-mapping mode %r" % mode)
+
+
+def tone_noise(x, x_max, mode, bits, gamma=0.45, k_log=100.0):
+    """Input-referred quantization noise of the tone-mapped output, 1 / (sqrt(12) slope) [input units].
+
+    A signal and noise gain of the same slope leaves the SNR unchanged; what the curve adds is the rounding to
+    2^bits output levels, large where the curve compresses (small slope).  inf where the output clips."""
+    s = tone_slope(x, x_max, mode, bits, gamma, k_log)
+    return float("inf") if s <= 0 else 1.0 / (math.sqrt(12.0) * s)
+
+
+# ---------------------------------------------------------------------------------------------
 # Line-of-sight jitter
 # ---------------------------------------------------------------------------------------------
 # residual LOS jitter commonly assumed in US Army NV-IPM calculations [49]; narrow fields of view are optimistic
 # without it (the Gaussian jitter MTF is reasonable below about 1/3 IFOV, NVTherm [16])
 TYPICAL_JITTER_MRAD = 0.070
+
+
+# ---------------------------------------------------------------------------------------------
+# Turbulence: Hufnagel-Valley Cn2 altitude profile
+# ---------------------------------------------------------------------------------------------
+HV_WIND_MS = 21.0                 # rms upper-altitude wind of the HV 5/7 profile [m/s]
+HV_GROUND_CN2 = 1.7e-14           # ground-level coefficient A of HV 5/7 [m^-2/3]
+
+
+def cn2_hufnagel_valley(h_m, A=HV_GROUND_CN2, v_ms=HV_WIND_MS):
+    """Cn2(h) = 0.00594 (v / 27)^2 (1e-5 h)^10 exp(-h / 1000) + 2.7e-16 exp(-h / 1500) + A exp(-h / 100).
+
+    h: height above ground [m].  HV 5/7 (A = 1.7e-14, v = 21 m/s): r0 = 5 cm and isoplanatic angle 7 urad at 0.5 um
+    for a vertical path (Valley 1980; Andrews & Phillips, "Laser Beam Propagation through Random Media", 2nd ed., SPIE
+    2005, Sec. 12.2).  A boundary-layer model of the free atmosphere above ~100 m, not of the surface layer."""
+    h = np.maximum(np.asarray(h_m, float), 0.0)
+    return 0.00594 * (float(v_ms) / 27.0) ** 2 * (1e-5 * h) ** 10 * np.exp(-h / 1000.0) + \
+        2.7e-16 * np.exp(-h / 1500.0) + float(A) * np.exp(-h / 100.0)
 
 
 # ---------------------------------------------------------------------------------------------

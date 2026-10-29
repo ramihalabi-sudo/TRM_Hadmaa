@@ -4,7 +4,8 @@
     python run_trm4.py --list                  list the built-in templates
     python run_trm4.py --cli <template-number | project.json> [--out report.txt] [--save project.json]
                        [--limiting] [--uncertainty] [--advisor] [--min-fov DEG] [--scenario scenario.json]
-                       [--pdf-he report.pdf]
+                       [--pdf-he report.pdf] [--ttp] [--quick]
+    python run_trm4.py --sfr edge.png [--out sfr.txt]   slanted-edge SFR of an edge image (ISO 12233 e-SFR)
     python -m unittest discover -s tests       run the regression / acceptance test suite
 """
 import argparse
@@ -34,11 +35,30 @@ def main():
                     help="advisor constraint: minimum horizontal FOV [deg] of a recommended configuration")
     ap.add_argument("--pdf-he", metavar="PDF",
                     help="write the Hebrew scholarly DRI report with the advisor recommendations (implies --advisor)")
+    ap.add_argument("--ttp", action="store_true", help="also report TTP / V50 ranges (extension)")
+    ap.add_argument("--quick", action="store_true",
+                    help="geometric quick estimate only (Nyquist / diffraction, no model run, extension)")
+    ap.add_argument("--sfr", metavar="IMAGE",
+                    help="slanted-edge SFR of an edge region (.npy / .csv / .png / .tif); --out writes the curve "
+                         "in cycles/pixel for the measured-MTF import")
     a = ap.parse_args()
     names = list(P.TEMPLATES)
     if a.list:
         for i, n in enumerate(names):
             print("%d  %s" % (i, n))
+        return
+    if a.sfr:
+        from trm4 import labtools as LT
+        res = LT.slanted_edge_sfr(LT.load_frame(a.sfr))
+        text = LT.sfr_to_text(res, os.path.basename(a.sfr))
+        for n in res["notes"]:
+            print("note:", n, file=sys.stderr)
+        if a.out:
+            with open(a.out, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            print("SFR written to %s (MTF50 %s cycles/pixel)" % (a.out, "%.4f" % res["mtf50"] if res["mtf50"] else "-"))
+        else:
+            print(text)
         return
     if a.cli is None:
         from trm4.gui import main as gui_main
@@ -51,9 +71,20 @@ def main():
     else:
         with open(a.cli, "r", encoding="utf-8") as fh:
             project = P.deep_merge(P.DEFAULT_PROJECT, json.load(fh))
+    if a.ttp:
+        project["target"]["ttp"] = True
     if a.save:
         with open(a.save, "w", encoding="utf-8") as fh:
             json.dump(project, fh, indent=2)
+    if a.quick:
+        from trm4.model import quick_estimate
+        q = quick_estimate(project)
+        print("Geometric quick estimate (extension, not a TRM4 range): IFOV %.4g mrad, aperture %.4g mm, "
+              "mean wavelength %.3g um" % (q["ifov_mrad"], q["D_mm"], q["lambda_um"]))
+        for t in q["tasks"]:
+            print("  %-16s %5g lp  %s  (%s)" % (t["name"], t["lp"], "-" if t["R0"] is None else "%.3f km" % t["R0"],
+                                              t["limit"]))
+        return
     log = lambda msg, f=None: print("..", msg, file=sys.stderr)     # noqa: E731
     _, res = run_project(project, log)
     analyses = {}

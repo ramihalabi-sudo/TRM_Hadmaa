@@ -238,15 +238,15 @@ def mtf_eye(r, gamma, m_sys):
 # ---------------------------------------------------------------------------------------------
 # 4.2.13 Turbulence
 # ---------------------------------------------------------------------------------------------
-def fried_parameter(lam_um, R_km, cn2_of_z):
+def fried_parameter(lam_um, R_km, cn2_of_z, n=201):
     """Spherical-wave Fried parameter r0 [m], Eq. (4.82).
 
-    cn2_of_z(z) returns Cn2 at distance z [m] from the imager along the line of sight.
+    cn2_of_z(z) returns Cn2 at distance z [m] from the imager along the line of sight; n integration points.
     """
     R = R_km * 1000.0
     if R <= 0:
         return np.inf
-    z = np.linspace(0.0, R, 201)
+    z = np.linspace(0.0, R, n)
     integrand = ((R - z) / R) ** (5.0 / 3.0) * cn2_of_z(z)
     integral = np.trapezoid(integrand, z)
     lam = lam_um * 1e-6

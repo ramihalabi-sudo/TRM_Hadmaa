@@ -22,7 +22,7 @@ from . import imports as IM
 from . import extensions as X
 from .amop import amop as amop_sim
 
-MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.7"
+MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.8"
 MODEL_REFERENCE = "Fraunhofer IOSB TR 2021/04 (TRM4.v3 parameter description and model documentation)"
 # version of the acceptance/regression suite (kept separate from the model version, field map App. D)
 VALIDATION_VERSION = "acceptance suite FM-1.1 (field map v1.1, 14.10.2026)"
@@ -1129,20 +1129,23 @@ class TRM4Model:
         ns, fs = float(self.wi.get("noise_scale", 1.0)), float(self.wi.get("fpn_scale", 1.0))
         if self.cat == "Thermal":
             tau = fl["tau"]
-            return {"flux": fl, "nes": self.netd * ns, "ies": self.ietd * fs,
+            return {"flux": fl, "nes": math.hypot(self.netd, self.tone_noise()) * ns, "ies": self.ietd * fs,
                     "eds": abs(float(self.p["target"]["dT_K"])) * tau, "t_int": self.t_ref}
         d = self.p["detector"]
         if t is None:
             t = self.t_int_for(fl["jB"])
         g = float(d["electron_gain"])
-        sigma = self.noise(fl["jT"], fl["jB"], t) * ns
+        sigma_s = self.noise(fl["jT"], fl["jB"], t) * ns          # sensor noise (FPN estimate refers to it)
+        sigma = sigma_s
+        if self.tone_mode() != "none":
+            sigma = math.hypot(sigma_s, self.tone_noise((fl["jB"] + self.j_dark) * self.A_det * t * g) * ns)
         fpn = d["fpn_mode"]
         if fpn == "measured":
             n_prnu = float(d["prnu_pct"]) / 100.0 * fl["jB"] * self.A_det * t * g      # (3.166)
             n_dsnu = float(d["dsnu_A"]) / ph.E_CHARGE * t                               # (3.167)
             ies = math.hypot(n_prnu, n_dsnu)                                             # (3.168)
         elif fpn == "estimate":
-            ies = float(d["fpn_fraction"]) * sigma
+            ies = float(d["fpn_fraction"]) * sigma_s
         else:
             ies = 0.0
         ies *= fs
@@ -1580,6 +1583,20 @@ class TRM4Model:
             def cn2_of_z(zz):
                 h = np.maximum(h_i + (h_t - h_i) * zz / max(R_m, 1e-9), 0.1)
                 return cn2 * (h / href) ** (-delta)                                  # Eq. (4.84)
+        elif tb["cn2_mode"] == "hv":
+            v_w = float(tb.get("hv_wind_ms", X.HV_WIND_MS))
+            k_hv = float(tb.get("hv_scale", 1.0))          # whole-profile factor (range bands of the analyses)
+            if cn2 < 0 or v_w < 0 or k_hv < 0:
+                raise ModelError("Hufnagel-Valley profile: ground Cn2 and wind speed must be >= 0")
+            if not self._turb_cache:
+                self.assume("Turbulence from the Hufnagel-Valley altitude profile (%s): Cn2(h) = 0.00594 (v/27)^2 "
+                            "(1e-5 h)^10 exp(-h/1000) + 2.7e-16 exp(-h/1500) + A exp(-h/100), A = %.3g m^-2/3, v = "
+                            "%.3g m/s, h above ground along the line of sight (HV 5/7: A = 1.7e-14, v = 21 m/s). A "
+                            "free-atmosphere model: near the ground the Cn2 of the surface layer can differ by an "
+                            "order of magnitude." % (X.EXTENSION, cn2, v_w))
+
+            def cn2_of_z(zz):
+                return k_hv * X.cn2_hufnagel_valley(h_i + (h_t - h_i) * zz / max(R_m, 1e-9), cn2, v_w)
         else:
             def cn2_of_z(zz):
                 return np.full_like(zz, cn2)
@@ -1594,7 +1611,8 @@ class TRM4Model:
             self.assume("Turbulence from r0 = %.3g cm at %.3g um over %.3g km, scaled with lambda^(6/5) and path "
                         "length^(-3/5) (uniform Cn2 along the path)." % (r0_cm, lam_r, L_r))
         else:
-            r0_ref = M.fried_parameter(1.0, R_km, cn2_of_z)        # r0 at 1 um; r0 ~ lambda^(6/5)
+            # r0 at 1 um; r0 ~ lambda^(6/5); the HV boundary-layer term (scale height 100 m) needs a finer path grid
+            r0_ref = M.fried_parameter(1.0, R_km, cn2_of_z, 801 if tb["cn2_mode"] == "hv" else 201)
         lam_s = self.lam[::4]
         w = np.interp(lam_s, self.lam, self.w)
         w = w / ph.trapz(w, lam_s)
@@ -1645,6 +1663,40 @@ class TRM4Model:
         """Equivalent Gaussian blur of lossy compression [pixels] (extension, 0 = none)."""
         dsp = self.p["dsp"]
         return max(float(dsp.get("comp_blur_px", 0.0) or 0.0), 0.0) if dsp.get("pl_compression") == "lossy" else 0.0
+
+    def tone_mode(self):
+        """Tone mapping / AGC of the output stream (extension, 'none' = linear RAW, TRM4)."""
+        m = self.p["dsp"].get("tone_mode", "none")
+        return m if m in X.TONE_MODES and not self.lab else "none"
+
+    def tone_noise(self, x=None):
+        """Input-referred quantization noise of the tone-mapped output (extension): carriers at the input signal x
+        (Visible / General, input range = usable capacity) or K (Thermal, AGC span, background at mid-span)."""
+        mode = self.tone_mode()
+        if mode == "none":
+            return 0.0
+        dsp = self.p["dsp"]
+        bits, gam, k = int(dsp.get("tone_bits", 8)), float(dsp.get("tone_gamma", 0.45)), float(dsp.get("tone_k", 100.0))
+        if not 1 <= bits <= 24 or not gam > 0 or not k > 0:
+            raise ModelError("Tone mapping: output bits in 1..24, gamma and log factor > 0")
+        if self.cat == "Thermal":
+            span = float(dsp.get("tone_span_K", 20.0))
+            if not span > 0:
+                raise ModelError("Tone mapping: AGC span must be > 0 K")
+            x_max, x = span, 0.5 * span
+        else:
+            if not self.n_use > 0:
+                raise ModelError("Tone mapping needs the usable capacity (storage capacity) of the detector")
+            x_max, x = self.n_use, min(float(x), self.n_use)
+        if not getattr(self, "_tone_noted", False):
+            self._tone_noted = True
+            self.assume("Tone mapping '%s' to %d-bit output (%s): signal and noise share the local slope of the "
+                        "curve, so only the output rounding is added - 1 / (sqrt(12) slope) referred to the input, "
+                        "in quadrature to the temporal noise. %s Local / adaptive operators (CLAHE, HDR fusion) "
+                        "are not modelled." % (
+                            mode, bits, X.EXTENSION, "AGC span %.3g K mapped to the output, background at mid-span."
+                            % x_max if self.cat == "Thermal" else "Input range = usable capacity %.3g e-." % x_max))
+        return X.tone_noise(x, x_max, mode, bits, gam, k)
 
     def mtf_dig(self, r, z):
         m = np.ones_like(np.asarray(r, float)) if self.boost_off else self._fir(r, z)   # sharpening (field map SP-01)
@@ -2574,6 +2626,9 @@ class TRM4Model:
             out.append("lossy compression as %.3g px Gaussian blur" % self.compression_blur_px())
         if self.pot_mode:
             out.append("algorithm observer: pixels-on-target criterion")
+        if self.tone_mode() != "none":
+            out.append("tone mapping '%s' to %d-bit output: rounding noise" % (
+                self.tone_mode(), int(self.p["dsp"].get("tone_bits", 8))))
         if self.ttp_on:
             out.append("TTP / V50 ranges (Vollmerhausen 2004, V50 to be calibrated)")
         if self.geo_on:

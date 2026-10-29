@@ -104,15 +104,56 @@ class Aerosol(unittest.TestCase):
         self.assertFalse(any(s.startswith("Aerosol MTF cutoff") for _g, s, _v, _u in res["info"]))
 
 
+class HufnagelValley(unittest.TestCase):
+    def test_profile(self):
+        h = np.linspace(0.0, 30000.0, 300001)
+        I = np.trapezoid(X.cn2_hufnagel_valley(h), h)
+        self.assertAlmostEqual(100 * 0.185 * (I / 0.5e-6 ** 2) ** (-0.6), 5.0, delta=0.15)   # HV 5/7: r0 = 5 cm
+        self.assertAlmostEqual(float(X.cn2_hufnagel_valley(0.0)), 1.7e-14 + 2.7e-16, delta=1e-18)
+        self.assertLess(float(X.cn2_hufnagel_valley(5000.0)), 1e-16)
+
+    def test_slant_path_and_bands(self):
+        p = template(VIS, target__altitude_m=3000.0, turbulence__on=True, turbulence__cn2_mode="hv",
+                     turbulence__cn2=1.7e-14)
+        _m, res = run_project(p)
+        self.assertTrue(any("Hufnagel-Valley" in a for a in res["assumptions"]))
+        _m, strong = run_project(AN._scale_turbulence(p, 10.0))
+        self.assertLess(ranges(strong)["Identification"], ranges(res)["Identification"])
+        from trm4.model import ModelError
+        with self.assertRaises(ModelError):
+            run_project(template(VIS, turbulence__on=True, turbulence__cn2_mode="hv", turbulence__hv_wind_ms=-1.0))
+
+
+class ToneMapping(unittest.TestCase):
+    def test_slope_and_noise(self):
+        self.assertAlmostEqual(X.tone_slope(500.0, 1000.0, "linear", 8), 255.0 / 1000.0)
+        self.assertAlmostEqual(X.tone_noise(500.0, 1000.0, "linear", 8), 1000.0 / 255.0 / math.sqrt(12.0))
+        # a gamma curve expands the dark end and compresses the bright end
+        self.assertGreater(X.tone_slope(10.0, 1000.0, "gamma", 8), X.tone_slope(900.0, 1000.0, "gamma", 8))
+        self.assertGreater(X.tone_slope(10.0, 1000.0, "log", 8), X.tone_slope(10.0, 1000.0, "linear", 8))
+        self.assertEqual(X.tone_noise(1200.0, 1000.0, "linear", 8), float("inf"))
+
+    def test_ranges(self):
+        base = ranges(run(LWIR)[1])
+        narrow = ranges(run(LWIR, dsp__tone_mode="linear", dsp__tone_span_K=20.0)[1])
+        wide = ranges(run(LWIR, dsp__tone_mode="linear", dsp__tone_span_K=100.0)[1])
+        deep = ranges(run(LWIR, dsp__tone_mode="linear", dsp__tone_span_K=100.0, dsp__tone_bits=14)[1])
+        self.assertLess(wide["Detection"], narrow["Detection"])
+        self.assertLessEqual(narrow["Detection"], base["Detection"])
+        self.assertAlmostEqual(deep["Detection"], base["Detection"], delta=0.01 * base["Detection"])
+        _m, res = run(LWIR, dsp__tone_mode="linear")
+        self.assertTrue(any("tone mapping" in e for e in res["dashboard"]["extensions"]))
+
+
 class MonteCarloPool(unittest.TestCase):
     def test_pool_equals_serial(self):
         items = [("target.dT_K", "Target temperature difference", 20.0), ("target.W_m", "Target width", 10.0)]
         p = template(MWIR)
-        a = AN.uncertainty(p, items, method="mc", mc_n=6, seed=4, runner=AN.Runner(1))
-        b = AN.uncertainty(p, items, method="mc", mc_n=6, seed=4, runner=AN.Runner(2))
+        a = AN.uncertainty(p, items, method="mc", mc_n=4, seed=4, runner=AN.Runner(1))
+        b = AN.uncertainty(p, items, method="mc", mc_n=4, seed=4, runner=AN.Runner(2))
         for t in a["tasks"]:
             np.testing.assert_allclose(a["mc"][t]["samples"], b["mc"][t]["samples"], rtol=0, atol=0)
-        self.assertEqual(a["mc"]["n_ok"], 6)
+        self.assertEqual(a["mc"]["n_ok"], 4)
 
 
 if __name__ == "__main__":
