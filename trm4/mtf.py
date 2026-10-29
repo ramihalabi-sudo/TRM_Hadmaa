@@ -255,11 +255,15 @@ def fried_parameter(lam_um, R_km, cn2_of_z, n=201):
     return 0.185 * (integral / lam ** 2) ** (-3.0 / 5.0)
 
 
-def mtf_turbulence(r, lam_um, r0_m, D_opt_mm, exposure, L0_m=0.0):
+def mtf_turbulence(r, lam_um, r0_m, D_opt_mm, exposure, L0_m=0.0, se_factor=0.5, tilt=None):
     """Turbulence MTF, Eqs. (4.80)-(4.83).
 
     L0_m > 0: von Karman outer scale, first-order correction of the phase structure function
     D(s) = 6.88 (s/r0)^(5/3) [1 - 1.485 (s/L0)^(1/3)], valid for s << L0 (Tokovinin 2002).
+    tilt: fraction a of the image tilt removed, phi = phi_LE [1 - se_factor a (s/D)^(1/3)] - a = 1 is the
+    short-exposure MTF (4.83), a = 0 the long-exposure MTF (4.81), 0 < a < 1 the residual tilt of a finite exposure or
+    of frame registration (Gaussian tilt blur, Hardie et al. 2021).  None: from `exposure` ("short" 1, else 0).
+    se_factor: Fried's factor of the short-exposure term, 1/2 far field (TRM4), 1 near field.
     """
     r = np.abs(np.asarray(r, float))
     if not np.isfinite(r0_m):
@@ -268,7 +272,9 @@ def mtf_turbulence(r, lam_um, r0_m, D_opt_mm, exposure, L0_m=0.0):
     phi = 6.88 * (sep / r0_m) ** (5.0 / 3.0)
     if L0_m > 0:
         phi = phi * np.clip(1.0 - 1.485 * (sep / L0_m) ** (1.0 / 3.0), 0.0, None)
-    if exposure == "short":
+    if tilt is None:
+        tilt = 1.0 if exposure == "short" else 0.0
+    if tilt > 0:
         D = D_opt_mm * 1e-3
-        phi = phi * np.clip(1.0 - 0.5 * (sep / D) ** (1.0 / 3.0), 0.0, None)
+        phi = phi * np.clip(1.0 - se_factor * tilt * (sep / D) ** (1.0 / 3.0), 0.0, None)
     return np.exp(-0.5 * phi)

@@ -22,7 +22,7 @@ from . import imports as IM
 from . import extensions as X
 from .amop import amop as amop_sim
 
-MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.8"
+MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.9"
 MODEL_REFERENCE = "Fraunhofer IOSB TR 2021/04 (TRM4.v3 parameter description and model documentation)"
 # version of the acceptance/regression suite (kept separate from the model version, field map App. D)
 VALIDATION_VERSION = "acceptance suite FM-1.1 (field map v1.1, 14.10.2026)"
@@ -1561,9 +1561,53 @@ class TRM4Model:
         return (self.cat != "Thermal" or bool(tb.get("thermal"))) and not self.lab and bool(tb["on"]) and \
             not self.wi.get("no_turb")
 
+    def mitigation_model(self):
+        """'physical' (registration + lucky-region selection, extension) or 'gain' (empirical effective r0 gain)."""
+        return "physical" if self.p["turbulence"].get("mit_model", "gain") == "physical" else "gain"
+
     def mitigation_gain(self):
         """Effective Fried-parameter gain of turbulence-mitigation processing (extension, 1 = none)."""
+        if self.mitigation_model() == "physical":
+            return 1.0
         return max(float(self.p["turbulence"].get("mitigation", 1.0) or 1.0), 1.0)
+
+    def turb_window_s(self):
+        """Exposure window of the turbulence tilt [s]: the eye integration time of a video observer (or the frame
+        integration, if longer); a still frame or an algorithm sees one exposure, or the digitally integrated
+        frames."""
+        integ = self.n_frames / self.frame_rate if self.n_frames > 1 and self.frame_rate > 0 else 0.0
+        if self.still or self.algo:
+            return integ or self.t_exposure()
+        return max(self.t_eye, integ)
+
+    def turb_tilt_removed(self):
+        """Fraction a of the image tilt removed from the turbulence MTF: 1 short exposure, 0 long exposure, the
+        exposure-time value (extension) or the registration of the physical mitigation model (extension)."""
+        tb = self.p["turbulence"]
+        if self.mitigation_model() == "physical":
+            a = float(tb.get("mit_alpha", 0.5))
+            if not 0.0 <= a <= 1.0:
+                raise ModelError("Tilt removed by registration must be in [0, 1] (is %g)" % a)
+            return a
+        if tb["exposure"] == "time":
+            v = float(tb.get("wind_ms", 2.0))
+            if v < 0:
+                raise ModelError("Crosswind speed must be >= 0")
+            return X.tilt_removed_exposure(self.D_eff / 1000.0, v, self.turb_window_s())
+        return 1.0 if tb["exposure"] == "short" else 0.0
+
+    def se_factor(self, lam_um, R_km):
+        """Factor of the short-exposure term (Eq. 4.83 uses 1/2, far field) -> (factor, Fresnel ratio D/sqrt(lam L))."""
+        mode = self.p["turbulence"].get("se_factor", "far")
+        f, q = X.se_factor_auto(self.D_eff / 1000.0, lam_um, R_km)
+        return ({"near": 1.0, "auto": f}.get(mode, 0.5)), q
+
+    def lucky_frames(self):
+        """Frames the lucky-region selection of the physical mitigation model chooses from (0 = no selection)."""
+        tb = self.p["turbulence"]
+        if self.mitigation_model() != "physical" or not tb.get("mit_select", True):
+            return 0
+        return self.n_frames if self.n_frames > 1 else 0
 
     def _turb_table(self, R_km):
         key = round(R_km, 9)
@@ -1629,14 +1673,63 @@ class TRM4Model:
         if L0 > 0:
             self.assume("Turbulence with a von Karman outer scale L0 = %.3g m (first-order correction of the phase "
                         "structure function, valid for pupil separations << L0)." % L0)
+        if not self._turb_cache:
+            self._turb_regime_notes()
         vals = []
         gain = self.mitigation_gain()        # mitigation: effective r0 of the processed image (physical r0 reported)
+        a = self.turb_tilt_removed()
+        n_lucky = self.lucky_frames()
+        D_m = self.D_eff / 1000.0
         for lam_i in lam_s:
             r0 = r0_ref * lam_i ** 1.2 * gain
-            vals.append(M.mtf_turbulence(r, lam_i, r0, self.D_eff, tb["exposure"], L0))
+            beta = self.se_factor(lam_i, R_km)[0]
+            m_i = M.mtf_turbulence(r, lam_i, r0, self.D_eff, tb["exposure"], L0, beta, a)
+            if n_lucky and D_m / r0 > X.LUCKY_DR0:
+                # lucky-region selection: in a fraction p_any of the windows one of the N frames is lucky (D/r0 = 3.34)
+                p_any = 1.0 - (1.0 - X.lucky_probability(D_m / r0)) ** n_lucky
+                m_l = M.mtf_turbulence(r, lam_i, D_m / X.LUCKY_DR0, self.D_eff, tb["exposure"], L0, beta, a)
+                m_i = p_any * m_l + (1.0 - p_any) * m_i
+            vals.append(m_i)
         m = np.abs(ph.trapz(w[None, :] * np.array(vals).T, lam_s, axis=1))
         self._turb_cache[key] = (r, m, r0_ref * self.lam_peak ** 1.2)
         return self._turb_cache[key]
+
+    def _turb_regime_notes(self):
+        """Assumptions of the turbulence MTF regime (exposure time, short-exposure factor, mitigation model)."""
+        tb = self.p["turbulence"]
+        mode = tb.get("se_factor", "far")
+        if mode == "near":
+            self.assume("Short-exposure term with Fried's near-field factor 1 (%s; TRM4 Eq. 4.83 uses 1/2, the "
+                        "far-field value). Tofsted (2011, 2014): the near-field form is accurate down to D ~ sqrt(lambda "
+                        "L)." % X.EXTENSION)
+        elif mode == "auto":
+            self.assume("Short-exposure factor from the Fresnel ratio Q = D / sqrt(lambda L) (%s): 1/2 + 1/2 min(1, Q) "
+                        "per wavelength and range - a linear interpolation between Fried's far-field (1/2) and "
+                        "near-field (1) limits." % X.EXTENSION)
+        if self.mitigation_model() == "physical":
+            n = self.lucky_frames()
+            self.assume("Turbulence mitigation, physical model (%s): frame registration removes a fraction a = %.3g of "
+                        "the image tilt (residual tilt blur, Hardie et al. 2021)%s; frame averaging is the frame "
+                        "integration (Signal processing) and deconvolution / sharpening the digital filter with "
+                        "'Credit sharpening'. Published systems: +10 to +25 %% recognition range (van Eekeren et al. "
+                        "2014). The exposure setting of the turbulence MTF does not apply to the processed stream." % (
+                            X.EXTENSION, self.turb_tilt_removed(),
+                            "; lucky-region selection among the N = %d integrated frames: Fried (1978) P = 5.6 "
+                            "exp[-0.1557 (D/r0)^2] per frame, a lucky region behaves as D/r0 = %.3g (1 rad^2 tilt-"
+                            "removed phase variance), expected MTF = p MTF_lucky + (1 - p) MTF with p = 1 - (1 - P)^N"
+                            % (n, X.LUCKY_DR0) if n else ""))
+            if tb.get("mit_select", True) and not n:
+                self.warn("Lucky-region selection needs frames to choose from: enable the frame integration with "
+                          "N >= 2 frames (Signal processing); without it only the registration is modelled.")
+        elif tb["exposure"] == "time":
+            tau, v = self.turb_window_s(), float(tb.get("wind_ms", 2.0))
+            self.assume("Exposure-time turbulence MTF (%s): window %.3g ms (%s) at a crosswind of %.3g m/s; the tilt "
+                        "common to the strip D + v tau swept during the window moves the image, the rest blurs it - "
+                        "tilt removed a = (D / (D + v tau))^(1/3) = %.3g (1 short, 0 long exposure; effective-aperture "
+                        "model of Azoulay / FGAN-FOM, residual-tilt form of Hardie et al. 2021). Frozen flow: turbulence "
+                        "evolution during the window is neglected." % (
+                            X.EXTENSION, 1e3 * tau, "eye integration time" if not (self.still or self.algo) else
+                            "frame exposure", v, self.turb_tilt_removed()))
 
     def mtf_turb(self, r, R_km):
         if not self.turbulence_active() or R_km <= 0:
@@ -2622,6 +2715,18 @@ class TRM4Model:
             out.append("turbulence in the Thermal category")
         if self.turbulence_active() and self.mitigation_gain() > 1.0:
             out.append("turbulence mitigation: effective r0 x%.3g" % self.mitigation_gain())
+        if self.turbulence_active():
+            tb = self.p["turbulence"]
+            if self.mitigation_model() == "physical":
+                out.append("turbulence mitigation (physical): registration a = %.3g%s" % (
+                    self.turb_tilt_removed(), ", lucky-region selection of %d frames" % self.lucky_frames()
+                    if self.lucky_frames() else ""))
+            elif tb["exposure"] == "time":
+                out.append("turbulence MTF for a %.3g ms window at %.3g m/s crosswind" % (
+                    1e3 * self.turb_window_s(), float(tb.get("wind_ms", 2.0))))
+            if tb.get("se_factor", "far") in ("near", "auto"):
+                out.append("short-exposure factor: %s" % ("near field (1)" if tb["se_factor"] == "near" else
+                                                          "from D / sqrt(lambda L)"))
         if self.compression_blur_px() > 0:
             out.append("lossy compression as %.3g px Gaussian blur" % self.compression_blur_px())
         if self.pot_mode:
@@ -3264,6 +3369,20 @@ class TRM4Model:
                 if self.mitigation_gain() > 1.0:
                     add(s, "Effective r0 after mitigation processing (extension)", "%.4g" % (
                         r0 * 100 * self.mitigation_gain()), "cm")
+                tb = self.p["turbulence"]
+                add(s, "Tilt removed from the turbulence MTF (1 = short, 0 = long exposure)",
+                    "%.3g" % self.turb_tilt_removed())
+                if tb["exposure"] == "time" and self.mitigation_model() != "physical":
+                    add(s, "Turbulence exposure window / crosswind (extension)", "%.3g ms / %.3g m/s" % (
+                        1e3 * self.turb_window_s(), float(tb.get("wind_ms", 2.0))))
+                beta, q = self.se_factor(self.lam_peak, R_t)
+                add(s, "Fresnel ratio D / sqrt(lambda L) at %s (short-exposure factor)" % at,
+                    "%.3g (%.3g)" % (q, beta))
+                if self.mitigation_model() == "physical":
+                    n = self.lucky_frames()
+                    P = X.lucky_probability(self.D_eff / 1000.0 / r0)
+                    add(s, "Lucky-region selection: P per frame / frames N / P(lucky in window) (extension)",
+                        "%.3g / %d / %.3g" % (P, n, 1.0 - (1.0 - P) ** n if n else 0.0))
 
     def _extension_info(self, add, res):
         """System-data rows of the TRM_HADMAA extensions (report phase 3)."""

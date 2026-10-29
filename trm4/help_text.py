@@ -337,9 +337,37 @@ HELP = {
                              "an effective Fried-parameter gain: the turbulence MTF uses r0 x this factor (1 = no "
                              "mitigation). Empirical: published systems report +10 to +25 % recognition range; in "
                              "the daylight template a gain of 2 - 4 gives about +12 to +19 %. Use the short-exposure "
-                             "MTF with it.",
+                             "MTF with it. The physical model (Mitigation processing model) replaces this factor.",
     "turbulence.exposure": "Short exposure: image motion removed (only blur).\nLong exposure: includes image "
-                           "wander (stronger blur).",
+                           "wander (stronger blur).\nExposure-time dependent (extension): the tilt that changes within "
+                           "the observer's window blurs the image - the eye integration time for a video observer, "
+                           "the frame exposure for a still frame or an algorithm (the frame integration, if longer). "
+                           "With a crosswind v the aperture sweeps D + v tau of turbulence; tilt removed a = (D / (D + "
+                           "v tau))^(1/3): 1 = short, 0 = long exposure (Azoulay / FGAN-FOM effective aperture, "
+                           "Hardie et al. 2021 residual tilt). TRM4 itself recommends short exposure but notes that an "
+                           "eye integrating 100 - 200 ms sees the long-exposure condition; this option resolves it.",
+    "turbulence.wind_ms": "Speed of the turbulence across the line of sight (crosswind; for a moving platform add the "
+                          "sweep of the line of sight). 0 = frozen turbulence (short exposure). Typical near the ground: "
+                          "1 - 5 m/s.",
+    "turbulence.se_factor": "Factor of the short-exposure term [1 - f (lambda r / D)^(1/3)]: Fried (1966) gives 1/2 in "
+                            "the far field (D << sqrt(lambda L)) and 1 in the near field (D >> sqrt(lambda L)). TRM4 Eq. "
+                            "(4.83) always uses 1/2. Tofsted (2011, 2014): the near-field form is accurate down to D ~ "
+                            "sqrt(lambda L). Auto: 1/2 + 1/2 min(1, D / sqrt(lambda L)) per wavelength and range (linear "
+                            "between the two limits). Visible template, Cn2 1e-14: near field +8 % recognition range.",
+    "turbulence.mit_model": "Empirical: the turbulence MTF uses an effective r0 x gain.\nPhysical (extension): frame "
+                            "registration removes a fraction of the image tilt (Hardie et al. 2021) and lucky-region "
+                            "selection picks, among the N frames of the frame integration, a frame whose phase variance "
+                            "is <= 1 rad^2 (Fried 1978: P = 5.6 exp[-0.1557 (D/r0)^2] per frame). Frame averaging is the "
+                            "frame integration and deconvolution the digital filter with 'Credit sharpening' (Signal "
+                            "processing). Note: the TRM4 short-exposure MTF already assumes all tilt removed, so a < 1 "
+                            "is more conservative than the TRM4 default; compare against the exposure-time MTF of the "
+                            "unprocessed video. Published gain: +10 to +25 % recognition (van Eekeren et al. 2014).",
+    "turbulence.mit_alpha": "Fraction of the image tilt removed by the registration (0 = none, 1 = all; tilt "
+                            "correction factor of Hardie et al. 2021, about 0.5 - 0.6 for block registration of their "
+                            "test case). The residual tilt blurs the averaged frames.",
+    "turbulence.mit_select": "Lucky-region selection among the frames of the frame integration (Signal processing): "
+                             "in a fraction p = 1 - (1 - P)^N of the windows a frame is lucky and behaves as D/r0 = "
+                             "3.34. Effective for D/r0 of about 3.5 - 7; for larger D/r0 lucky frames become rare.",
     "turbulence.cn2_mode": "Turbulence strength Cn2 constant along the path, or varying with height. Hufnagel-Valley "
                            "(extension): Cn2(h) = 0.00594 (v/27)^2 (1e-5 h)^10 exp(-h/1000) + 2.7e-16 exp(-h/1500) + "
                            "A exp(-h/100) along the slant path, A = the Cn2 field (HV 5/7: 1.7e-14 m^-2/3, v = 21 m/s; "

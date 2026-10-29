@@ -8,7 +8,7 @@
 
 **דרישות:** Windows 10 או 11, ‏64 ביט. אין צורך ב־Python ואין צורך בהרשאות מנהל.
 
-1. מעתיקים את הקובץ `TRM_HADMAAv1_Setup_2.8.exe` למחשב ולוחצים עליו לחיצה כפולה.
+1. מעתיקים את קובץ ההתקנה (למשל `TRM_HADMAAv1_Setup_2.9.exe`) למחשב ולוחצים עליו לחיצה כפולה.
 2. אם מופיעה ההודעה **"Windows protected your PC"** (הקובץ אינו חתום דיגיטלית): לוחצים **More info** ואז **Run anyway**.
 3. בוחרים שפה, מסמנים אם רוצים קיצור דרך בשולחן העבודה, ולוחצים **Install**.
 4. בסיום, אפשר לסמן **Launch** כדי לפתוח את התוכנה מיד.
@@ -47,6 +47,9 @@
 | השוואת כמה תרחישים | **Run ← Scenario comparison** |
 | טווחי P80 / P90 או TTP / V50 | עמוד **Target & scenario** ← *Probability and clutter* |
 | טורבולנציה בנתיב אווירי | **Atmosphere & turbulence** ← *Cn2 - Hufnagel-Valley altitude profile* |
+| טורבולנציה לצופה בווידאו (זמן שילוב העין ורוח רוחבית) | **Atmosphere & turbulence** ← *Type of MTF: Exposure-time dependent* |
+| טווחים לפי שעה ביום ועונה (סטטיסטיקת Cn2) | לשונית **Sensitivity** ← *Cn2 statistics* |
+| מודל פיזיקלי לעיבוד נגד טורבולנציה | **Atmosphere & turbulence** ← *Mitigation processing model: Physical* |
 | פלט וידאו 8 ביט / AGC | **Signal processing** ← *Tone mapping / AGC* (פרמטרים מתקדמים) |
 | MTF מתמונת קצה אלכסוני | **Run ← Lab: slanted-edge SFR from an image** |
 | אפיון מצלמה מפריימים של flat ו־dark | **Run ← Lab: photon transfer (EMVA 1288)** |

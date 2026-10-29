@@ -41,6 +41,7 @@ import numpy as np
 
 from . import presets as P
 from . import derived as DV
+from . import extensions as X
 from .model import run_project, ModelError
 
 _N = NormalDist()
@@ -1002,6 +1003,73 @@ def range_bands(project, progress=None, stop=None, factor=10.0, runner=None):
 # ---------------------------------------------------------------------------------------------
 # global sensitivity (report phase 3): Morris screening and Sobol variance indices
 # ---------------------------------------------------------------------------------------------
+CN2_SEASONS = ("summer", "winter")
+
+
+def cn2_climates():
+    return sorted({c for c, _t in P.CN2_TABLE})
+
+
+def _cn2_case(project, cn2, time):
+    """Copy of the project with turbulence from a Table C.2 value: Cn2 at 2 m, simplified height dependence."""
+    case = copy.deepcopy(project)
+    tb = case.setdefault("turbulence", {})
+    tb.update(on=True, cn2_mode="height", cn2=float(cn2), h_ref_m=2.0, time=time, cn2_preset="custom")
+    return case
+
+
+def cn2_statistics(project, climate="Arid", season="summer", overcast=False, progress=None, stop=None, runner=None):
+    """DRI ranges for the measured turbulence statistics of a climate (TRM4 Table C.2, Fraunhofer IOSB long-term
+    scintillometer data): noon and night, the Cn2 not exceeded on 50 % and 90 % of the occasions.  The 90 % row is
+    the range reached on at least 90 % of the occasions at that time of day.  Optional rows: overcast noon (Cn2 x 0.1,
+    clouds reduce the midday Cn2 by 1 - 2 orders) and, for arid summer, the typical sunrise minimum (~2e-15).  The
+    turbulence settings of the project (exposure, short-exposure factor, mitigation) are kept."""
+    progress = progress or _noop
+    p = P.deep_merge(P.DEFAULT_PROJECT, project)
+    if p["mode"]["environment"] != "field":
+        raise ModelError("Cn2 statistics need 'Field performance' mode.")
+    if p["category"] == "Thermal" and not p["turbulence"].get("thermal"):
+        raise ModelError("TRM4 neglects turbulence in the Thermal category: tick 'Apply turbulence in the Thermal "
+                         "category' (extension) to evaluate the Cn2 statistics.")
+    if (climate, "Noon") not in P.CN2_TABLE or season not in CN2_SEASONS:
+        raise ValueError("Unknown climate / season: %s / %s" % (climate, season))
+    j = CN2_SEASONS.index(season)               # Table C.2 columns: 90 % winter, 90 % summer, 50 % winter, 50 % summer
+    col = {"90 %": 1 - j, "50 %": 3 - j}
+    rows = []
+    for t_lab, t_key, tod in (("Noon", "Noon", "day"), ("Night", "Night", "night")):
+        for pct in ("50 %", "90 %"):
+            rows.append({"label": "%s, %s of the occasions" % (t_lab, pct), "time": t_lab, "pct": pct,
+                         "cn2": P.CN2_TABLE[(climate, t_key)][col[pct]], "tod": tod})
+    if overcast:
+        for pct in ("50 %", "90 %"):
+            rows.append({"label": "Noon overcast, %s (Cn2 x %g)" % (pct, X.OVERCAST_NOON_FACTOR), "time": "Noon overcast",
+                         "pct": pct, "cn2": P.CN2_TABLE[(climate, "Noon")][col[pct]] * X.OVERCAST_NOON_FACTOR,
+                         "tod": "day"})
+    if climate == "Arid" and season == "summer":
+        rows.append({"label": "Sunrise, typical minimum", "time": "Sunrise", "pct": "typical",
+                     "cn2": X.CN2_SUNRISE_ARID_SUMMER, "tod": "night"})
+    calls = [(_all_atm_ranges, (_cn2_case(project, r["cn2"], r["tod"]),)) for r in rows]
+    calls.append((_all_atm_ranges, (project,)))
+    res = (runner or Runner(1)).map(calls, progress, stop, "Cn2 statistics")
+    nominal = res[-1]
+    if nominal is None:
+        raise ModelError("The nominal case has no valid ranges.")
+    atms = [lab for lab, _r in nominal]
+    i_an = min(sum(1 for at in p["atmosphere"]["atm"][:analysis_slot(p)] if at.get("on")), len(atms) - 1) \
+        if p["atmosphere"]["mode"] != "spectral" else 0
+    tasks = list(nominal[0][1])
+    for r, rr in zip(rows, res[:-1]):
+        r["ranges"] = {t: (rr[i_an][1][t] if rr is not None else np.nan) for t in tasks}
+    progress("Cn2 statistics: done", 1.0)
+    return {"kind": "cn2stats", "climate": climate, "season": season, "overcast": bool(overcast), "tasks": tasks,
+            "base": {t: nominal[i_an][1][t] for t in tasks}, "rows": rows, "analysis_atm": atms[i_an],
+            "invalid": [r["label"] for r, rr in zip(rows, res[:-1]) if rr is None], "time": _now(),
+            "engine": describe_engine(project),
+            "method": "TRM4 Table C.2 (%s climate, %s): Cn2 at 2 m with the simplified height dependence (day h^-4/3, "
+                      "night h^-2/3); full model run per row; the project's other turbulence settings are kept." % (
+                          climate, season)}
+
+
 def _case_ranges(project, changes):
     """Ranges with [(path, value)] applied, None for an invalid case (worker function)."""
     case = copy.deepcopy(project)
@@ -1234,6 +1302,14 @@ def to_csv_rows(an):
         rows = [["factor"] + ["%s_gain_pct" % t for t in tasks]]
         rows += [[r["factor"]] + [r["gain_pct"][t] for t in tasks] for r in an["rows"]]
         rows += [["# limit type", t, v] for t, v in an.get("limit_type", {}).items()]
+        return head + rows
+    if k == "cn2stats":
+        tasks = an["tasks"]
+        head += [["# method", an["method"]], ["# atmosphere", an["analysis_atm"]]]
+        rows = [["row", "time", "statistic", "cn2_2m"] + ["%s_km" % t for t in tasks]]
+        rows += [[r["label"], r["time"], r["pct"], r["cn2"]] +
+                 ["" if not np.isfinite(r["ranges"][t]) else r["ranges"][t] for t in tasks] for r in an["rows"]]
+        rows.append(["nominal (project settings)", "", "", ""] + [an["base"][t] for t in tasks])
         return head + rows
     if k == "bands":
         tasks = an["tasks"]

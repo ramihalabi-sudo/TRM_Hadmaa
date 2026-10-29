@@ -18,7 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # longest modules first (measured on 12 cores), so the slowest one does not start last
-SLOW_FIRST = ("test_advisor", "test_extensions", "test_metrics", "test_report_he", "test_analysis",
+SLOW_FIRST = ("test_advisor", "test_extensions", "test_metrics", "test_turbulence_stage2", "test_report_he",
+              "test_analysis",
               "test_analysis_scope", "test_research_review", "test_invariants", "test_performance")
 # modules dominated by model runs in a process pool keep a few workers of their own
 POOLED = {"test_advisor": 4, "test_report_he": 2}

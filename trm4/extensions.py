@@ -19,6 +19,15 @@ Sources (report reference numbers in brackets):
 * Targeting task performance (TTP) metric and its TTPF: Vollmerhausen, Jacobs & Driggers, "New metric for predicting
   target acquisition performance", Opt. Eng. 43(11), 2806 (2004).
 * Aerosol MTF: Kopeika, "A System Engineering Approach to Imaging", SPIE Press (1998), Ch. 17.
+* Exposure-time turbulence MTF (effective aperture D + v tau): Azoulay, FGAN-FfO report 1990/3, as used in
+  Weiss-Wrana, "Influence of atmospheric turbulence on imaging quality of electro-optical sensors in different
+  climates", FGAN-FOM 2003/11 (also the source of the sunrise and overcast Cn2 statements).
+* Residual-tilt (registration) OTF: Hardie, Rucci, Bose-Pillai & Van Hook, "Application of tilt correlation
+  statistics to anisoplanatic optical turbulence modeling and mitigation", arXiv:2108.00528 (2021).
+* Near / far-field short-exposure MTF: Fried, JOSA 56, 1372 (1966); Tofsted, Opt. Eng. 50, 016001 (2011) and 53,
+  044112 (2014).
+* Lucky imaging: Fried, "Probability of getting a lucky short-exposure image through turbulence", JOSA 68, 1651
+  (1978); tilt-removed phase variance 0.134 (D/r0)^(5/3): Noll, JOSA 66, 207 (1976).
 """
 import math
 
@@ -248,6 +257,49 @@ def cn2_hufnagel_valley(h_m, A=HV_GROUND_CN2, v_ms=HV_WIND_MS):
     h = np.maximum(np.asarray(h_m, float), 0.0)
     return 0.00594 * (float(v_ms) / 27.0) ** 2 * (1e-5 * h) ** 10 * np.exp(-h / 1000.0) + \
         2.7e-16 * np.exp(-h / 1500.0) + float(A) * np.exp(-h / 100.0)
+
+
+# ---------------------------------------------------------------------------------------------
+# Turbulence: exposure time, short-exposure regime, mitigation
+# ---------------------------------------------------------------------------------------------
+def tilt_removed_exposure(D_m, wind_ms, tau_s):
+    """Fraction of the image tilt that does not blur an exposure of tau seconds (frozen flow at crosswind v).
+
+    During the exposure the aperture sweeps a strip of length D + v tau through the turbulence (effective-aperture
+    model of Azoulay, FGAN-FOM, as used by Weiss-Wrana 2003); the tilt common to the strip moves the whole image, the
+    rest blurs it.  With the Z-tilt variance ~ D^(-1/3): a = (D / (D + v tau))^(1/3) - 1 for a frozen snapshot (short
+    exposure), -> 0 for long exposures.  Turbulence evolution during tau (boiling) is neglected (it adds blur)."""
+    D, s = float(D_m), max(float(wind_ms), 0.0) * max(float(tau_s), 0.0)
+    return (D / (D + s)) ** (1.0 / 3.0) if D > 0 else 0.0
+
+
+def se_factor_auto(D_m, lam_um, R_km):
+    """Factor of Fried's short-exposure term from the Fresnel ratio Q = D / sqrt(lambda L): 1/2 for Q << 1 (far
+    field), 1 for Q >= 1 (near field; Tofsted: the near-field form holds down to Q ~ 1), linear in between (an
+    interpolation between the two published limits)."""
+    L = max(float(R_km), 1e-9) * 1000.0
+    q = float(D_m) / math.sqrt(float(lam_um) * 1e-6 * L)
+    return 0.5 + 0.5 * min(1.0, q), q
+
+
+# Fried 1978: a short exposure is "lucky" when its tilt-removed phase variance over the aperture is <= 1 rad^2.  The
+# mean tilt-removed variance is 0.134 (D/r0)^(5/3) rad^2 (Noll 1976), so a lucky frame behaves like D/r0 = 3.34.
+LUCKY_DR0 = (1.0 / 0.134) ** 0.6
+
+
+def lucky_probability(D_over_r0):
+    """Probability of a lucky short exposure, Fried (1978) P = 5.6 exp[-0.1557 (D/r0)^2] (D/r0 >= 3.5; capped at 1)."""
+    x = float(D_over_r0)
+    if x <= LUCKY_DR0:
+        return 1.0
+    return min(1.0, 5.6 * math.exp(-0.1557 * x * x))
+
+
+# ---------------------------------------------------------------------------------------------
+# Turbulence statistics: Cn2 at sunrise and under an overcast sky (Weiss-Wrana, FGAN-FOM 2003)
+# ---------------------------------------------------------------------------------------------
+CN2_SUNRISE_ARID_SUMMER = 2e-15      # typical daily minimum around sunrise, arid summer (stable stratification)
+OVERCAST_NOON_FACTOR = 0.1           # clouds reduce the midday Cn2 by 1 - 2 orders of magnitude; the smaller is used
 
 
 # ---------------------------------------------------------------------------------------------

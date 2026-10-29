@@ -82,6 +82,18 @@ def format_analyses(analyses):
         elif key == "advisor":
             from . import advisor as ADV
             L.extend(ADV.format_text(an))
+        elif key == "cn2stats":
+            L.append("[Cn2 statistics - %s climate, %s; ranges in %s]" % (an["climate"], an["season"],
+                                                                         an["analysis_atm"]))
+            L.append("  Method: %s  Calculated %s. Engine: %s" % (an["method"], an["time"], an["engine"]))
+            L.append("  A '90 %' row is the range reached on at least 90 % of the occasions at that time of day "
+                     "(turbulence at most this strong).")
+            L.append("  %-44s %10s  %s" % ("Row", "Cn2 (2 m)", "  ".join("%14s" % t for t in an["tasks"])))
+            for r in an["rows"]:
+                L.append("  %-44s %10.2e  %s" % (r["label"], r["cn2"], "  ".join(
+                    "%11s km" % _km(r["ranges"][t]) for t in an["tasks"])))
+            L.append("  %-44s %10s  %s" % ("Nominal (project settings)", "", "  ".join(
+                "%11s km" % _km(an["base"][t]) for t in an["tasks"])))
         elif key == "bands":
             L.append("[Range bands - weather x turbulence; scenario envelope, not a probability interval]")
             L.append("  Method: %s  Calculated %s. Engine: %s" % (an["method"], an["time"], an["engine"]))

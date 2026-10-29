@@ -811,7 +811,17 @@ TABS = [
         F("turbulence.cn2_preset", "Scenario default (Table C.2)", "choice",
           [("custom", "Custom")] + [(k, k) for k in P.CN2_PRESETS], cond=TURB_ON),
         F("turbulence.exposure", "Type of MTF", "choice", [("short", "Short exposure (image motion removed)"),
-                                                           ("long", "Long exposure (incl. image wander)")], cond=TURB_ON),
+                                                           ("long", "Long exposure (incl. image wander)"),
+                                                           ("time", "Exposure-time dependent (eye / frame window, "
+                                                                    "extension)")], cond=TURB_ON),
+        F("turbulence.wind_ms", "  crosswind (transverse) speed", unit="m/s",
+          cond=lambda p: TURB_ON(p) and p["turbulence"]["exposure"] == "time" and
+          p["turbulence"].get("mit_model", "gain") != "physical"),
+        F("turbulence.se_factor", "Short-exposure term", "choice",
+          [("far", "Far field, factor 1/2 (TRM4)"), ("near", "Near field, factor 1 (Fried / Tofsted, extension)"),
+           ("auto", "From D / sqrt(lambda L) (extension)")],
+          cond=lambda p: TURB_ON(p) and (p["turbulence"]["exposure"] != "long" or
+                                         p["turbulence"].get("mit_model", "gain") == "physical")),
         F("turbulence.cn2_mode", "Turbulence specified via", "choice",
           [("fixed", "Cn2 - fixed value"), ("height", "Cn2 - simplified height dependence"),
            ("hv", "Cn2 - Hufnagel-Valley altitude profile (extension)"),
@@ -828,7 +838,15 @@ TABS = [
         F("turbulence.time", "Day / night", "choice", [("day", "Day"), ("night", "Night")],
           cond=lambda p: TURB_ON(p) and p["turbulence"]["cn2_mode"] == "height"),
         F("turbulence.L0_m", "Outer scale L0, von Karman (0 = Kolmogorov)", unit="m", cond=TURB_ON),
-        F("turbulence.mitigation", "Mitigation processing: effective r0 gain (1 = none, extension)", cond=TURB_ON),
+        F("turbulence.mit_model", "Mitigation processing model", "choice",
+          [("gain", "Effective r0 gain (empirical)"),
+           ("physical", "Physical: registration + lucky-region selection (extension)")], cond=TURB_ON),
+        F("turbulence.mitigation", "Mitigation processing: effective r0 gain (1 = none, extension)",
+          cond=lambda p: TURB_ON(p) and p["turbulence"].get("mit_model", "gain") != "physical"),
+        F("turbulence.mit_alpha", "  tilt removed by registration (0 - 1)",
+          cond=lambda p: TURB_ON(p) and p["turbulence"].get("mit_model", "gain") == "physical"),
+        F("turbulence.mit_select", "  lucky-region selection among the frame-integration frames", "bool",
+          cond=lambda p: TURB_ON(p) and p["turbulence"].get("mit_model", "gain") == "physical"),
     ]),
     ("Metadata", [
         H("Imported optics MTF", cond=OPT_FILE),
@@ -1405,7 +1423,8 @@ class SensitivityTab(ttk.Frame):
     """
 
     MODES = (("advisor", "Improve performance"), ("limiting", "Limiting factors"), ("sweep", "Parameter sweep"),
-             ("uncertainty", "Uncertainty"), ("bands", "Range bands"), ("scenarios", "Scenarios"))
+             ("uncertainty", "Uncertainty"), ("bands", "Range bands"), ("cn2stats", "Cn2 statistics"),
+             ("scenarios", "Scenarios"))
     MODE_NAME = dict(MODES)
 
     def __init__(self, master, app):
@@ -1513,6 +1532,9 @@ class SensitivityTab(ttk.Frame):
         self.adv_step = tk.StringVar(value="25")
         self.adv_robust = tk.BooleanVar(value=True)
         self.band_factor = tk.StringVar(value="10")
+        self.c2_climate = tk.StringVar(value="Arid")
+        self.c2_season = tk.StringVar(value="summer")
+        self.c2_overcast = tk.BooleanVar(value=False)
         self.show_mode("limiting")
 
     # ------------------------------------------------------------------ state
@@ -1532,6 +1554,8 @@ class SensitivityTab(ttk.Frame):
             extra = [self.adv_task.get(), self.adv_minfov.get(), self.adv_step.get(), self.adv_robust.get()]
         elif mode == "bands":
             extra = [self.band_factor.get()]
+        elif mode == "cn2stats":
+            extra = [self.c2_climate.get(), self.c2_season.get(), bool(self.c2_overcast.get())]
         return json.dumps([p, extra], sort_keys=True, default=str)
 
     def check_stale(self, p=None):
@@ -1661,6 +1685,24 @@ class SensitivityTab(ttk.Frame):
         fr.pack(fill="x", pady=(6, 0))
         ttk.Label(fr, text="Turbulence factor (Cn2 / f, x f)").pack(side="left")
         ttk.Entry(fr, textvariable=self.band_factor, width=7).pack(side="left", padx=(6, 0))
+
+    def _opts_cn2stats(self):
+        self._section_label(self.opts, "Cn2 statistics: the DRI ranges for the turbulence measured over a year by "
+                                       "Fraunhofer IOSB (TRM4 Table C.2) - noon and night, the Cn2 not exceeded on 50 % "
+                                       "and on 90 % of the occasions. A 90 % row is the range reached on at least 90 % "
+                                       "of the occasions at that time of day. Overcast noon: clouds reduce the midday "
+                                       "Cn2 by 1 - 2 orders (x 0.1 used). Arid summer adds the typical sunrise minimum. "
+                                       "The exposure, short-exposure factor and mitigation settings of the project are "
+                                       "kept; the analysis atmosphere is the one chosen above.")
+        fr = ttk.Frame(self.opts)
+        fr.pack(fill="x", pady=(6, 0))
+        ttk.Label(fr, text="Climate").pack(side="left")
+        ttk.Combobox(fr, values=AN.cn2_climates(), state="readonly", textvariable=self.c2_climate, width=11).pack(
+            side="left", padx=(6, 16))
+        ttk.Label(fr, text="Season").pack(side="left")
+        ttk.Combobox(fr, values=list(AN.CN2_SEASONS), state="readonly", textvariable=self.c2_season, width=8).pack(
+            side="left", padx=(6, 16))
+        ttk.Checkbutton(fr, text="Add overcast noon", variable=self.c2_overcast).pack(side="left")
 
     def _opts_limiting(self):
         self._section_label(self.opts, "What limits the nominal range? Each degradation of the imaging chain is "
@@ -1978,6 +2020,13 @@ class SensitivityTab(ttk.Frame):
             except ValueError:
                 raise ValueError("Enter a numeric turbulence factor.")
             return lambda prog, stop: AN.range_bands(p, prog, stop=stop, factor=fac)
+        if mode == "cn2stats":
+            climate, season, overcast = self.c2_climate.get(), self.c2_season.get(), bool(self.c2_overcast.get())
+
+            def job(prog, stop):
+                with AN.Runner() as rn:
+                    return AN.cn2_statistics(p, climate, season, overcast, prog, stop=stop, runner=rn)
+            return job
         if mode == "uncertainty":
             if not AN.items_from_settings(AN.uncertainty_settings(p)):
                 raise ValueError("Tick at least one input with a non-zero uncertainty.")
@@ -2041,6 +2090,8 @@ class SensitivityTab(ttk.Frame):
             label += " (%s)" % r["method"].capitalize()
         elif r["kind"] == "advisor":
             label += ": " + r["rank_task"]
+        elif r["kind"] == "cn2stats":
+            label += ": %s %s" % (r["climate"], r["season"])
         self.history.append({"mode": mode, "result": r, "label": label})
         self.history = self.history[-30:]
         self.hist_cb.configure(values=[h["label"] for h in self.history[::-1]])
@@ -2055,7 +2106,7 @@ class SensitivityTab(ttk.Frame):
             self.app._show_summary(self.app.result)
 
     _KIND_MODE = {"advisor": "advisor", "limiting": "limiting", "sweep": "sweep", "sweep2d": "sweep", "uncertainty": "uncertainty",
-                  "global": "uncertainty", "bands": "bands", "scenarios": "scenarios"}
+                  "global": "uncertainty", "bands": "bands", "cn2stats": "cn2stats", "scenarios": "scenarios"}
 
     def is_stale(self, r, p=None):
         sig = self.sigs.get(id(r))
@@ -2465,6 +2516,57 @@ class SensitivityTab(ttk.Frame):
                        ("Interpretation", ["Weather (extinction / visual range) dominates long-range Detection; "
                                            "turbulence dominates visible Identification. The width of the band says "
                                            "how much a nominal range depends on the scene conditions."])])
+
+    def _show_cn2stats(self, r, tasks):
+        rows_by = {(x["time"], x["pct"]): x for x in r["rows"]}
+
+        def rng(time, pct, t):
+            x = rows_by.get((time, pct))
+            return self._f(x["ranges"][t], "%.2f") if x else "-"
+        self._card_row([(t, "%s / %s km" % (rng("Noon", "90 %", t), rng("Noon", "50 %", t)),
+                         "noon, reached on 90 %% / 50 %% of the occasions; night %s / %s km" % (
+                             rng("Night", "90 %", t), rng("Night", "50 %", t)),
+                         TASK_COLORS[i % len(TASK_COLORS)]) for i, t in enumerate(tasks)])
+        self.method_lbl.configure(text="Method: %s%s" % (r["method"], " Invalid rows: %s." % ", ".join(r["invalid"])
+                                                         if r["invalid"] else ""))
+        ax = self.plot.axes(1, 1)[0]
+        n = len(r["rows"])
+        width = 0.8 / max(n, 1)
+        shades = [0.35 + 0.65 * (k + 1) / n for k in range(n)]
+        for k, row in enumerate(r["rows"]):
+            xs = [i - 0.4 + width * (k + 0.5) for i in range(len(tasks))]
+            ax.bar(xs, [row["ranges"][t] for t in tasks], width * 0.9, color=[
+                TASK_COLORS[i % len(TASK_COLORS)] for i in range(len(tasks))], alpha=shades[k],
+                edgecolor="none")
+            for x, t in zip(xs, tasks):
+                v = row["ranges"][t]
+                if np.isfinite(v):
+                    ax.text(x, v, "%s\n%s" % (row["time"].split()[0][:5], row["pct"].replace(" ", "")), ha="center",
+                            va="bottom", fontsize=6, rotation=0)
+        for i, t in enumerate(tasks):
+            ax.plot([i - 0.42, i + 0.42], [r["base"][t]] * 2, color="black", lw=1, ls="--",
+                    label="nominal (project settings)" if i == 0 else None)
+        ax.set_xticks(range(len(tasks)))
+        ax.set_xticklabels(tasks)
+        ax.set_yscale("log")
+        ax.set_ylabel("range [km]")
+        ax.set_title("DRI ranges for the Cn2 statistics - %s climate, %s (%s)" % (r["climate"], r["season"],
+                                                                                 r["analysis_atm"]))
+        ax.grid(alpha=0.3, axis="y", which="both")
+        ax.legend(fontsize=7)
+        self.plot.draw()
+        rows = [[x["label"], "%.2e" % x["cn2"]] + [self._f(x["ranges"][t]) for t in tasks] for x in r["rows"]]
+        rows.append(["Nominal (project settings)", ""] + [self._f(r["base"][t]) for t in tasks])
+        self._fill_table(["Row", "Cn2 at 2 m"] + ["%s km" % t for t in tasks], rows,
+                         [250, 90] + [110] * len(tasks))
+        self._details([("Method", [r["method"], "Engine: " + r["engine"], "Calculated: " + r["time"]]),
+                       ("Interpretation", ["The Cn2 not exceeded on 90 % of the occasions gives the range reached on "
+                                           "at least 90 % of them (at that time of day, in that season). Turbulence "
+                                           "changes by orders of magnitude over the day: around noon it limits "
+                                           "long-range identification, around sunrise it is weakest. Table C.2 values "
+                                           "are scaled to 2 m height - a higher line of sight sees less turbulence.",
+                                           "Sources: TRM4 Table C.2 (Fraunhofer IOSB long-term measurements); "
+                                           "sunrise minimum and overcast factor: Weiss-Wrana, FGAN-FOM 2003."])])
 
     def _show_global(self, r, tasks):
         task = self.task_var.get() if self.task_var.get() in tasks else tasks[-1]

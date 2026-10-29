@@ -4,7 +4,7 @@
     python run_trm4.py --list                  list the built-in templates
     python run_trm4.py --cli <template-number | project.json> [--out report.txt] [--save project.json]
                        [--limiting] [--uncertainty] [--advisor] [--min-fov DEG] [--scenario scenario.json]
-                       [--pdf-he report.pdf] [--ttp] [--quick]
+                       [--pdf-he report.pdf] [--ttp] [--quick] [--cn2-stats Arid:summer [--overcast]]
     python run_trm4.py --sfr edge.png [--out sfr.txt]   slanted-edge SFR of an edge image (ISO 12233 e-SFR)
     python -m unittest discover -s tests       run the regression / acceptance test suite
 """
@@ -38,6 +38,10 @@ def main():
     ap.add_argument("--ttp", action="store_true", help="also report TTP / V50 ranges (extension)")
     ap.add_argument("--quick", action="store_true",
                     help="geometric quick estimate only (Nyquist / diffraction, no model run, extension)")
+    ap.add_argument("--cn2-stats", metavar="CLIMATE:SEASON",
+                    help="add the ranges for the Cn2 statistics of TRM4 Table C.2, e.g. Arid:summer (climates Arid, "
+                         "Moderate, Subarctic; seasons summer, winter)")
+    ap.add_argument("--overcast", action="store_true", help="with --cn2-stats: add the overcast-noon rows")
     ap.add_argument("--sfr", metavar="IMAGE",
                     help="slanted-edge SFR of an edge region (.npy / .csv / .png / .tif); --out writes the curve "
                          "in cycles/pixel for the measured-MTF import")
@@ -89,10 +93,16 @@ def main():
     _, res = run_project(project, log)
     analyses = {}
     a.advisor = a.advisor or bool(a.pdf_he)
-    if a.limiting or a.uncertainty or a.advisor:
+    if a.limiting or a.uncertainty or a.advisor or a.cn2_stats:
         from trm4 import analysis as AN
         if a.limiting:
             analyses["limiting"] = AN.limiting_factors(project, log)
+        if a.cn2_stats:
+            climate, _sep, season = a.cn2_stats.partition(":")
+            with AN.Runner() as rn:
+                analyses["cn2stats"] = AN.cn2_statistics(project, climate.strip().capitalize(),
+                                                         (season or "summer").strip().lower(), a.overcast, log,
+                                                         runner=rn)
         if a.uncertainty:
             analyses["uncertainty"] = AN.run_uncertainty(project, log)
         if a.advisor:

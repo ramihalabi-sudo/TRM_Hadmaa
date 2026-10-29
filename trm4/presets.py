@@ -436,7 +436,10 @@ DEFAULT_PROJECT = {
                    # von Karman outer scale [m], 0 = Kolmogorov (infinite outer scale) - review Sec. 3.20
                    "L0_m": 0.0,
                    # extensions: turbulence in the Thermal category; mitigation processing as an effective r0 gain
-                   "thermal": False, "mitigation": 1.0},
+                   "thermal": False, "mitigation": 1.0,
+                   # extensions: exposure = "time" (crosswind wind_ms), short-exposure factor far (TRM4) / near / auto,
+                   # physical mitigation model (registration tilt fraction, lucky-region selection)
+                   "wind_ms": 2.0, "se_factor": "far", "mit_model": "gain", "mit_alpha": 0.5, "mit_select": True},
     # measured system data (Laboratory & Image Evaluation workflow)
     "measured": {"fom_file": dict(_NOFILE), "fom_kind": "MTDP", "fom_unit": "mrad", "fom_vunit": "K", "fom_use": "compare",
                  "sfr_file": dict(_NOFILE), "sfr_kind": "device", "sfr_unit": "mrad",

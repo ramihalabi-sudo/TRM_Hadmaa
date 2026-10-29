@@ -24,7 +24,8 @@ python run_trm4.py --cli 0 --ttp                                       -> incl. 
 python run_trm4.py --cli 0 --quick                                     -> geometric quick estimate, no model run
 python run_trm4.py --sfr edge.png --out sfr.txt                        -> slanted-edge SFR of an edge image
 packaging\build_exe.bat                                                -> Windows EXE (dist\TRM_HADMAAv1\)
-packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.8.exe
+packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.9.exe
+python run_trm4.py --cli 4 --cn2-stats Arid:summer --overcast         -> ranges for the Cn2 statistics (Table C.2)
 ```
 
 Installer (Inno Setup 6, `packaging/TRM_HADMAAv1.iss`): per-user installation in `%LOCALAPPDATA%\Programs\TRM_HADMAAv1`
@@ -61,6 +62,28 @@ the local copy in `detector_lookup_HTML/`) a few seconds after start-up and ever
 *Close* keeps an item unread (it is shown again at the next start); *Mark as read* / *Mark all as read* hide it for
 good (ids stored under `atlas_news` in `%APPDATA%\TRM4\settings.json`). *News > Detector Atlas news...* reopens the
 window, including already-read items.
+
+## Version 2.9 - turbulence stage 2: exposure time, short-exposure regime, physical mitigation, Cn2 statistics
+
+From the turbulence literature review (research notes in this session: TRM4 documentation, FGAN-FOM / IOSB, TNO,
+Ben-Gurion University, AFRL / University of Dayton, Purdue). Engine version 2.9; the TRM4 defaults (short exposure,
+factor 1/2, no mitigation) are unchanged and the template ranges are bit-identical.
+
+One general form of the turbulence phase structure function carries all regimes:
+phi = phi_LE [1 - f a (lambda r / D)^(1/3)], with a the fraction of the image tilt removed (1 short exposure, 0 long
+exposure) and f the short-exposure factor (1/2 far field, 1 near field). For f = 1 the residual tilt is exactly the
+Gaussian of Hardie et al. 2021, Eq. (34) (test).
+
+| Item | Implementation | Source / limits |
+|---|---|---|
+| Exposure-time turbulence MTF | *Type of MTF: Exposure-time dependent* with a new input *crosswind speed*. Window tau = eye integration time (video observer; the frame integration if longer) or the frame exposure (still, algorithm). a = (D / (D + v tau))^(1/3). Visible template, v = 2 m/s, 0.1 s: a = 0.48, Recognition 7.89 km (short 8.18, long 7.68). | TRM4 Sec. 2.28.1 recommends short exposure (the observer ignores the image motion) while Sec. 4 says an eye integrating 100 - 200 ms sees long exposure - this option resolves it. Effective aperture D + v tau: Azoulay (FGAN 1990), used by Weiss-Wrana (FGAN-FOM 2003). Frozen flow; turbulence evolution during tau neglected (more blur). |
+| Short-exposure factor | *Short-exposure term*: far field 1/2 (TRM4 Eq. 4.83, default), near field 1, or auto 1/2 + 1/2 min(1, D / sqrt(lambda L)) per wavelength and range. System data shows D / sqrt(lambda L) and the factor used. Visible template, Cn2 1e-14: near field +8 % Recognition; at Cn2 9.2e-13 (arid noon): +14 %. | Fried (1966) limits; Tofsted (2011, 2014): the near-field form holds down to D ~ sqrt(lambda L). The auto mode interpolates linearly between the two limits (assumption). |
+| Physical mitigation model | *Mitigation processing model: Physical*: registration removes a fraction a of the tilt (input, default 0.5), lucky-region selection among the N frames of the frame integration: Fried P = 5.6 exp[-0.1557 (D/r0)^2] per frame, a lucky region behaves as D/r0 = 3.34 (1 rad^2 tilt-removed phase variance, Noll), expected MTF = p MTF_lucky + (1 - p) MTF, p = 1 - (1 - P)^N. Frame averaging = frame integration, deconvolution = digital filter with *Credit sharpening* (existing TRM4 inputs, so the noise is consistent). The empirical r0 gain stays as the other model. | Hardie et al. 2021 (tilt correction factor); Fried 1978; van Eekeren et al. (IOSB / TNO) 2014: +10 to +18 % (3 x 3 m targets) and +18 to +25 % (5 x 5 m). Visible template against the unprocessed video (exposure-time MTF, 2 m/s): registration + selection (N = 10) +1 to +2 % at Cn2 1e-14, +4 to +8 % at 1e-13; with credited sharpening (boost 1.4) +3 to +6 % and +5 to +12 % - conservative against the published values. Note that the TRM4 short-exposure MTF already assumes all tilt removed. |
+| Cn2 statistics | Sensitivity tab *Cn2 statistics* (and `--cn2-stats CLIMATE:SEASON [--overcast]`): climate (Arid / Moderate / Subarctic) and season from TRM4 Table C.2 - noon and night, the Cn2 not exceeded on 50 % and 90 % of the occasions (at 2 m, simplified height dependence); optional overcast noon (Cn2 x 0.1); arid summer adds the typical sunrise minimum (2e-15). Cards, bar chart, table, CSV, text report; process pool. Visible template, arid summer: Recognition noon 1.80 - 1.89 km, night 5.1 - 7.7 km, sunrise 9.2 km (nominal 8.18 km at Cn2 1e-14). | Table C.2: Fraunhofer IOSB long-term scintillometer measurements (TRM4 cites Weiss-Wrana & Balfour, SPIE 4358, 2001). Sunrise minimum and "clouds reduce the midday Cn2 by 1 - 2 orders": Weiss-Wrana, FGAN-FOM 2003 (x 0.1, the smaller reduction, is used). Thermal needs the turbulence extension. |
+
+`tests/test_turbulence_stage2.py` covers these items. Not done (need the full papers or data): Cn2 from macro-
+meteorology (Sadot & Kopeika 1992; Bendersky, Kopeika & Blaunstein 2004 for coastal Israel), the Middle East vertical
+profile (Zilberman & Kopeika 2005), anisoplanatism / scintillation diagnostics and r0 measured from video.
 
 ## Version 2.8 - Cn2 altitude profile, tone mapping, lab tools, CLI, CI and a Windows EXE
 
