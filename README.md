@@ -24,7 +24,14 @@ python run_trm4.py --cli 0 --ttp                                       -> incl. 
 python run_trm4.py --cli 0 --quick                                     -> geometric quick estimate, no model run
 python run_trm4.py --sfr edge.png --out sfr.txt                        -> slanted-edge SFR of an edge image
 packaging\build_exe.bat                                                -> Windows EXE (dist\TRM_HADMAAv1\)
+packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.8.exe
 ```
+
+Installer (Inno Setup 6, `packaging/TRM_HADMAAv1.iss`): per-user installation in `%LOCALAPPDATA%\Programs\TRM_HADMAAv1`
+(no administrator rights), Start menu and optional desktop shortcut, uninstall entry in Windows Settings, English /
+Hebrew setup dialogs, Windows 10 / 11 x64. Installing does not touch this source folder; after code changes run
+`packaging\build_installer.bat` again and install the new setup over the old one. User guide (Hebrew):
+`USER_GUIDE_HE.md`.
 
 ### Hebrew DRI report (PDF)
 
