@@ -656,7 +656,17 @@ PARAM_HE = {
     "Cut-on wavelength": "אורך גל תחתון", "Cut-off wavelength": "אורך גל עליון", "Target width": "רוחב מטרה",
     "Target dT": "הפרש טמפרטורה ΔT", "Atmosphere": "אטמוספרה", "Extinction (atm 1)": "מקדם דעיכה (אטמוספרה 1)",
     "Visibility (atm 1)": "טווח ראות (אטמוספרה 1)", "Turbulence Cn2": "טורבולנציה Cn²",
+    "Background temperature": "טמפרטורת רקע", "Detection criterion (cycles)": "קריטריון גילוי (מחזורים)",
+    "Recognition criterion (cycles)": "קריטריון הכרה (מחזורים)",
+    "Identification criterion (cycles)": "קריטריון זיהוי (מחזורים)", "Threshold SNR (observer)": "SNR סף (צופה)",
+    "Fixed pattern noise fraction": "חלק רעש התבנית הקבועה (FPN)", "Eye integration time": "זמן אינטגרציה של העין",
+    "Pixel pitch (both axes, constant fill factor)": "גודל פיקסל (שני הצירים, יחס מילוי קבוע)",
 }
+for _n in (2, 3):
+    PARAM_HE["Visual range (atm %d)" % _n] = "טווח ראות (אטמוספרה %d)" % _n
+    PARAM_HE["Extinction coefficient (atm %d)" % _n] = "מקדם דעיכה (אטמוספרה %d)" % _n
+    PARAM_HE["Path radiance factor (atm %d)" % _n] = "גורם קרינת מסלול (אטמוספרה %d)" % _n
+PARAM_HE["Path radiance factor (atm 1)"] = "גורם קרינת מסלול (אטמוספרה 1)"
 SOURCE_HE = {"preset": "ברירת מחדל", "assumption": "הנחה", "user": "משתמש", "manufacturer": "גיליון נתונים",
              "measurement": "מדידה", "import": "יבוא", "profile": "פרופיל מצלמה"}
 UNIT_HE = {"um": "µm", "1/km": "1/km", "e-": "e⁻"}
@@ -666,7 +676,8 @@ SHORT_HE = {"lens_long_sameF": "עדשה ארוכה, אותו F/#", "lens_long_s
             "read_noise_lower": "רעש קריאה נמוך", "frame_rate_lower": "קצב פריימים נמוך",
             "tint_longer": "אינטגרציה ארוכה", "transmission_up": "תמסורת גבוהה",
             "optics_quality": "אופטיקה מוגבלת־עקיפה", "stabilization": "ייצוב משופר",
-            "env_clear": "אטמוספרה צלולה (תרחיש)"}
+            "env_clear": "אטמוספרה צלולה (תרחיש)", "fpn_lower": "תיקון אי־אחידות משופר",
+            "display_magnification": "הגדלת תצוגה", "display_brighter": "תצוגה בהירה יותר"}
 LABEL_HE = {
     "lens_long_sameF": lambda n, l: "עדשה ארוכה יותר באותו יחס מוקד: f ×{0} ו־D ×{1}".format(*n),
     "lens_long_sameD": lambda n, l: "אורך מוקד ארוך יותר באותו מפתח: f ×{0} (F/# ×{1})".format(*n),
@@ -685,6 +696,10 @@ LABEL_HE = {
     "stabilization": lambda n, l: "ייצוב משופר: תנועת קו ראייה שיורית ×{0}".format(*n),
     "env_clear": lambda n, l: ("אטמוספרה צלולה יותר: טווח ראות ×{0} (תרחיש)" if "visual" in l else
                                "אטמוספרה צלולה יותר: מקדם דעיכה ×{0} (תרחיש)").format(*n),
+    "fpn_lower": lambda n, l: "תיקון אי־אחידות (NUC) משופר: רעש תבנית קבועה שיורי ×{0}".format(*n),
+    "display_magnification": lambda n, l: ("עינית בעלת אורך מוקד קצר יותר: {0} → {1} mm" if "eyepiece" in l else
+                                           "מרחק צפייה קצר יותר: {0} → {1} cm").format(*n),
+    "display_brighter": lambda n, l: "תצוגה בהירה יותר: {0} → {1} cd/m²".format(*n),
 }
 TRADE_HE = {
     "Narrower FOV": "שדה ראייה צר יותר",
@@ -707,6 +722,12 @@ TRADE_HE = {
                                                                            "נמוכה יותר של האופטיקה",
     "Optics cost": "עלות אופטיקה",
     "Gimbal / stabilizer cost and mass": "עלות ומסה של גימבל / מייצב",
+    "More frequent NUC / shutter interruptions, or a better calibration table": "יותר הפסקות NUC / תריס, או טבלת "
+                                                                                 "כיול טובה יותר",
+    "Higher system magnification: display pixels become visible": "הגדלת מערכת גבוהה יותר: פיקסלי התצוגה נעשים "
+                                                                  "נראים",
+    "Ergonomics / eye relief": "ארגונומיה / מרחק עין",
+    "Night adaptation and light discipline": "הסתגלות לילה ומשמעת אור",
 }
 NOTE_HE = {
     "The imported optics MTF belongs to the current lens; a new lens needs its own MTF curve (the computed effect is "
@@ -745,6 +766,11 @@ NOTE_HE = {
                                                    "בגודל פיקסל אחר ישנה אותם; הם אינם נגזרים מגודל הפיקסל.",
     "Focal length scaled to keep the FOV; aperture diameter kept, so the F-number changes.": "אורך המוקד הותאם "
         "לשמירת שדה הראייה; קוטר המפתח נשמר ולכן יחס המוקד משתנה.",
+    "The residual FPN is an estimate (fraction of the temporal noise), not a measured value - measure the residual "
+    "non-uniformity after NUC first.": "רעש התבנית הקבועה השיורי הוא אומדן (חלק מהרעש הזמני) ולא ערך מדוד – יש "
+                                       "למדוד תחילה את אי־האחידות השיורית לאחר NUC.",
+    "The eye MTF depends on the luminance mainly below about 10 cd/m2; night adaptation limits the usable "
+    "brightness.": "ה־MTF של העין תלוי בבהירות בעיקר מתחת לכ־10 cd/m²; הסתגלות לילה מגבילה את הבהירות השימושית.",
 }
 VALIDATE_HE = {
     "focal_length": "צילום מטרת בדיקה (או מטרה מייצגת) באותו מסלול עם שני אורכי המוקד; מדידת MTF / SFR של העדשה "
@@ -758,11 +784,13 @@ VALIDATE_HE = {
     "transmission": "מדידת תמסורת ספקטרלית של האופטיקה לפני ואחרי ניקוי / ציפוי.",
     "optics_quality": "מדידת MTF / SFR של העדשה (ISO 12233) ובדיקת מיקוד לפני החלטה על החלפת אופטיקה.",
     "motion": "מדידת jitter על הפלטפורמה (סדרת זמן / PSD) לפני ואחרי שיפור הייצוב.",
+    "fpn": "מדידת אי־האחידות השיורית (RNU / ietd) לפני ואחרי ה־NUC המשופר, באותה טמפרטורת רקע.",
+    "display": "ניסוי צופים עם התצוגה / מרחק הצפייה החדשים וכיול ה־SNR הסף לפני הסקת מסקנות על הטווח.",
     "environment": "תיעוד ראות / לחות בזמן הניסוי; אין זה שינוי במערכת.",
 }
 MF_TITLE_HE = {"Optical MTF": "MTF אופטי", "Noise / NETD": "רעש / NETD", "Noise": "רעש", "Spectral QE": "QE ספקטרלי",
                "Target": "מטרה", "Atmosphere": "אטמוספרה", "Line-of-sight motion": "תנועת קו ראייה",
-               "No ranked action": "אין פעולה מדורגת"}
+               "No ranked action": "אין פעולה מדורגת", "Task criterion": "קריטריון משימה", "Observer": "צופה"}
 MONTHS_HE = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר",
              "דצמבר"]
 REFERENCES = [
@@ -878,6 +906,14 @@ def measure_first_he(key, text, rank_task):
     elif key == "Line-of-sight motion":
         body = ("לא מודלה תנועת פלטפורמה. יש להזין jitter מדוד (סדרת זמן או PSD) אם המצלמה אינה על תושבת קשיחה – "
                 "אחרת השיפור מאורך מוקד ארוך מוערך ביתר.")
+    elif key == "Task criterion":
+        body = ("קריטריוני המחזורים הם ברירת מחדל כללית. הטווח משתנה בקירוב כ־1/N, ולכן הקריטריון משפיע עליו יותר "
+                "מרוב שינויי החומרה – יש לאשר את הקריטריון עבור סט המטרות והגדרת המשימה (Johnson / STANAG / ניסוי "
+                "שדה).")
+    elif key == "Observer":
+        m = re.search(r"\(([\d.]+)\)", text)
+        body = ("ה־SNR הסף (%s) וזמן האינטגרציה של העין הם קבועי צופה כלליים. יש לכייל אותם בניסוי צופים לפני השוואת "
+                "שינויי תצוגה או רעש." % (m.group(1) if m else "-"))
     elif key == "No ranked action":
         body = ("אף פעולה ישימה אינה משפרת את טווח משימת %s בתוך האילוצים – יש להשלים את הנתונים שלהלן לפני דירוג "
                 "חלופות." % tn(rank_task))

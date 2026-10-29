@@ -1354,6 +1354,11 @@ class SensitivityTab(ttk.Frame):
         ttk.Button(bar2, text="Reset", command=self.reset).pack(side="left")
         ttk.Button(bar2, text="Export CSV...", command=self.export_csv).pack(side="left", padx=4)
         ttk.Button(bar2, text="Hebrew PDF report...", command=lambda: self.app.export_report_he()).pack(side="left")
+        ttk.Label(bar2, text="Atmosphere", style="Unit.TLabel").pack(side="left", padx=(10, 4))
+        self._atm_slots = []
+        self.atm_cb = ttk.Combobox(bar2, state="readonly", width=22, postcommand=self._atm_choices)
+        self.atm_cb.pack(side="left")
+        self.atm_cb.bind("<<ComboboxSelected>>", lambda e: self._set_atm())
         ttk.Label(bar2, text="History", style="Unit.TLabel").pack(side="left", padx=(10, 4))
         self.hist_cb = ttk.Combobox(bar2, state="readonly", width=24)
         self.hist_cb.pack(side="left", fill="x", expand=True)
@@ -1405,9 +1410,13 @@ class SensitivityTab(ttk.Frame):
         self.nb.add(self.details, text="Calculation details")
 
         # mode option variables (kept across mode switches)
-        self.sweep_fields = [(f["path"], "%s: %s" % (page, f["label"].strip()), f["unit"])
+        # fields that only feed checks or reports (AN.NO_RANGE_EFFECT) are not offered for sweeps
+        self.sweep_fields = [(f["path"], "%s: %s" % (page, f["label"].strip()) if not re.search(r"tasks\.\d+\.lp",
+                              f["path"]) else "%s: task %d criterion (line pairs)" % (page, int(f["path"].split(".")[2]) + 1),
+                              f["unit"])
                              for page, fields in TABS for f in fields
-                             if f.get("kind") in ("float", "int") and not re.search(r"tasks\.\d+\.lp|measured\.", f["path"])]
+                             if f.get("kind") in ("float", "int") and not f["path"].startswith("measured.") and
+                             f["path"] not in AN.NO_RANGE_EFFECT]
         self.sw = {ax: {"param": tk.StringVar(), "from": tk.StringVar(), "to": tk.StringVar(),
                         "n": tk.StringVar(value="7" if ax == "x" else "5"), "sampling": tk.StringVar(value="linear"),
                         "policy": tk.StringVar()} for ax in ("x", "y")}
@@ -1463,6 +1472,30 @@ class SensitivityTab(ttk.Frame):
         self.inputs_shown = show
         self.in_btn.configure(text="Hide inputs" if show else "Show inputs")
 
+    def _atm_choices(self):
+        """Active atmospheres offered for the analyses (refreshed whenever the list opens or the view changes)."""
+        try:
+            p = self.app.collect()
+        except Exception:
+            return
+        a = P.deep_merge(P.DEFAULT_PROJECT, p)["atmosphere"]
+        if a["mode"] == "spectral":
+            self._atm_slots, labels = [0], ["Imported spectral atmosphere"]
+        else:
+            vis = a["mode"] == "visibility" and p.get("category") == "Visible"
+            self._atm_slots = [i for i, at in enumerate(a["atm"]) if at.get("on")]
+            labels = [("Atm %d (V %g km)" if vis else "Atm %d (sigma %g/km)") %
+                      (i + 1, float(a["atm"][i]["V_km" if vis else "sigma"])) for i in self._atm_slots]
+        self.atm_cb.configure(values=labels)
+        slot = AN.analysis_slot(p)
+        self.atm_cb.set(labels[self._atm_slots.index(slot)] if slot in self._atm_slots else "")
+
+    def _set_atm(self):
+        i = self.atm_cb.current()
+        if 0 <= i < len(self._atm_slots):
+            self.app.project["analysis_atm"] = self._atm_slots[i]
+            self.show_mode(self.mode.get())
+
     def _request_stop(self):
         self._stop = True
         self.state_lbl.configure(text="Stopping after the current model run ...")
@@ -1499,6 +1532,7 @@ class SensitivityTab(ttk.Frame):
         for w in self.opts.winfo_children():
             w.destroy()
         getattr(self, "_opts_" + mode)()
+        self._atm_choices()
         self.in_pane.canvas.yview_moveto(0)
         self.display()
 
@@ -1507,8 +1541,9 @@ class SensitivityTab(ttk.Frame):
 
     def _opts_advisor(self):
         self._section_label(self.opts, "Range Improvement Advisor: diagnoses the bottleneck of each task, applies "
-                                       "physically consistent what-if changes (lens, aperture, detector, noise, "
-                                       "exposure, transmission, stabilization) through the same range engine and "
+                                       "physically consistent what-if changes (lens, aperture, detector, noise, fixed "
+                                       "pattern noise, exposure, transmission, stabilization, display) through the "
+                                       "same range engine, in the atmosphere chosen above, and "
                                        "ranks the three best materially different actions. Environment changes are "
                                        "shown as scenarios, never as improvements. Advisory only - the project is not "
                                        "changed.")
@@ -1993,9 +2028,13 @@ class SensitivityTab(ttk.Frame):
         if not top:
             cards.append(("No ranked action", "measure first", "see Calculation details", WARN))
         self._card_row(cards)
-        self.method_lbl.configure(text="Primary bottleneck candidate (%s): %s - %s. Advisory only: uncalibrated model "
-                                       "predictions." % (t, r["diagnosis"][t]["label"],
-                                                         "; ".join(r["diagnosis"][t]["reasons"])))
+        w = r.get("weather") or {}
+        self.method_lbl.configure(text="Primary bottleneck candidate (%s): %s - %s. Ranked in %s.%s Advisory only: "
+                                       "uncalibrated model predictions." % (
+                                           t, r["diagnosis"][t]["label"], "; ".join(r["diagnosis"][t]["reasons"]),
+                                           w.get("atmosphere", "atm 1"),
+                                           " The best action changes with the weather - see the gains per atmosphere "
+                                           "in Calculation details." if w.get("depends") else ""))
         ax = self.plot.axes(1, 1)[0]
         ok = [a for a in r["actions"] if a["ok"]]
         ok.sort(key=lambda a: a["results"][t]["gain_pct"] or 0.0)

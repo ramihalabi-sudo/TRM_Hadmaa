@@ -2944,8 +2944,23 @@ class TRM4Model:
                 add(s, "SNR (difference signal / NES)", "%.3g" % (st["ds"] / st["nes"]))
             if st["N_T"] + st["N_B"] > 0:
                 add(s, "Target contrast (N_T-N_B)/(N_T+N_B)", "%.4f" % ((st["N_T"] - st["N_B"]) / (st["N_T"] + st["N_B"])))
-            if self.turbulence_active() and self.R_ref > 0:
-                add(s, "Fried parameter r0 at reference range", "%.4g" % (self._turb_table(self.R_ref)[2] * 100), "cm")
+            # without a reference range the turbulence is evaluated at the range of the most demanding task
+            rg = res.get("range") or {}
+            R_t, at = self.R_ref, "reference range"
+            if R_t <= 0 and rg.get("atm"):
+                done = [t for t in rg["atm"][0]["tasks"] if t["R0"] is not None and np.isfinite(t["R0"])]
+                if done:
+                    R_t, at = float(done[-1]["R0"]), "the %s range (%.3g km)" % (done[-1]["name"], done[-1]["R0"])
+            if self.turbulence_active() and R_t > 0:
+                r0 = self._turb_table(R_t)[2]
+                add(s, "Fried parameter r0 at %s" % at, "%.4g" % (r0 * 100), "cm")
+                if r0 > 0:
+                    # D/r0 > 1: the aperture is turbulence-limited; lambda/r0 against the IFOV says whether a longer
+                    # focal length still resolves more (blur angle >> IFOV: optics gains are eaten by turbulence)
+                    blur = self.lam_peak * 1e-3 / r0                                  # mrad
+                    ifov = math.sqrt(self.alpha_s["h"] * self.alpha_s["v"])
+                    add(s, "Aperture / r0 (D/r0, > 1 = turbulence-limited aperture)", "%.3g" % (self.D_eff / 1000.0 / r0))
+                    add(s, "Turbulence blur lambda/r0 vs IFOV", "%.4g urad = %.2f IFOV" % (blur * 1e3, blur / ifov))
         if not self.uncooled:
             op = "Detector operating point"
             add(op, "Operating mode (gain / readout / temperature)", self.op_mode or "not stated")

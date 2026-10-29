@@ -435,6 +435,79 @@ HELP = {
                         "scaled with lambda^(6/5) and path length^(-3/5).",
     "turbulence.r0_lambda_um": "Wavelength at which r0 was measured or specified.",
     "turbulence.r0_L_km": "Path length over which r0 was measured or specified.",
+
+    # ---------------------------------------------------------------- fields documented in version 2.5
+    "basic.bin_kind": "Charge (hardware) binning sums the charge before one read-out, so the read noise is counted "
+                      "once per binned pixel. Digital binning sums n separate read-outs, so the read noise is added n "
+                      "times.",
+    "basic.exp_overlap": "Ticked: the exposure of a frame may run while the previous frame is read out, so the "
+                         "maximum exposure is the frame interval minus the guard time. Not ticked: the readout time "
+                         "is subtracted as well.",
+    "basic.guard_ms": "Dead time per frame (trigger, reset) that cannot be used for exposure. Subtracted from the "
+                      "frame interval.",
+    "basic.exp_min_ms": "Shortest exposure the camera supports. A selected integration time below it is flagged in "
+                        "the exposure budget. 0 = not specified.",
+    "basic.exp_max_ms": "Longest exposure the camera supports. A selected integration time above it is flagged in "
+                        "the exposure budget. 0 = not specified.",
+    "basic.roi": "Window / region-of-interest mode of the sensor (documentation only; the format used is the "
+                 "detector count on the Detector page).",
+    "optics.mtf_band": "Wavelength or band at which the imported MTF was computed or measured. Should match the "
+                       "imager band - a monochromatic MTF does not represent a broad band.",
+    "optics.mtf_focus": "Focus state of the imported MTF (best focus, through focus, operational focus).",
+    "optics.mtf_temp": "Lens temperature of the imported MTF. Thermal lenses defocus with temperature.",
+    "optics.mtf_uncert": "Stated uncertainty of the imported MTF (documentation; not propagated).",
+    "optics.rel_illum": "Irradiance at the field edge relative to the axis (vignetting x cos^4). Reported in the "
+                        "system data only - the ranges use the on-axis irradiance. 1 = no fall-off.",
+    "detector.qe_basis": "Area the QE refers to. Intrinsic QE is per active area; a total (EMVA 1288) QE is per full "
+                         "pixel and already contains the fill factor. A wrong choice counts the fill factor twice "
+                         "or not at all.",
+    "detector.noise_port": "Where the camera NETD was measured. RAW or after NUC is consistent with TRM; at the "
+                           "processed video output the temporal filtering is already inside the NETD and TRM would "
+                           "count the frame integration again.",
+    "detector.op_mode": "Gain, conversion gain, readout mode and sensor temperature of the stated noise and "
+                        "capacity values (documentation; reported in the system data).",
+    "detector.cap_node": "Node the storage capacity refers to. Only an input-referred camera saturation capacity "
+                         "verifies the well fill; a physical full well or a ROIC capacity may saturate later than "
+                         "the camera output.",
+    "detector.sat_e": "Saturation capacity of the camera output referred to the input in carriers. If given, the "
+                      "smallest of storage capacity, this value and the ADC full scale is the usable capacity. 0 = "
+                      "unknown.",
+    "detector.fill_limit_pct": "Highest fill of the usable capacity accepted for the brightest pixel (design margin "
+                               "against saturation). Used in the exposure budget only.",
+    "detector.bright_refl": "Reflectivity of the brightest credible object in the scene. Sets the saturation limit "
+                            "of the exposure budget (not the target signal).",
+    "detector.bright_dT_K": "Temperature of the hottest credible object above the background. Sets the saturation "
+                            "limit of the exposure budget in thermal bands.",
+    "detector.snr_req": "Pixel SNR the mission requires. The exposure budget reports the SNR at the selected and at "
+                        "the recommended integration time. 0 = not checked.",
+    "detector.dark_mode": "Single value: the dark current below is used as entered. Table: the dark current is "
+                          "interpolated (log-linear) at the sensor operating temperature from a calibration table.",
+    "detector.dark_table": "Calibration table of the dark current per pixel: one 'temperature[K] current[A]' pair "
+                           "per line, at least two rows. Outside the table the edge value is used.",
+    "detector.T_sensor_K": "Operating temperature of the focal plane array. Used to look up the dark current in the "
+                           "table; not the cold shield temperature.",
+    "stab.smear_allow_px": "Image smear per exposure the task tolerates. With linear motion the exposure budget "
+                           "limits the integration time to allowed smear x IFOV / angular rate.",
+    "turbulence.L0_m": "Outer scale of the turbulence (von Karman). A finite L0 reduces the phase error over large "
+                       "pupil separations and so the turbulence blur (first-order correction, valid for D << L0). "
+                       "0 = Kolmogorov (infinite outer scale).",
+    "atmosphere.meta.database": "Edition of the line database used for the imported spectrum (e.g. HITRAN2024) - "
+                                "needed to reproduce the data.",
+    "atmosphere.meta.rt_code": "Radiative-transfer code and version that produced the imported spectrum (e.g. "
+                               "MODTRAN 6.0).",
+    "atmosphere.meta.profile": "Temperature-pressure-humidity profile and gas concentrations of the imported "
+                               "spectrum.",
+    "atmosphere.meta.aerosol": "Aerosol model and visibility of the imported spectrum.",
+    "atmosphere.meta.resolution": "Spectral resolution / output bandpass of the imported spectrum.",
+    "measured.meta.firmware": "Camera firmware during the measurement.",
+    "measured.meta.op_mode": "Gain and readout mode during the measurement.",
+    "measured.meta.frame_rate": "Frame rate during the measurement.",
+    "measured.meta.roi": "Window / region of interest during the measurement.",
+    "measured.meta.exposure": "Exposure / integration time during the measurement.",
+    "measured.meta.f_number": "F-number of the lens during the measurement - NETD and MRTD depend on it.",
+    "measured.meta.raw_files": "References to the RAW files of the measurement (traceability).",
+    "measured.meta.calib_id": "Identifiers of the calibration sources (blackbody, collimator) traceable to a "
+                              "standard.",
 }
 
 _ADDITIONAL = re.compile(r"additional\.(pre|post)_[hv]_(type|par)$")

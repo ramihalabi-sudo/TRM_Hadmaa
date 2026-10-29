@@ -79,6 +79,22 @@ Consistency and transparency (first batch of the report's phase 1):
 
 `tests/test_consistency.py` covers these items.
 
+Analyses and advisor (rest of the report's phase 1, first part of phase 2 - no change of the template ranges):
+
+| Item | Change |
+|---|---|
+| Atmosphere of the analyses | *Atmosphere* selector on the Sensitivity tab: sweeps, uncertainty, limiting factors and the advisor evaluate the chosen active atmosphere (`analysis_atm` in the project; default the first active slot). Before: always the first result and always slot 1's extinction input - with slot 1 switched off that input had no effect. |
+| Advisor: actions | New *Better non-uniformity correction* (residual FPN x0.5; estimate-based FPN = approximate evidence) and *Display*: closer viewing distance / shorter eyepiece focal length, brighter display below 100 cd/m2 (operational, observer constants flagged). |
+| Advisor: sensitivities | Added target width, background temperature, path radiance factor (not Thermal), the cycle criterion of every task, threshold SNR and the FPN fraction - assumptions next to the hardware levers. |
+| Advisor: weather | One model run computes all active atmospheres, so every action reports its gain per atmosphere at no extra cost; the report names the best action per atmosphere and flags when it changes materially with the weather (near ties are not flagged). |
+| Advisor: measure first | Generic task criterion and generic observer constants (threshold SNR, eye integration time) are listed. |
+| Uncertainty inputs | Added aperture diameter (or F-number), pixel pitch (both axes, constant fill factor), the criterion of each task (+/-25 %, Johnson 1958 scatter), threshold SNR (+/-20 %) and eye integration time (+/-25 %, video only). Projects with stored uncertainty settings keep them; new inputs start unticked there. |
+| Sweep list | The task criteria can be swept; inputs that only feed checks, the exposure budget or the system data (`analysis.NO_RANGE_EFFECT`) are no longer offered. |
+| Turbulence diagnostics | System data: r0, D/r0 and lambda/r0 in IFOV units at the reference range, or at the range of the most demanding task when no reference range is set. |
+| Help texts | The 38 input fields without help (timing, exposure budget, capacity node, dark-current table, outer scale, metadata) now have one; a test keeps every GUI field documented. |
+
+`tests/test_analysis_scope.py` covers these items.
+
 The template DRI values are unchanged except *General - MWIR sun-lit scene*, Atm 1: Recognition 7.628 -> 7.557 km,
 Identification 3.983 -> 3.511 km. A 2,800-point frequency grid gives 7.558 / 3.511 km, i.e. the previous values
 were a grid artefact. `tests/test_invariants.py` checks that more motion, a darker display or a higher NETD never

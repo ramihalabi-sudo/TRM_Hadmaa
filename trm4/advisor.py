@@ -70,13 +70,18 @@ def geometry(project):
 
 
 def _ranges(project):
-    """Full model run -> (ranges, warnings, dashboard tasks, run result)."""
+    """Full model run -> (ranges in the analysis atmosphere, warnings, dashboard tasks, run result)."""
     _m, res = run_project(project)
     rg = res.get("range")
     if not rg or not rg["atm"]:
         raise ModelError("The advisor needs 'Field performance' mode and at least one task.")
-    return (AN.task_ranges(rg["atm"][0], below="zero"), list(res["warnings"]),
+    return (AN.task_ranges(AN.analysis_atmosphere(project, rg), below="zero"), list(res["warnings"]),
             (res.get("dashboard") or {}).get("tasks", []), res)
+
+
+def _atm_ranges(res):
+    """[(atmosphere label, {task: range km})] of every active atmosphere (one model run computes all of them)."""
+    return [(a["label"], AN.task_ranges(a, below="zero")) for a in res["range"]["atm"]]
 
 
 def baseline(project):
@@ -85,7 +90,9 @@ def baseline(project):
     ranges, warns, dtasks, res = _ranges(snap)
     rid = run_id(snap)
     return {"baseline_id": "B-" + rid[:8], "run_id": rid, "model_version": MODEL_VERSION, "time": _now(),
-            "ranges": ranges, "warnings": warns, "tasks": dtasks, "geometry": geometry(snap),
+            "ranges": ranges, "atm_ranges": _atm_ranges(res),
+            "atmosphere": AN.analysis_atmosphere(snap, res["range"])["label"],
+            "warnings": warns, "tasks": dtasks, "geometry": geometry(snap),
             "engine": AN.describe_engine(snap), "project": snap,
             "calibration": (res.get("dashboard") or {}).get("calibration", ""),
             "model": (res.get("dashboard") or {}).get("model", "")}
@@ -180,13 +187,26 @@ def sensitivity_params(p):
         out.append(("detector.noise_floor_e", "Read noise", "plain"))
     if cat == "Visible" and p["detector"]["tint_mode"] == "direct":
         out.append(("detector.tint_ms", "Integration time", "plain"))
+    n_atm = AN.analysis_slot(p) + 1
     if p["atmosphere"]["mode"] == "visibility" and cat == "Visible":
-        out.append(("atmosphere.atm.0.V_km", "Visual range (atm 1)", "plain"))
+        out.append((AN.atm_path(p, "V_km"), "Visual range (atm %d)" % n_atm, "plain"))
     elif p["atmosphere"]["mode"] != "spectral":
-        out.append(("atmosphere.atm.0.sigma", "Extinction coefficient (atm 1)", "plain"))
+        out.append((AN.atm_path(p, "sigma"), "Extinction coefficient (atm %d)" % n_atm, "plain"))
     if cat != "Visible":
         out.append(("target.dT_K", "Target temperature difference", "plain"))
+        out.append(("target.T_bg_K", "Background temperature", "plain"))
+    if cat != "Thermal" and p["mode"]["environment"] == "field":
+        out.append((AN.atm_path(p, "F_PR"), "Path radiance factor (atm %d)" % n_atm, "plain"))
+    out.append(("target.W_m", "Target width", "plain"))
     out.append(("target.H_m", "Target height", "plain"))
+    # the cycle criterion and the threshold SNR are assumptions (literature scatter), not hardware levers
+    for i, t in enumerate(p["target"]["tasks"]):
+        if t.get("on", True):
+            out.append(("target.tasks.%d.lp" % i, "%s criterion (cycles)" % t["name"], "plain"))
+    if p["display"].get("observer", "legacy") != "algorithm":
+        out.append(("display.snr_th", "Threshold SNR (observer)", "plain"))
+    if p["detector"]["fpn_mode"] == "estimate":
+        out.append(("detector.fpn_fraction", "Fixed pattern noise fraction", "plain"))
     if p["stab"]["random_on"]:
         out.append(("stab.rand_h_mrad", "Random jitter h", "plain"))
     return out
@@ -339,6 +359,38 @@ def catalogue(project, step=0.25):
         add("optics_quality", "optics_quality", "hardware", "Diffraction-limited optics (aberrations removed)",
             [("_what_if.no_aberr", True, "plain")], "approx",
             ["Upper bound: real optics keep some aberration - measure the lens MTF first."], ["Optics cost"])
+    fpn = d["fpn_mode"]
+    if fpn == "estimate" and float(d["fpn_fraction"]) > 0:
+        fpn_ch = [("detector.fpn_fraction", float(d["fpn_fraction"]) * 0.5, "plain")]
+    elif fpn == "measured" and cat == "Thermal" and float(d["ietd_mK"]) > 0:
+        fpn_ch = [("detector.ietd_mK", float(d["ietd_mK"]) * 0.5, "plain")]
+    elif fpn == "measured" and cat != "Thermal":
+        fpn_ch = [("detector." + k, float(d[k]) * 0.5, "plain") for k in ("prnu_pct", "dsnu_A") if float(d[k]) > 0]
+    else:
+        fpn_ch = []
+    if fpn_ch:
+        add("fpn_lower", "fpn", "operational", "Better non-uniformity correction: residual fixed pattern noise x0.50",
+            fpn_ch, "approx" if fpn == "estimate" else "model",
+            (["The residual FPN is an estimate (fraction of the temporal noise), not a measured value - measure the "
+              "residual non-uniformity after NUC first."] if fpn == "estimate" else []),
+            ["More frequent NUC / shutter interruptions, or a better calibration table"])
+    disp = p["display"]
+    if disp.get("observer", "legacy") != "algorithm" and not disp["neglect_eye"]:
+        eyep = disp["observation"] == "eyepiece"
+        key = "f_eyepiece_mm" if eyep else "distance_cm"
+        add("display_magnification", "display", "operational",
+            ("Shorter-focal-length eyepiece: %.3g -> %.3g mm" if eyep else "Closer viewing distance: %.3g -> %.3g cm")
+            % (float(disp[key]), float(disp[key]) * dn),
+            [("display." + key, float(disp[key]) * dn, "plain")], "approx",
+            ["Display and eye model with generic observer constants (threshold SNR %.3g, eye integration %.3g s) - "
+             "an observer trial confirms the gain." % (float(disp["snr_th"]), float(disp["t_eye_s"]))],
+            ["Higher system magnification: display pixels become visible", "Ergonomics / eye relief"])
+        if float(disp["luminance"]) < 100.0:
+            add("display_brighter", "display", "operational",
+                "Brighter display: %.3g -> %.3g cd/m2" % (float(disp["luminance"]), 2 * float(disp["luminance"])),
+                [("display.luminance", 2 * float(disp["luminance"]), "plain")], "approx",
+                ["The eye MTF depends on the luminance mainly below about 10 cd/m2; night adaptation limits the "
+                 "usable brightness."], ["Night adaptation and light discipline"])
     st = p["stab"]
     if not st["neglect"] and st.get("jitter_mode", "model") == "model" and (st["random_on"] or st["lin_on"] or
                                                                            st["sin_on"]):
@@ -350,13 +402,14 @@ def catalogue(project, step=0.25):
             add("stabilization", "motion", "hardware", "Better stabilization: residual LOS motion x0.50", ch, "model",
                 ["Use measured jitter (time series or PSD) if available."], ["Gimbal / stabilizer cost and mass"])
     atm = p["atmosphere"]
+    at = atm["atm"][AN.analysis_slot(p)]
     if atm["mode"] == "visibility" and cat == "Visible":
         add("env_clear", "environment", "environment", "Clearer atmosphere: visual range x2 (scenario)",
-            [("atmosphere.atm.0.V_km", float(atm["atm"][0]["V_km"]) * 2.0, "plain")], "model",
+            [(AN.atm_path(p, "V_km"), float(at["V_km"]) * 2.0, "plain")], "model",
             ["Environment scenario, not a hardware improvement (T-08)."], [])
     elif atm["mode"] != "spectral":
         add("env_clear", "environment", "environment", "Clearer atmosphere: extinction x0.5 (scenario)",
-            [("atmosphere.atm.0.sigma", float(atm["atm"][0]["sigma"]) * 0.5, "plain")], "model",
+            [(AN.atm_path(p, "sigma"), float(at["sigma"]) * 0.5, "plain")], "model",
             ["Environment scenario, not a hardware improvement (T-08)."], [])
     return acts
 
@@ -384,7 +437,7 @@ def evaluate_action(project, base, act):
         out.update(ok=False, reason="not a valid physical configuration: " + "; ".join(diag))
         return out, None
     try:
-        ranges, warns, dtasks, _res = _ranges(case)
+        ranges, warns, dtasks, res_case = _ranges(case)
     except ModelError as e:
         out.update(ok=False, reason="model error: %s" % e)
         return out, None
@@ -405,7 +458,10 @@ def evaluate_action(project, base, act):
         trade.insert(0, "FOV %.2f -> %.2f deg (%+.0f %%)" % (b0["fov_h_deg"], geo["fov_h_deg"], 100 * (fov_ratio - 1)))
     if abs(geo["F"] - b0["F"]) > 0.005 * b0["F"]:
         trade.append("F-number %.2f -> %.2f" % (b0["F"], geo["F"]))
-    out.update(ok=True, results=res, geometry=geo, fov_ratio=fov_ratio, notes=act["notes"] + notes,
+    # gain in every active atmosphere, matched by position (an environment action relabels its atmosphere)
+    by_atm = [(label, {t: gain(r0[t], rr.get(t))[1] for t in r0})
+              for (label, r0), (_l, rr) in zip(base["atm_ranges"], _atm_ranges(res_case))]
+    out.update(ok=True, results=res, by_atm=by_atm, geometry=geo, fov_ratio=fov_ratio, notes=act["notes"] + notes,
                tradeoffs=trade, no_effect=no_effect, new_warnings=[w for w in warns if w not in base["warnings"]],
                after_tasks=dtasks, model_version=MODEL_VERSION)
     if no_effect and act["kind"] != "environment":
@@ -490,7 +546,15 @@ def measure_first(project, diagnosis):
     if any(src(x) in weak for x in ("target.dT_K", "target.W_m", "target.H_m")):
         out.append(("Target", "Target size / signature are presets. Confirm the characteristic dimension and contrast "
                     "of the real target set - the range scales with them."))
-    if "environment" in types or any(src("atmosphere.atm.0." + x) in weak for x in ("sigma", "V_km")):
+    if p["target"].get("task_preset", "legacy") != "custom":
+        out.append(("Task criterion", "The cycle criteria are a generic preset. The range scales roughly with 1 / N, "
+                    "so the criterion moves it more than most hardware changes - confirm the criterion for the "
+                    "target set and task definition (Johnson / STANAG / field trial)."))
+    if p["display"].get("observer", "legacy") != "algorithm" and src("display.snr_th") in weak:
+        out.append(("Observer", "The threshold SNR (%.3g) and eye integration time are generic observer constants. "
+                    "Calibrate them with an observer trial before comparing display or noise changes." %
+                    float(p["display"]["snr_th"])))
+    if "environment" in types or any(src(AN.atm_path(p, x)) in weak for x in ("sigma", "V_km")):
         out.append(("Atmosphere", "The extinction is a preset. Record the visibility / humidity of the test or "
                     "import a MODTRAN-type spectral transmission (signal level, not an MTF factor)."))
     if p["stab"]["neglect"] or not (p["stab"]["random_on"] or p["stab"]["lin_on"] or p["stab"]["sin_on"]):
@@ -509,6 +573,23 @@ def _pareto(cands, task):
         a["pareto"] = not any((b["results"][task]["gain_pct"] or 0.0) >= ga and b["fov_ratio"] >= fa and
                               ((b["results"][task]["gain_pct"] or 0.0) > ga or b["fov_ratio"] > fa)
                               for b in cands if b is not a)
+
+
+def _best_by_atmosphere(cands, base, task):
+    """Best action for `task` in each active atmosphere.  'depends': in some atmosphere the best action of the
+    analysis atmosphere falls materially behind (> 2 points and > 10 % of the best gain) - near ties do not count."""
+    rows, scored = [], []
+    for i, (label, _r) in enumerate(base["atm_ranges"]):
+        s = {a["id"]: a["by_atm"][i][1].get(task) for a in cands if not a["no_effect"] and i < len(a["by_atm"])}
+        s = {k: g for k, g in s.items() if g is not None and g > NO_EFFECT_PCT}
+        best = max(s, key=s.get) if s else None
+        rows.append({"atmosphere": label, "action": best, "gain_pct": s.get(best),
+                     "label": next((a["label"] for a in cands if a["id"] == best), None)})
+        scored.append(s)
+    lead = next((r["action"] for r in rows if r["atmosphere"] == base["atmosphere"]), None)
+    depends = any(r["action"] and r["action"] != lead and
+                  r["gain_pct"] - s.get(lead, 0.0) > max(2.0, 0.1 * r["gain_pct"]) for r, s in zip(rows, scored))
+    return {"rows": rows, "depends": depends, "atmosphere": base["atmosphere"]}
 
 
 def advise(project, progress=None, stop=None, rank_task=None, min_fov_deg=0.0, step=0.25, robustness=True,
@@ -570,6 +651,7 @@ def _advise(project, base, tasks, rank_task, progress, stop, min_fov_deg, step, 
         ns = len(samples)
         for i, a in enumerate(top):
             a["robustness"] = _robustness_summary(rr[:ns], rr[ns * (i + 1):ns * (i + 2)], inputs) if ns else None
+    weather = _best_by_atmosphere(cands, base, rank_task)
     mf = measure_first(project, diag)
     if not top:
         mf.insert(0, ("No ranked action", "No feasible action improves the %s range inside the constraints - "
@@ -579,7 +661,7 @@ def _advise(project, base, tasks, rank_task, progress, stop, min_fov_deg, step, 
     return {"kind": "advisor", "time": _now(), "baseline": base_out, "base": base["ranges"], "tasks": tasks,
             "rank_task": rank_task, "constraints": {"min_fov_deg": min_fov_deg, "step_pct": 100 * step},
             "diagnosis": diag, "limiting": limiting, "sensitivities": sens, "actions": evaluated,
-            "top": [a["id"] for a in top], "measure_first": mf, "engine": base["engine"],
+            "top": [a["id"] for a in top], "measure_first": mf, "engine": base["engine"], "weather": weather,
             "method": "Counterfactual recalculation through the same TRM range engine (same target, environment and "
                       "model version); physically consistent parameter groups; ranked by the %s range gain inside "
                       "the constraints; environment changes reported as scenarios only." % rank_task}
@@ -634,6 +716,15 @@ def format_text(adv):
         if s["ok"]:
             L.append("    %-34s %s%s" % (s["label"], "  ".join("%s %+.2f" % (t, v) for t, v in s["S"].items()),
                                          "  [" + s["note"] + "]" if s["note"] else ""))
+    w = adv.get("weather")
+    if w and len(w["rows"]) > 1:
+        L.append("  Best action for %s in each active atmosphere (ranking uses %s):" % (adv["rank_task"], w["atmosphere"]))
+        for r in w["rows"]:
+            L.append("    %-34s %s" % (r["atmosphere"], "%s (%+.1f %%)" % (r["label"], r["gain_pct"]) if r["action"]
+                                       else "no action with a gain"))
+        if w["depends"]:
+            L.append("    note: the best action changes with the weather - choose the atmosphere that matters for the "
+                     "mission before deciding.")
     L.append("  Top recommendations:")
     for i, aid in enumerate(adv["top"], start=1):
         a = action_by_id(adv, aid)
@@ -643,6 +734,10 @@ def format_text(adv):
                                                                "%+.1f %%" % r["gain_pct"] if r["gain_pct"] is not None
                                                                else "no %% (R0 = 0)")
                                        for t, r in a["results"].items()))
+        if len(a.get("by_atm", [])) > 1:
+            L.append("       %s gain per atmosphere: " % adv["rank_task"] + "  ".join(
+                "%s %s" % (lab.split(" (")[0], "%+.1f %%" % g[adv["rank_task"]] if g.get(adv["rank_task"]) is not None
+                           else "n/a") for lab, g in a["by_atm"]))
         if a.get("robustness"):
             rb = a["robustness"]
             L.append("       %s gain under assumption ranges (%s): %+.3f ... %+.3f km" % (

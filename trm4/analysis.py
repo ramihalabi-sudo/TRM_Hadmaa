@@ -146,13 +146,40 @@ def has_path(d, path):
         return False
 
 
+def analysis_slot(project):
+    """Atmosphere slot (index in atmosphere.atm) the analyses evaluate: project['analysis_atm'] if that slot is
+    active, else the first active slot.  A spectral import has one atmosphere (slot 0)."""
+    a = P.deep_merge(P.DEFAULT_PROJECT, project)["atmosphere"]
+    if a["mode"] == "spectral":
+        return 0
+    on = [i for i, at in enumerate(a["atm"]) if at.get("on")]
+    want = project.get("analysis_atm")
+    return want if want in on else (on[0] if on else 0)
+
+
+def analysis_atmosphere(project, rg):
+    """The range result of the analysis atmosphere (rg['atm'] lists the active slots only)."""
+    a = P.deep_merge(P.DEFAULT_PROJECT, project)["atmosphere"]
+    if a["mode"] == "spectral":
+        return rg["atm"][0]
+    slot = analysis_slot(project)
+    i = sum(1 for at in a["atm"][:slot] if at.get("on"))
+    return rg["atm"][min(i, len(rg["atm"]) - 1)]
+
+
+def atm_path(project, key):
+    """Input path of `key` (sigma, V_km, F_PR, ...) in the analysis atmosphere slot."""
+    return "atmosphere.atm.%d.%s" % (analysis_slot(project), key)
+
+
 def model_ranges(project):
-    """Full model run -> ({task: range km}, warnings).  Raises ModelError for invalid cases."""
+    """Full model run -> ({task: range km}, warnings) in the analysis atmosphere.  Raises ModelError for invalid
+    cases."""
     _m, res = run_project(project)
     rg = res.get("range")
     if not rg or not rg["atm"]:
         raise ModelError("Range analyses need 'Field performance' mode and at least one task.")
-    return task_ranges(rg["atm"][0]), list(res["warnings"])
+    return task_ranges(analysis_atmosphere(project, rg)), list(res["warnings"])
 
 
 def task_ranges(a, below="first"):
@@ -222,6 +249,12 @@ POLICIES = {
     "detector.n_v": [("plain", "Change the format only (FOV changes, IFOV constant)")],
 }
 DEFAULT_POLICY = [("plain", "Change this parameter only; everything else held constant")]
+
+# inputs that feed consistency checks, the exposure budget or the system data only - a sweep over them returns flat
+# ranges (parameter study in reports/, Sec. 4.9); the sweep list does not offer them
+NO_RANGE_EFFECT = {"basic.fov_h_deg", "basic.fov_v_deg", "optics.F_spec", "optics.rel_illum", "display.n_h",
+                   "display.n_v", "detector.fill_limit_pct", "detector.bright_refl", "detector.bright_dT_K",
+                   "detector.snr_req", "stab.smear_allow_px", "basic.exp_min_ms"}
 
 # parameters that belong to the same physical group (2D sweeps over two of them are rejected)
 _GROUPS = [{"detector.pitch_h_um", "detector.pitch_v_um", "detector.a_h_um", "detector.a_v_um", "detector.d_um"},
@@ -514,15 +547,24 @@ UNCERTAINTY_DEFAULTS = [
     ("target.b_refl", "Background reflectivity", 15.0),
     ("target.W_m", "Target width", 10.0),
     ("target.H_m", "Target height", 10.0),
-    ("atmosphere.atm.0.sigma", "Extinction coefficient (atm 1)", 30.0),
-    ("atmosphere.atm.0.V_km", "Visual range (atm 1)", 30.0),
+    ("atmosphere.atm.*.sigma", "Extinction coefficient (atm %d)", 30.0),      # the analysis atmosphere slot
+    ("atmosphere.atm.*.V_km", "Visual range (atm %d)", 30.0),
     ("optics.f_mm", "Focal length", 2.0),
     ("optics.tau_opt", "Optics transmission", 5.0),
     ("optics.q", "Aberration parameter q", 10.0),
     ("stab.rand_h_mrad", "Random jitter h", 30.0),
     ("stab.rand_v_mrad", "Random jitter v", 30.0),
     ("turbulence.cn2", "Turbulence Cn2", 50.0),
+    ("optics.D_mm", "Aperture diameter", 2.0),
+    ("optics.F_general", "F-number", 2.0),
+    ("detector.pitch_h_um", "Pixel pitch (both axes, constant fill factor)", 1.0),
+    # cycle criteria: Johnson 1958 quotes about +/-25 % around the 50 % values (e.g. recognition 4.0 +/- 0.8)
+    ("target.tasks.*.lp", "%s criterion (cycles)", 25.0),
+    ("display.snr_th", "Threshold SNR (observer)", 20.0),
+    ("display.t_eye_s", "Eye integration time", 25.0),
 ]
+# inputs whose physical group must move together (the pitch carries the other axis and the active size)
+_CONSISTENT = {"detector.pitch_h_um": "ff2"}
 
 MEANINGS = [("bound", "Limits (+/- bound)"), ("95", "95 % interval"), ("1sigma", "1 standard deviation")]
 DISTRIBUTIONS = [("normal", "Normal"), ("uniform", "Uniform"), ("triangular", "Triangular"),
@@ -547,18 +589,41 @@ def applicable_inputs(project):
                                                            p["target"][path.split(".")[1] + "_mode"] != "effective"):
             continue
         visib = cat == "Visible" and p["atmosphere"]["mode"] == "visibility"
-        if path == "atmosphere.atm.0.sigma" and (visib or p["atmosphere"]["mode"] == "spectral"):
+        if path == "atmosphere.atm.*.sigma" and (visib or p["atmosphere"]["mode"] == "spectral"):
             continue
-        if path == "atmosphere.atm.0.V_km" and not visib:
+        if path == "atmosphere.atm.*.V_km" and not visib:
             continue
+        if path.startswith("atmosphere.atm.*."):
+            slot = analysis_slot(p)
+            path, label = path.replace("*", str(slot)), label % (slot + 1)
         if path == "optics.q" and p["optics"]["aberration"] != "q":
             continue
         if path.startswith("stab.rand") and not p["stab"]["random_on"]:
             continue
         if path == "turbulence.cn2" and not (p["turbulence"]["on"] and cat != "Thermal"):
             continue
+        if path == "optics.D_mm" and p["optics"].get("aperture") == "general":
+            continue
+        if path == "optics.F_general" and p["optics"].get("aperture") != "general":
+            continue
+        if path.startswith("display.") and p["display"].get("observer", "legacy") == "algorithm":
+            continue
+        if path == "display.t_eye_s" and p["mode"]["stream"] == "still":
+            continue
+        if path == "target.tasks.*.lp":
+            out += [("target.tasks.%d.lp" % i, label % t["name"], pct) for i, t in enumerate(p["target"]["tasks"])
+                    if t.get("on", True)]
+            continue
         out.append((path, label, pct))
     return out
+
+
+def _set_input(case, path, value):
+    """Set one uncertainty input; the pitch keeps its physical group consistent (see _CONSISTENT)."""
+    if path in _CONSISTENT:
+        apply_policy(case, path, value, _CONSISTENT[path])
+    else:
+        set_path(case, path, value)
 
 
 # Derivative step 5 %: ranges are quantised by the AMOP / range grids (steps of a few %), so a 1 % central
@@ -578,8 +643,13 @@ def uncertainty_settings(project):
     inputs = {}
     for path, label, pct in applicable_inputs(project):
         e = {"on": not stored, "pct": pct, "meaning": "bound", "dist": "normal"}
-        e.update(stored.get(path, {}))
-        if path in stored and "on" not in stored[path]:
+        key = path
+        if path not in stored and path.startswith("atmosphere.atm."):
+            # another analysis atmosphere was selected: keep the settings stored for the same input of the old slot
+            key = next((k for k in stored if k.startswith("atmosphere.atm.") and
+                        k.rsplit(".", 1)[-1] == path.rsplit(".", 1)[-1]), path)
+        e.update(stored.get(key, {}))
+        if key in stored and "on" not in stored[key]:
             e["on"] = True
         e["label"] = label
         inputs[path] = e
@@ -702,7 +772,7 @@ def uncertainty(project, items, progress=None, method="rss", correlations=None, 
         for sgn in (-1, 1):
             case = copy.deepcopy(project)
             xv = _clip(path, x0 * (1 + sgn * a))
-            set_path(case, path, xv)
+            _set_input(case, path, xv)
             try:
                 res[sgn] = (xv, run(case))
             except ModelError as e:
@@ -714,7 +784,7 @@ def uncertainty(project, items, progress=None, method="rss", correlations=None, 
         for sgn in (1, -1):
             case = copy.deepcopy(project)
             xs = _clip(path, x0 + sgn * h)
-            set_path(case, path, xs)
+            _set_input(case, path, xs)
             try:
                 rr = run(case)
             except ModelError:
@@ -770,7 +840,7 @@ def uncertainty(project, items, progress=None, method="rss", correlations=None, 
             z = L @ rng.standard_normal(len(paths)) if len(paths) else []
             case = copy.deepcopy(project)
             for r, zi in zip(rows, z):
-                set_path(case, r["path"], _clip(r["path"], r["x0"] * _sample(r["dist"], r["u_rel"], float(zi))))
+                _set_input(case, r["path"], _clip(r["path"], r["x0"] * _sample(r["dist"], r["u_rel"], float(zi))))
             try:
                 rr = run(case)
             except ModelError:
