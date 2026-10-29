@@ -337,7 +337,8 @@ DEFAULT_PROJECT = {
                "rel_illum": 1.0,
                "tau_mode": "value", "zemax_tau": {"name": "", "text": ""}, "tau_kind": "absolute",
                "tau_scope": "optics", "F_spec": 0.0},
-    "detector": {"shape": "rectangular", "a_h_um": 14.0, "a_v_um": 14.0, "d_um": 14.0, "d_hole_um": 2.0,
+    # square: GUI input state only (one entry for the pixel pair), set from the values when a project is loaded
+    "detector": {"shape": "rectangular", "square": True, "a_h_um": 14.0, "a_v_um": 14.0, "d_um": 14.0, "d_hole_um": 2.0,
                  "n_h": 640, "n_v": 512, "pitch_h_um": 15.0, "pitch_v_um": 15.0,
                  "cte_on": False, "cte_h": 0.9999, "ntr_h": 320, "cte_v": 0.9999, "ntr_v": 256,
                  "xtalk_h": 0.0, "xtalk_v": 0.0,

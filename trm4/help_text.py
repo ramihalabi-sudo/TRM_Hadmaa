@@ -18,8 +18,11 @@ HELP = {
                    "thermal time constant.",
     "mode.environment": "Field: performance at range through the atmosphere (range curves, NIIRS).\n"
                         "Laboratory: performance at the imager entrance, without atmosphere (e.g. MRTD/MTDP).",
-    "mode.ref_range_km": "Range at which the atmosphere / turbulence MTF and the MDSP are evaluated for the "
-                         "frequency-domain plots. Needed because these quantities depend on range.",
+    "mode.ref_range_km": "Range at which the range-dependent quantities are fixed (Visible / General, field): the "
+                         "frequency-domain plots (atmosphere / turbulence MTF, MDSP), the spectral signal weights, "
+                         "the reference signal state (integration time, well fill), the motion exposure window and "
+                         "the exposure budget. It can therefore change the DRI ranges, not only the plots. 0 = at "
+                         "the imager.",
     "mode.stream": "Video: the eye integrates several frames (temporal noise averaging).\n"
                    "Still: a single frame is observed, so noise is not averaged by the eye.",
     "mode.niirs": "Also compute the image-quality rating NIIRS with the General Image Quality Equation "
@@ -250,8 +253,8 @@ HELP = {
 
     # ---------------------------------------------------------------- Target & scenario
     "target.preset": "Pick a standard target (size, contrast, line pairs for each task) or define your own.",
-    "target.alt_m": "Height of the target above the ground. Used with the imager altitude for the slant-path "
-                    "geometry.",
+    "target.alt_m": "Height of the target above the ground. Used only for the height of the turbulence path (Cn2 "
+                    "height profile); the slant geometry comes from the imager flight path below.",
     "target.dT_K": "Apparent temperature difference between target and background. The thermal contrast "
                    "the imager must resolve.",
     "target.W_m": "Target width. Together with height and depth it gives the visible critical dimension.",
@@ -437,6 +440,9 @@ HELP = {
     "turbulence.r0_L_km": "Path length over which r0 was measured or specified.",
 
     # ---------------------------------------------------------------- fields documented in version 2.5
+    "detector.square": "Ticked: one entry for the pixel pitch and the active size, used for both axes. Unticked: "
+                       "separate vertical values (rectangular pixels). Set from the values when a project is loaded; "
+                       "the calculation itself only sees the horizontal and vertical values.",
     "basic.bin_kind": "Charge (hardware) binning sums the charge before one read-out, so the read noise is counted "
                       "once per binned pixel. Digital binning sums n separate read-outs, so the read noise is added n "
                       "times.",

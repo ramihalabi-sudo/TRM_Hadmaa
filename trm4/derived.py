@@ -8,6 +8,7 @@ physical calculation.  The full model (model.py) uses the same equations (TRM4 3
 """
 import math
 
+from . import mtf as M
 from . import presets as P
 
 
@@ -154,4 +155,68 @@ def compute(p):
     nv = n_sam["v"] * zoom * max(1, int(p["dsp"]["lrep"]))
     if nh > int(disp["n_h"]) or nv > int(disp["n_v"]):
         warn.append("Display has fewer elements (%dx%d) than image pixels (%dx%d)." % (disp["n_h"], disp["n_v"], nh, nv))
+    _merged_views(p, rows, warn, alpha, rN, fov, nv, t_max if fr > 0 else None)
     return rows, warn
+
+
+def _merged_views(p, rows, warn, alpha, rN, fov, nv, t_max):
+    """One principal entry per physical quantity, its counterparts shown here (roadmap phase 2): transmission
+    budget, extinction <-> visual range, integration time <-> duty cycle, system magnification, jitter in IFOV
+    units and dark current in datasheet units."""
+    o, d, disp, st = p["optics"], p["detector"], p["display"], p["stab"]
+    cat = p["category"]
+    photon = cat != "Thermal" or p["imager_type"] == "cooled"
+    O = "Optics"
+    tau = _f(o["tau_opt"]) if o.get("tau_mode", "value") == "value" else None
+    filt = 1.0 if (o.get("tau_mode") == "zemax" and o.get("tau_scope") == "system") else _f(o["tau_filter"])
+    if tau is not None:
+        qe = _f(d["qe_scale"]) if photon or d.get("uncooled_response") == "preset" else 1.0
+        rows.append((O, "Signal throughput tau_opt x tau_filter x QE scale", "%.3f" % (tau * filt * qe), ""))
+    if cat == "Visible" and p["mode"]["environment"] == "field" and p["atmosphere"]["mode"] in ("visibility",
+                                                                                                "extinction"):
+        A = "Atmosphere"
+        for i, at in enumerate(p["atmosphere"]["atm"]):
+            if not at.get("on"):
+                continue
+            if p["atmosphere"]["mode"] == "visibility" and _f(at["V_km"]) > 0:
+                rows.append((A, "Atm %d: extinction from the visual range (3.912 / V)" % (i + 1),
+                             "%.4g" % (3.912 / _f(at["V_km"])), "1/km"))
+            elif p["atmosphere"]["mode"] == "extinction" and _f(at["sigma"]) > 0:
+                rows.append((A, "Atm %d: equivalent visual range (3.912 / sigma)" % (i + 1),
+                             "%.4g" % (3.912 / _f(at["sigma"])), "km"))
+    T = "Timing"
+    if t_max and photon and d["tint_mode"] == "duty":
+        rows.append((T, "Integration time (duty x maximum)", "%.4g" % (1000.0 * _f(d["duty"]) * t_max), "ms"))
+    elif photon and d["tint_mode"] == "wellfill":
+        rows.append((T, "Integration time", "set by the well fill - see System data after the run", ""))
+    if disp.get("observer", "legacy") != "algorithm":
+        V = "Display & observer"
+        dist_m = (_f(disp["f_eyepiece_mm"]) / 1000.0 if disp["observation"] == "eyepiece" else
+                  _f(disp["distance_cm"]) / 100.0)
+        if dist_m > 0 and fov["v"] > 0:
+            m_sys = nv * _f(disp["pitch_v_mm"]) / (fov["v"] * dist_m)                    # Eq. (3.16)
+            rows.append((V, "System magnification M (displayed image angle / object angle)", "%.3g" % m_sys, ""))
+            if not disp["neglect_eye"] and m_sys > 0:
+                eye = math.exp(-M.eye_gamma(_f(disp["luminance"]), P.EYE_GAMMA) * rN["v"] / m_sys)   # Eq. (4.79)
+                rows.append((V, "Eye MTF at the detector Nyquist frequency", "%.2f" % eye, ""))
+                if eye < 0.2:
+                    warn.append("The eye MTF at the detector Nyquist frequency is %.2f (< 0.2): the display "
+                                "magnification M = %.3g limits the resolution - a shorter viewing distance, a "
+                                "larger displayed image or an eyepiece with a shorter focal length raise it."
+                                % (eye, m_sys))
+    if st.get("jitter_mode", "model") == "model" and not st["neglect"] and st["random_on"]:
+        S = "Motion"
+        for z, key in (("h", "rand_h_mrad"), ("v", "rand_v_mrad")):
+            sig = _f(st[key])
+            if sig > 0:
+                ratio = sig / alpha[z]
+                rows.append((S, "Random jitter %s in IFOV units" % z, "%.4g urad = %.2f IFOV" % (sig * 1e3, ratio), ""))
+                if ratio > 1.0 / 3.0:
+                    warn.append("Random jitter %s is %.2f IFOV (> 1/3): the motion MTF, not the pixel, limits the "
+                                "resolution." % (z, ratio))
+    if photon and not (cat == "Thermal" and d["noise_mode"] == "measured") and d.get("dark_mode", "value") == "value":
+        I = _f(d["dark_A"])
+        if I > 0:
+            area_cm2 = _f(d["pitch_h_um"]) * _f(d["pitch_v_um"]) * 1e-8
+            rows.append(("Detector", "Dark current in datasheet units", "%.4g e-/s = %.4g nA/cm2 (pixel area)" % (
+                I / 1.602176634e-19, I * 1e9 / area_cm2), ""))

@@ -95,6 +95,23 @@ Analyses and advisor (rest of the report's phase 1, first part of phase 2 - no c
 
 `tests/test_analysis_scope.py` covers these items.
 
+Input layout (roadmap phase 2 - the calculation and the template ranges are unchanged; every template loads into the
+form and is collected back without a difference):
+
+| Item | Change |
+|---|---|
+| Metadata page | New page for traceability only: description of the imported optics MTF and atmosphere, sensor operating mode, NETD test state, ROI, processing pipeline, algorithm ID / ROC definition, clutter and scene ID (24 fields, before spread over 7 pages). The original places point to it. |
+| One entry per pixel pair | *Square pixels* (Detector geometry): one entry for pitch and active size; the vertical values follow. Set from the values whenever a project, template, profile or datasheet is loaded, so rectangular pixels keep their vertical values. GUI state only - the engine reads the h / v values. |
+| Active values not hidden | The fixed pattern noise group opens when FPN is estimated (it acts on the ranges), the ADC group whenever an ADC step is set, the read noise is a base input for photon detectors, threshold SNR and eye integration time are shown as *observer calibration constants*. |
+| Checks and overrides out of the way | Measured-FOV cross-check is advanced, CCD charge transfer is legacy (shown only while used), *Neglect eye MTF* only in laboratory mode (or while ticked), target depth only for side / diagonal aspect or an oblique line of sight. |
+| Labels | Detector count "sets the FOV, not the resolution"; zoom and line / column replication "add no information"; help for reference range (it can change the ranges, not only the plots) and target altitude (turbulence path height only) corrected. |
+| Merged counterparts | The derived-value panel shows the counterpart of each principal entry: signal throughput tau_opt x tau_filter x QE scale, extinction <-> visual range (Visible), integration time in duty mode, system magnification M with the eye MTF at Nyquist (warning below 0.2), random jitter in urad and IFOV units (warning above 1/3), dark current in e-/s and nA/cm2. |
+
+Not changed on purpose: a selected integration time longer than the frame / timing / hardware limit is flagged in the
+exposure budget, not clipped (research review spec Sec. 7.3, `test_rr43_timing_violation_reported`). The six
+illumination definitions and the remaining H / V pairs of the motion inputs stay as they are.
+`tests/test_gui_layout.py` covers the layout.
+
 The template DRI values are unchanged except *General - MWIR sun-lit scene*, Atm 1: Recognition 7.628 -> 7.557 km,
 Identification 3.983 -> 3.511 km. A 2,800-point frequency grid gives 7.558 / 3.511 km, i.e. the previous values
 were a grid artefact. `tests/test_invariants.py` checks that more motion, a darker display or a higher NETD never

@@ -75,7 +75,7 @@ GLYPH = {"new": "", "open": "", "save": "", "export": "", "search": 
          "General": "", "Basic imager": "", "Optics": "", "Detector geometry": "",
          "Detector sensitivity": "", "Signal processing": "", "Display & observer": "",
          "Stabilization & MTFs": "", "Target & scenario": "", "Irradiance": "",
-         "Atmosphere & turbulence": "", "Quick setup": "", "Camera profile": "", "Validation data": ""}
+         "Atmosphere & turbulence": "", "Quick setup": "", "Camera profile": "", "Validation data": "", "Metadata": ""}
 
 PAGE_INFO = {
     "Quick setup": "Camera profile, target, atmosphere and task - all other values come from the profile and "
@@ -94,6 +94,7 @@ PAGE_INFO = {
     "Target & scenario": "Target size and signature, background, geometry and tasks",
     "Irradiance": "Illumination source for reflective (Visible / General) bands",
     "Atmosphere & turbulence": "Atmospheric transmission and turbulence MTF",
+    "Metadata": "Traceability of imported data, operating modes and processing (not used in the calculation)",
 }
 
 matplotlib.rcParams.update({
@@ -249,11 +250,32 @@ CAM_NETD = lambda p: THERMAL(p) and (p["detector"]["noise_mode"] == "measured" a
 ALGO = lambda p: p["display"].get("observer", "legacy") == "algorithm"
 R0_MODE = lambda p: p["turbulence"]["cn2_mode"] == "r0"
 ATM_DOC = lambda p: SPEC_ATM(p) or NOT_THERMAL(p) and p["atmosphere"].get("path_mode") == "import"
+# the target depth is seen only from the side / diagonal or on an oblique line of sight (Eqs. 3.81-3.84)
+TARGET_DEPTH = lambda p: p["target"]["aspect"] != "front" or (
+    p["target"]["flight"] == "angle" and p["target"]["angle_deg"] != 0 or
+    p["target"]["flight"] == "altitude" and p["target"]["altitude_m"] != 0)
 
 # Parameter levels (roadmap Section 01 disposition rules):
 #   base     KEEP / SIMPLIFY  - always shown in the Engineering workflow
 #   adv      ADVANCED         - shown with "Show advanced parameters", or when the feature is in use
 #   legacy   REMOVE           - outside the normal product scope; only shown while a project still uses it
+
+
+_SQUARE = (("pitch_h_um", "pitch_v_um"), ("a_h_um", "a_v_um"))
+
+
+def square_pixels(det):
+    """Square-pixel state of a project: vertical pitch and active size equal the horizontal ones."""
+    return all(float(det[h]) == float(det[v]) for h, v in _SQUARE)
+
+
+def apply_square(p):
+    """Square pixels: the vertical pitch and active size follow the horizontal entries (one input per pair)."""
+    d = p["detector"]
+    if d.get("square"):
+        for h, v in _SQUARE:
+            d[v] = d[h]
+    return p
 
 
 def F(path, label, kind="float", opts=None, cond=ALWAYS, unit="", level=None):
@@ -309,8 +331,10 @@ TABS = [
         F("mode.niirs", "Calculate NIIRS (GIQE 5)", "bool", cond=FIELD),
     ]),
     ("Basic imager", [
-        H("Frame rate and FOV (Sec. 2.5)"),
+        H("Frame rate (Sec. 2.5)"),
         F("basic.frame_rate", "Frame rate", unit="Hz"),
+        H("FOV cross-check (measured FOV, not used)", level="adv",
+          active=lambda p: p["basic"]["fov_mode"] == "measured"),
         F("basic.fov_mode", "FOV", "choice", [("calculate", "Calculate FOV"), ("measured", "Measured FOV (cross-check)")]),
         F("basic.fov_h_deg", "Measured horizontal FOV", cond=lambda p: p["basic"]["fov_mode"] == "measured", unit="deg"),
         F("basic.fov_v_deg", "Measured vertical FOV", cond=lambda p: p["basic"]["fov_mode"] == "measured", unit="deg"),
@@ -341,7 +365,6 @@ TABS = [
         F("basic.guard_ms", "Guard / trigger dead time per frame", unit="ms"),
         F("basic.exp_min_ms", "Hardware minimum exposure (0 = not specified)", unit="ms"),
         F("basic.exp_max_ms", "Hardware maximum exposure (0 = not specified)", unit="ms"),
-        F("basic.roi", "ROI / window mode (documentation)", "text"),
         H("Interlace (legacy video - not used by staring digital cameras)", level="legacy",
           active=lambda p: p["basic"]["interlace"] != "progressive"),
         F("basic.interlace", "Electronic interlace", "choice",
@@ -380,11 +403,7 @@ TABS = [
         F("optics.zemax_mtf_h", "Horizontal MTF uses", "choice",
           [("sagittal", "Sagittal (vertical = tangential)"), ("tangential", "Tangential (vertical = sagittal)")],
           cond=OPT_FILE),
-        F("optics.mtf_meta", "Spectrum / field / zoom-focus of the data", "text", cond=OPT_FILE),
-        F("optics.mtf_band", "Wavelength / band of the data", "text", cond=OPT_FILE),
-        F("optics.mtf_focus", "Focus state", "text", cond=OPT_FILE),
-        F("optics.mtf_temp", "Operating temperature", "text", cond=OPT_FILE),
-        F("optics.mtf_uncert", "Measurement / model uncertainty", "text", cond=OPT_FILE),
+        H("Description of the data: page 'Metadata'", cond=OPT_FILE),
         H("Component coverage of the imported MTF (no double counting)", cond=OPT_FILE),
         F("optics.mtf_incl_diffraction", "Data include diffraction (else computed and applied once)", "bool",
           cond=OPT_FILE),
@@ -423,18 +442,20 @@ TABS = [
     ]),
     ("Detector geometry", [
         H("Focal plane array (Sec. 2.9)"),
-        F("detector.n_h", "Number of horizontal detectors", "int"),
-        F("detector.n_v", "Number of vertical detectors", "int"),
-        F("detector.pitch_h_um", "Horizontal detector pitch", unit="um"),
-        F("detector.pitch_v_um", "Vertical detector pitch", unit="um"),
-        F("detector.a_h_um", "Horizontal active size", cond=lambda p: p["detector"]["shape"] in ("rectangular", "rhombic"), unit="um"),
-        F("detector.a_v_um", "Vertical active size", cond=lambda p: p["detector"]["shape"] in ("rectangular", "rhombic"), unit="um"),
+        F("detector.n_h", "Number of horizontal detectors (sets the FOV, not the resolution)", "int"),
+        F("detector.n_v", "Number of vertical detectors (sets the FOV, not the resolution)", "int"),
+        F("detector.square", "Square pixels (vertical pitch and active size = horizontal)", "bool"),
+        F("detector.pitch_h_um", "Detector pitch (horizontal)", unit="um"),
+        F("detector.pitch_v_um", "Vertical detector pitch", cond=lambda p: not p["detector"].get("square"), unit="um"),
+        F("detector.a_h_um", "Active size (horizontal)", cond=lambda p: p["detector"]["shape"] in ("rectangular", "rhombic"), unit="um"),
+        F("detector.a_v_um", "Vertical active size", cond=lambda p: p["detector"]["shape"] in ("rectangular", "rhombic") and
+          not p["detector"].get("square"), unit="um"),
         H("Detector shape", level="adv", active=lambda p: p["detector"]["shape"] != "rectangular"),
         F("detector.shape", "Detector shape", "choice", [("rectangular", "Rectangular"), ("rhombic", "Rhombic"),
                                                         ("circular", "Circular"), ("loophole", "Circular with loop-hole")]),
         F("detector.d_um", "Detector diameter (active)", cond=lambda p: p["detector"]["shape"] in ("circular", "loophole"), unit="um"),
         F("detector.d_hole_um", "Diameter of hole", cond=lambda p: p["detector"]["shape"] == "loophole", unit="um"),
-        H("Charge transfer efficiency (CCD)", level="adv", active=lambda p: p["detector"]["cte_on"]),
+        H("Charge transfer efficiency (CCD, legacy)", level="legacy", active=lambda p: p["detector"]["cte_on"]),
         F("detector.cte_on", "Charge transfer efficiency", "bool"),
         F("detector.cte_h", "Horizontal CTE", cond=lambda p: p["detector"]["cte_on"]),
         F("detector.ntr_h", "Number of horizontal transfers", "int", cond=lambda p: p["detector"]["cte_on"]),
@@ -471,12 +492,12 @@ TABS = [
         F("detector.netd_TB_K", "NETD test temperature (0 = not documented)", unit="K",
           cond=lambda p: THERMAL(p) and (p["detector"]["noise_mode"] in ("measured", "device"))),
         F("detector.t_th_ms", "Detector thermal time constant", cond=UNCOOLED, unit="ms"),
+        F("detector.noise_floor_e", "Read noise (additive floor)", cond=RADIOMETRIC, unit="e-"),
         H("Camera NETD test conditions (replaces the detector noise model - nothing is added on top)", cond=CAM_NETD),
         F("detector.netd_F", "Test F-number (0 = not documented)", cond=CAM_NETD),
         F("detector.netd_tint_ms", "Test integration time (0 = not documented)", unit="ms",
           cond=lambda p: CAM_NETD(p) and COOLED(p)),
         F("detector.netd_frames", "Frames averaged in the test", "int", cond=CAM_NETD),
-        F("detector.netd_nuc", "Gain / NUC / processing state", "text", cond=CAM_NETD),
         F("detector.noise_port", "Measurement port", "choice", [("raw", "RAW (before NUC)"), ("post_nuc", "After NUC"),
                                                                  ("processed", "Processed video output")], CAM_NETD),
         H("NETD measurement conditions (detector-level NETD)", cond=lambda p: UNCOOLED(p) and p["detector"]["noise_mode"] == "detector"),
@@ -491,7 +512,6 @@ TABS = [
         F("detector.duty", "Integration duty cycle", cond=lambda p: COOLED(p) and p["detector"]["tint_mode"] == "duty"),
         F("detector.wellfill_pct", "Well fill (of the usable capacity)", cond=lambda p: COOLED(p) and p["detector"]["tint_mode"] == "wellfill", unit="%"),
         H("Operating point and saturation capacity (one gain / readout / temperature mode)", cond=COOLED),
-        F("detector.op_mode", "Operating mode (gain, conversion gain, readout, temperature)", "text", cond=COOLED),
         F("detector.storage_e", "Full well (storage) capacity", cond=COOLED, unit="carriers"),
         F("detector.cap_node", "Capacity above refers to", "choice",
           [("unknown", "Not stated (generic)"), ("pixel", "Physical pixel full well"),
@@ -518,9 +538,8 @@ TABS = [
           cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") == "table"),
         F("detector.T_sensor_K", "Sensor operating temperature", unit="K",
           cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") == "table"),
-        F("detector.noise_floor_e", "Read noise (additive floor)", cond=RADIOMETRIC, unit="e-"),
         F("detector.noise_figure", "Noise figure (multiplicative)", cond=RADIOMETRIC),
-        H("ADC resolution", level="adv", active=lambda p: p["detector"].get("adc_bits", 0) > 0),
+        H("ADC resolution", level="adv", active=lambda p: p["detector"].get("adc_mode", "none") != "none"),
         F("detector.adc_mode", "ADC quantization noise", "choice", [("none", "Not specified"), ("carriers", "LSB in carriers"),
                                                                    ("mK", "LSB in temperature (Thermal)")]),
         F("detector.lsb_e", "LSB", cond=lambda p: p["detector"]["adc_mode"] == "carriers", unit="carriers"),
@@ -545,7 +564,7 @@ TABS = [
         F("detector.nps_stage", "Measured", "choice", [("raw", "Before processing (raw / after NUC)"),
                                                         ("processed", "After processing (delivered image)")]),
         H("Fixed pattern (spatial) noise - not the same as temporal noise", level="adv",
-          active=lambda p: p["detector"]["fpn_mode"] == "measured"),
+          active=lambda p: p["detector"]["fpn_mode"] != "none"),
         F("detector.fpn_mode", "Fixed pattern noise", "choice", [("none", "No noise"), ("measured", "Measured"),
                                                                 ("estimate", "Estimate (fraction of NETD/NES)")]),
         F("detector.ietd_mK", "IETD", cond=lambda p: THERMAL(p) and p["detector"]["fpn_mode"] == "measured", unit="mK"),
@@ -568,21 +587,13 @@ TABS = [
         F("dsp.v_type", "Vertical filter type", "choice", [("odd", "Odd"), ("even", "Even")], cond=lambda p: p["dsp"]["filter_on"]),
         F("dsp.v_coef", "Vertical coefficients c0..c4", "list", cond=lambda p: p["dsp"]["filter_on"]),
         F("dsp.credit_boost", "Credit sharpening (boost > 1) in the ranges", "bool", cond=lambda p: p["dsp"]["filter_on"]),
-        H("Processing pipeline (documentation)", level="adv",
-          active=lambda p: p["dsp"].get("pl_denoise") or p["dsp"].get("pl_compression", "none") != "none" or
-          bool(p["dsp"].get("pl_order")) or bool(p["dsp"].get("pl_version"))),
-        F("dsp.pl_denoise", "Denoising active (not modelled)", "bool"),
-        F("dsp.pl_compression", "Compression", "choice", [("none", "None"), ("lossless", "Lossless"),
-                                                          ("lossy", "Lossy (not modelled)")]),
-        F("dsp.pl_order", "Order of steps (e.g. NUC > denoise > sharpen > zoom)", "text"),
-        F("dsp.pl_version", "Kernel / algorithm version", "text"),
         H("Electronic zoom / replication", level="adv",
           active=lambda p: p["dsp"]["zoom"] > 1 or p["dsp"]["lrep"] > 1 or p["dsp"]["crep"] > 1),
-        F("dsp.zoom", "Electronic zoom factor", "int"),
+        F("dsp.zoom", "Electronic zoom factor (enlarges, adds no information)", "int"),
         F("dsp.zoom_type", "Type of zoom", "choice", [("pixel", "Pixel replication"), ("bilinear", "Bilinear interpolation")]),
-        F("dsp.lrep", "Line replication factor", "int"),
+        F("dsp.lrep", "Line replication factor (adds no information)", "int"),
         F("dsp.lrep_type", "Line replication type", "choice", [("pixel", "Pixel replication"), ("linear", "Linear interpolation")]),
-        F("dsp.crep", "Column replication factor", "int"),
+        F("dsp.crep", "Column replication factor (adds no information)", "int"),
         F("dsp.crep_type", "Column replication type", "choice", [("pixel", "Pixel replication"), ("linear", "Linear interpolation")]),
     ]),
     ("Display & observer", [
@@ -590,9 +601,7 @@ TABS = [
         F("display.observer", "Observer", "choice", [("legacy", "Legacy-neutral (TRM4 standard observer)"),
                                                      ("human", "Human - user-defined viewing conditions"),
                                                      ("algorithm", "Algorithm (reads the digital frames)")]),
-        F("display.algo_id", "Algorithm / model version ID", "text", cond=ALGO),
         F("display.algo_calib", "Calibration data set ID (empty = uncalibrated)", "text", cond=ALGO),
-        F("display.algo_roc", "ROC / false-alarm definition", "text", cond=ALGO),
         H("Observation (standard observer profile)", cond=lambda p: not ALGO(p)),
         F("display.observation", "Observation", "choice", [("direct", "Direct observation"), ("eyepiece", "Through eyepiece")],
           cond=lambda p: not ALGO(p)),
@@ -604,10 +613,13 @@ TABS = [
         F("display.pitch_h_mm", "Horizontal element pitch", unit="mm"),
         F("display.pitch_v_mm", "Vertical element pitch", unit="mm"),
         F("display.luminance", "Operational display luminance", unit="cd/m2"),
-        H("Observer model overrides", level="adv", active=lambda p: p["display"]["neglect_eye"]),
-        F("display.neglect_eye", "Neglect eye MTF", "bool"),
+        H("Observer calibration constants (TRM4 defaults)"),
         F("display.snr_th", "Threshold SNR"),
-        F("display.t_eye_s", "Eye integration time", unit="s"),
+        F("display.t_eye_s", "Eye integration time", unit="s",
+          cond=lambda p: not ALGO(p) and p["mode"]["stream"] == "video"),
+        H("Laboratory override: no eye MTF", level="adv",
+          cond=lambda p: not FIELD(p) or p["display"]["neglect_eye"], active=lambda p: p["display"]["neglect_eye"]),
+        F("display.neglect_eye", "Neglect eye MTF", "bool", cond=lambda p: not FIELD(p) or p["display"]["neglect_eye"]),
     ]),
     ("Stabilization & MTFs", [
         H("Residual stabilization / image motion (Sec. 2.19) - exposure window linked to the integration time"),
@@ -653,7 +665,7 @@ TABS = [
           [(k, k) for k in P.THERMAL_TARGETS], THERMAL),
         F("target.W_m", "Width", unit="m"),
         F("target.H_m", "Height", unit="m"),
-        F("target.D_m", "Depth", unit="m"),
+        F("target.D_m", "Depth (seen from the side, diagonal or from above)", unit="m", cond=TARGET_DEPTH),
         F("target.aspect", "Target viewing aspect", "choice", [("front", "Front"), ("side", "Side"), ("diagonal", "Diagonal")]),
         H("Target-background signature"),
         F("target.dT_K", "Temperature difference target-background", cond=lambda p: not VISIBLE(p), unit="K"),
@@ -684,11 +696,6 @@ TABS = [
         F("target.flight", "Imager flight path", "choice", [("altitude", "Constant altitude"), ("angle", "Constant angle")]),
         F("target.altitude_m", "Altitude relative to target", cond=lambda p: p["target"]["flight"] == "altitude", unit="m"),
         F("target.angle_deg", "Observation angle (down = positive)", cond=lambda p: p["target"]["flight"] == "angle", unit="deg"),
-        H("Background clutter (documentation - not modelled)", level="adv",
-          active=lambda p: p["target"].get("clutter", "not_specified") != "not_specified" or bool(p["target"].get("scene_id"))),
-        F("target.clutter", "Background clutter", "choice", [("not_specified", "Not specified"), ("low", "Low"),
-                                                             ("medium", "Medium"), ("high", "High")]),
-        F("target.scene_id", "Scene / clutter measurement ID", "text"),
         H("Task and number of line pairs (standard criteria)"),
         F("target.task_preset", "Criteria preset (version)", "choice", [(k, v[0]) for k, v in P.TASK_PRESETS.items()]),
     ] + [f for i in range(3) for f in (F("target.tasks.%d.on" % i, "Task %d active" % (i + 1), "bool"),
@@ -748,15 +755,7 @@ TABS = [
           cond=lambda p: NOT_THERMAL(p) and p["atmosphere"].get("path_mode") == "import"),
         F("atmosphere.path_L_km", "Path length of the data (single column)", unit="km",
           cond=lambda p: NOT_THERMAL(p) and p["atmosphere"].get("path_mode") == "import"),
-        H("Imported atmospheric data - documentation", cond=ATM_DOC),
-        F("atmosphere.meta.geometry", "Path geometry (horizontal / slant, altitudes)", "text", cond=ATM_DOC),
-        F("atmosphere.meta.source", "Generating model / source (e.g. MODTRAN version)", "text", cond=ATM_DOC),
-        F("atmosphere.meta.conditions", "Conditions (humidity, temperature, pressure, date)", "text", cond=ATM_DOC),
-        F("atmosphere.meta.database", "Spectroscopy database edition (e.g. HITRAN2024)", "text", cond=ATM_DOC),
-        F("atmosphere.meta.rt_code", "Radiative-transfer code / version", "text", cond=ATM_DOC),
-        F("atmosphere.meta.profile", "T-p-h profile / gas concentrations", "text", cond=ATM_DOC),
-        F("atmosphere.meta.aerosol", "Aerosol model / visibility", "text", cond=ATM_DOC),
-        F("atmosphere.meta.resolution", "Spectral resolution / output bandpass", "text", cond=ATM_DOC),
+        H("Description of the imported data: page 'Metadata'", cond=ATM_DOC),
         H("Turbulence (Sec. 2.28)", cond=NOT_THERMAL),
         F("turbulence.on", "Consider turbulence", "bool", cond=NOT_THERMAL),
         F("turbulence.cn2_preset", "Scenario default (Table C.2)", "choice",
@@ -782,6 +781,40 @@ TABS = [
           cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"] and p["turbulence"]["cn2_mode"] == "height"),
         F("turbulence.L0_m", "Outer scale L0, von Karman (0 = Kolmogorov)", unit="m",
           cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"]),
+    ]),
+    ("Metadata", [
+        H("Imported optics MTF", cond=OPT_FILE),
+        F("optics.mtf_meta", "Spectrum / field / zoom-focus of the data", "text", cond=OPT_FILE),
+        F("optics.mtf_band", "Wavelength / band of the data", "text", cond=OPT_FILE),
+        F("optics.mtf_focus", "Focus state", "text", cond=OPT_FILE),
+        F("optics.mtf_temp", "Operating temperature", "text", cond=OPT_FILE),
+        F("optics.mtf_uncert", "Measurement / model uncertainty", "text", cond=OPT_FILE),
+        H("Imported atmospheric data", cond=ATM_DOC),
+        F("atmosphere.meta.geometry", "Path geometry (horizontal / slant, altitudes)", "text", cond=ATM_DOC),
+        F("atmosphere.meta.source", "Generating model / source (e.g. MODTRAN version)", "text", cond=ATM_DOC),
+        F("atmosphere.meta.conditions", "Conditions (humidity, temperature, pressure, date)", "text", cond=ATM_DOC),
+        F("atmosphere.meta.database", "Spectroscopy database edition (e.g. HITRAN2024)", "text", cond=ATM_DOC),
+        F("atmosphere.meta.rt_code", "Radiative-transfer code / version", "text", cond=ATM_DOC),
+        F("atmosphere.meta.profile", "T-p-h profile / gas concentrations", "text", cond=ATM_DOC),
+        F("atmosphere.meta.aerosol", "Aerosol model / visibility", "text", cond=ATM_DOC),
+        F("atmosphere.meta.resolution", "Spectral resolution / output bandpass", "text", cond=ATM_DOC),
+        H("Sensor operating point and readout"),
+        F("detector.op_mode", "Operating mode (gain, conversion gain, readout, temperature)", "text", cond=COOLED),
+        F("detector.netd_nuc", "Camera NETD test: gain / NUC / processing state", "text", cond=CAM_NETD),
+        F("basic.roi", "ROI / window mode", "text"),
+        H("Processing pipeline (not modelled)"),
+        F("dsp.pl_denoise", "Denoising active (not modelled)", "bool"),
+        F("dsp.pl_compression", "Compression", "choice", [("none", "None"), ("lossless", "Lossless"),
+                                                          ("lossy", "Lossy (not modelled)")]),
+        F("dsp.pl_order", "Order of steps (e.g. NUC > denoise > sharpen > zoom)", "text"),
+        F("dsp.pl_version", "Kernel / algorithm version", "text"),
+        H("Algorithm observer", cond=ALGO),
+        F("display.algo_id", "Algorithm / model version ID", "text", cond=ALGO),
+        F("display.algo_roc", "ROC / false-alarm definition", "text", cond=ALGO),
+        H("Scene and background clutter (not modelled)"),
+        F("target.clutter", "Background clutter", "choice", [("not_specified", "Not specified"), ("low", "Low"),
+                                                             ("medium", "Medium"), ("high", "High")]),
+        F("target.scene_id", "Scene / clutter measurement ID", "text"),
     ]),
     ("Validation data", [
         H("Measured performance curve (MTDP / MRTD / MCP)"),
@@ -3078,6 +3111,8 @@ class App(tk.Tk):
 
     def _load_into_form(self, project, saved=True):
         self.project = P.deep_merge(P.DEFAULT_PROJECT, project)
+        # one entry per pixel pair whenever the loaded values allow it (old projects have no square flag)
+        self.project["detector"]["square"] = square_pixels(self.project["detector"])
         self._edit_order = {}
         for path in self.vars:
             try:
@@ -3170,6 +3205,7 @@ class App(tk.Tk):
                     set_path(p, path, val)
                 except ValueError:
                     errors.append("%s: invalid value %r" % (f["label"].strip(), var.get() if var else ""))
+        apply_square(p)
         if strict and errors:
             raise ValueError("\n".join(errors))
         return p
@@ -3194,6 +3230,9 @@ class App(tk.Tk):
     def refresh(self):
         p = self.collect()
         self.project = p
+        if p["detector"].get("square"):                 # hidden vertical entries show the values in use
+            for _h, v in _SQUARE:
+                self._set_value("detector." + v, p["detector"][v])
         # keep duplicated widgets (Quick setup and the detailed pages) in step
         for path, entries in self.vars.items():
             if len(entries) > 1:
@@ -4547,6 +4586,7 @@ class DetectorDialog(tk.Toplevel):
             return
         a = self.app
         errors, n = [], 0
+        applied = {}
         for path, label, on, get in self.rows:
             if not on.get():
                 continue
@@ -4565,6 +4605,7 @@ class DetectorDialog(tk.Toplevel):
                 continue
             a._set_value(path, val)
             a._set_source(path, "manufacturer")
+            applied[path] = val
             n += 1
             # switch the related mode so the applied value is actually used
             if path == "detector.qe_custom":
@@ -4581,6 +4622,10 @@ class DetectorDialog(tk.Toplevel):
                 a._set_value("detector.adc_mode", "carriers")
             elif path == "category":
                 a._set_value("imager_type", "cooled" if val == "Thermal" else "staring")
+        if any("detector." + v in applied for _h, v in _SQUARE):
+            # a datasheet with its own vertical values decides whether the pixel is square
+            cur = {k: applied.get("detector." + k, a.project["detector"][k]) for pair in _SQUARE for k in pair}
+            a._set_value("detector.square", square_pixels(cur))
         a.refresh()
         a.status.set("Applied %d detector parameter(s) - you can still edit them in the parameter tabs" % n)
         if errors:

@@ -131,9 +131,10 @@ class SweepList(unittest.TestCase):
 
     def test_every_input_field_has_help(self):
         try:
-            from trm4 import gui as G
-        except Exception as e:                                             # no Tk on this machine
-            self.skipTest("GUI not importable: %s" % e)
+            import tkinter                                                 # noqa: F401
+        except ImportError:                                                # no Tk on this machine
+            self.skipTest("tkinter not available")
+        from trm4 import gui as G
         from trm4 import help_text as HT
         missing = [f["path"] for _page, fields in G.TABS for f in fields
                    if f["kind"] not in ("header", "derived") and not HT.help_for(f["path"])]
