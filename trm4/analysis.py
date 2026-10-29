@@ -1022,7 +1022,8 @@ def cn2_statistics(project, climate="Arid", season="summer", overcast=False, pro
     """DRI ranges for the measured turbulence statistics of a climate (TRM4 Table C.2, Fraunhofer IOSB long-term
     scintillometer data): noon and night, the Cn2 not exceeded on 50 % and 90 % of the occasions.  The 90 % row is
     the range reached on at least 90 % of the occasions at that time of day.  Optional rows: overcast noon (Cn2 x 0.1,
-    clouds reduce the midday Cn2 by 1 - 2 orders) and, for arid summer, the typical sunrise minimum (~2e-15).  The
+    clouds reduce the midday Cn2 by 1 - 2 orders) and, for arid summer, the typical sunrise minimum (~1.1e-15 at 2 m,
+    Negev measurements of FGAN-FOM).  The
     turbulence settings of the project (exposure, short-exposure factor, mitigation) are kept."""
     progress = progress or _noop
     p = P.deep_merge(P.DEFAULT_PROJECT, project)

@@ -296,9 +296,11 @@ def lucky_probability(D_over_r0):
 
 
 # ---------------------------------------------------------------------------------------------
-# Turbulence statistics: Cn2 at sunrise and under an overcast sky (Weiss-Wrana, FGAN-FOM 2003)
+# Turbulence statistics: Cn2 at sunrise and under an overcast sky (Weiss-Wrana, FGAN-FOM 2003 / 2005)
 # ---------------------------------------------------------------------------------------------
-CN2_SUNRISE_ARID_SUMMER = 2e-15      # typical daily minimum around sunrise, arid summer (stable stratification)
+# typical daily minimum around sunrise in the arid summer (Negev, Israel): about 1e-15 measured at 2.3 m (FGAN-FOM
+# 2005/09), scaled to the 2 m of Table C.2 with the neutral-condition exponent -2/3: 1e-15 (2.3 / 2)^(2/3) = 1.1e-15
+CN2_SUNRISE_ARID_SUMMER = 1.1e-15
 OVERCAST_NOON_FACTOR = 0.1           # clouds reduce the midday Cn2 by 1 - 2 orders of magnitude; the smaller is used
 
 
