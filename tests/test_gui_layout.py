@@ -136,6 +136,15 @@ class Pages(unittest.TestCase):
         self.assertTrue(all("PROVISIONAL" in G._BY_PATH[p]["label"] for p in ("turbulence.wx_hour", "turbulence.wx_W")))
         self.assertTrue(callable(G.form_dialog) and callable(G.App.lab_r0))
 
+    def test_scintillation_input(self):
+        # engine 2.11: the scintillation diagnostic sits on the turbulence page and is shown with turbulence on
+        self.assertIn("turbulence.scint", self.page("Atmosphere & turbulence"))
+        self.assertTrue(self.visible("turbulence.scint", merged(VIS)))
+        self.assertFalse(self.visible("turbulence.scint", merged(VIS, turbulence__on=False)))
+        self.assertFalse(self.visible("turbulence.scint", merged(MWIR)))            # Thermal: turbulence extension
+        self.assertTrue(self.visible("turbulence.scint", merged(MWIR, turbulence__thermal=True,
+                                                                turbulence__on=True)))
+
     def test_square_flag_does_not_reach_the_ranges(self):
         p = template(LWIR)
         _m, r0 = run_project(copy.deepcopy(p))

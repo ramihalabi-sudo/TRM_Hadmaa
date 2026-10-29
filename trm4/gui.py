@@ -869,6 +869,8 @@ TABS = [
           cond=lambda p: TURB_ON(p) and p["turbulence"].get("mit_model", "gain") == "physical"),
         F("turbulence.aniso", "Anisoplanatism diagnostic: isoplanatic / tilt-correlation angle vs the target "
           "(extension, ranges unchanged)", "bool", cond=TURB_ON),
+        F("turbulence.scint", "Scintillation diagnostic: intensity fluctuation of point targets / active illumination "
+          "(extension, ranges unchanged)", "bool", cond=TURB_ON),
     ]),
     ("Metadata", [
         H("Imported optics MTF", cond=OPT_FILE),

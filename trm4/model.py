@@ -22,7 +22,7 @@ from . import imports as IM
 from . import extensions as X
 from .amop import amop as amop_sim
 
-MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.10"
+MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.11"
 MODEL_REFERENCE = "Fraunhofer IOSB TR 2021/04 (TRM4.v3 parameter description and model documentation)"
 # version of the acceptance/regression suite (kept separate from the model version, field map App. D)
 VALIDATION_VERSION = "acceptance suite FM-1.1 (field map v1.1, 14.10.2026)"
@@ -2160,6 +2160,7 @@ class TRM4Model:
                 self.progress("NIIRS calculation", 0.9)
                 res["niirs"] = self._niirs()
             self.aniso = self._anisoplanatism(res)          # diagnostic after the ranges (extension, off by default)
+            self.scint = self._scintillation(res)           # diagnostic after the ranges (extension, off by default)
         res["spectral"] = {"lam": self.lam, "qe": self.eta * 100, "w": self.w,
                            "rho_T": self.rho_T, "rho_B": self.rho_B, "eps_T": self.eps_T, "eps_B": self.eps_B,
                            "I": self.I, "tau_o": np.broadcast_to(self.tau_o, self.lam.shape).copy()}
@@ -2682,6 +2683,11 @@ class TRM4Model:
         n = math.hypot(s["nes"], s["ies"])
         return s["eds"] / n if n > 0 else float("inf")
 
+    def _blur_spot_mrad(self):
+        """Angular size [mrad] below which a target is a point (sub-pixel) target: the larger of the pixel angular pitch
+        and the diffraction blur (Airy FWHM ~ 1.03 lambda / D) at the peak wavelength (research review Sec. 3.9)."""
+        return max(max(self.pitch_eff[z] / self.f[z] for z in "hv"), 1.03 * self.lam_peak / self.D_eff)
+
     def _dashboard(self, res):
         """Compact always-visible figures (roadmap Section 09, field map Sec. 12.7 / 15.3)."""
         d = {"mtf": {}, "tasks": []}
@@ -2745,9 +2751,8 @@ class TRM4Model:
                     row["mtf_task"] = math.sqrt(max(float(np.interp(f_task, *sysm["h"], right=0.0)), 0.0) *
                                                 max(float(np.interp(f_task, *sysm["v"], right=0.0)), 0.0))
                     row["cnr_task"] = self._cnr_at(R0, atm0)
-                    # target occupancy (research review Sec. 3.9): angular target size vs the larger of the pixel
-                    # angular pitch and the diffraction blur (Airy FWHM ~ 1.03 lambda / D) at the peak wavelength
-                    blur = max(max(self.pitch_eff[z] / self.f[z] for z in "hv"), 1.03 * self.lam_peak / self.D_eff)
+                    # target occupancy (research review Sec. 3.9): angular target size vs the pixel / blur spot
+                    blur = self._blur_spot_mrad()
                     row["occupancy"] = min(ah, av) / R0 / blur
                     if row["occupancy"] < 1.0:
                         self.warn("%s range %.3g km: the target (%.3g mrad) is smaller than one pixel / blur spot "
@@ -2821,6 +2826,8 @@ class TRM4Model:
                 out.append("Cn2 from the weather (Sadot & Kopeika 1992, PROVISIONAL W table, site-specific)")
             if tb.get("aniso"):
                 out.append("anisoplanatism diagnostic (theta0, tilt-correlation angle; ranges unchanged)")
+            if tb.get("scint"):
+                out.append("scintillation diagnostic (sigma_I^2 with aperture averaging; ranges unchanged)")
         if self.compression_blur_px() > 0:
             out.append("lossy compression as %.3g px Gaussian blur" % self.compression_blur_px())
         if self.pot_mode:
@@ -3496,6 +3503,85 @@ class TRM4Model:
                           out["tilt"] * 1e6, out["tilt"] / ifov, task or "Identification"))
         return out
 
+    def _scintillation(self, res):
+        """Scintillation diagnostic (extension; the ranges are not changed): spherical-wave log-amplitude and intensity
+        variance along the Cn2 path of the line of sight, aperture-averaged over the camera aperture, at the evaluation
+        range of the turbulence diagnostics.  It matters only for point / sub-pixel targets and active illumination
+        (an extended target averages it out over the aperture and the pixels), so it warns only for a target smaller
+        than one pixel / blur spot (as in the dashboard) at a task or the reference range, or for a monochromatic
+        (laser) illumination source."""
+        tb = self.p["turbulence"]
+        if not (tb.get("scint") and self.turbulence_active()):
+            return None
+        R_t, at, _task = self._turb_eval_range(res)
+        if not R_t > 0:
+            return None
+        irr = self.p["irradiance"]
+        lam_ill = float(irr.get("lambda_um", 0.0))
+        active = (self.cat != "Thermal" and irr["mode"] != "none" and irr["type"] == "monochromatic" and
+                  self.lam[0] <= lam_ill <= self.lam[-1])
+        lam = lam_ill if active else self.lam_peak
+        D, blur = self.D_eff / 1000.0, self._blur_spot_mrad()
+
+        def occupancy(R_km):
+            ah, av, _A = self.target_dims(self.los_angle(R_km))
+            return min(ah, av) / R_km / blur
+
+        def at_range(R_km):
+            cn2_of_z, n = self._cn2_path(R_km)
+            if cn2_of_z is None:
+                # r0 mode: the uniform Cn2 that the r0 scaling (lambda^6/5 L^-3/5) implies, the same at every range
+                c = X.cn2_uniform_from_r0(float(tb["r0_cm"]) / 100.0, float(tb["r0_lambda_um"]), float(tb["r0_L_km"]))
+
+                def cn2_of_z(zz):
+                    return np.full_like(zz, c)
+                n = 201
+            s = X.scintillation(lam, R_km, cn2_of_z, D, n)
+            s.update(R=R_km, occupancy=occupancy(R_km))
+            return s
+        out = at_range(R_t)
+        out.update(at="the reference range (%.3g km)" % R_t if self.R_ref > 0 else at, lam=lam, active=active)
+        # point / sub-pixel target at the reference range or at a task range (dashboard occupancy check)
+        points = [("reference range %.3g km" % R_t, out)] if self.R_ref > 0 and out["occupancy"] < 1.0 else []
+        rg = res.get("range") or {}
+        tasks = rg["atm"][0]["tasks"] if rg.get("atm") else []
+        for t in tasks:
+            R0 = t["R0"]
+            if R0 is not None and np.isfinite(R0) and R0 > 0 and occupancy(R0) < 1.0:
+                points.append(("%s range %.3g km" % (t["name"], R0), out if R0 == R_t else at_range(R0)))
+        out["points"] = [(lab, dict(sc)) for lab, sc in points]         # copies: no reference cycle through out
+        self.assume("Scintillation diagnostic (%s; the ranges are not changed - TRM4 uses the mean signal): spherical-"
+                    "wave log-amplitude variance sigma_A^2 = 0.124 k^(7/6) L^(11/6) Cn2 (weak turbulence, Weiss-Wrana "
+                    "2005) with the Cn2 of the line of sight averaged with the spherical-wave weight [z (L - z) / "
+                    "L]^(5/6); intensity variance sigma_I^2 = exp(4 sigma_A^2) - 1 at a point and A sigma_I^2 through "
+                    "the aperture D, A = [1 + 0.214 (k D^2 / 4L)^(7/6)]^-1 (Churnside 1991, spherical wave); at %.3g "
+                    "um (%s). Valid for weak fluctuations, 4 sigma_A^2 < 1 (Andrews & Phillips 2005) - beyond it these "
+                    "values over-predict the saturating scintillation. It matters for point / sub-pixel targets and "
+                    "active illumination; an extended target averages it out over the aperture and the pixels. Time "
+                    "averaging within the exposure is not included." % (
+                        X.EXTENSION, lam, "the monochromatic illumination" if active else "peak responsivity"))
+
+        def level(sc, key):
+            if not sc["weak"]:
+                return "strong scintillation (4 sigma_A^2 = %.3g, outside the weak-turbulence regime, where the " \
+                       "formulas over-predict it)" % (4.0 * sc["sigma_A2"])
+            return "sigma_I = %.3g %% rms" % (100.0 * math.sqrt(sc[key]))
+
+        def matters(sc, key):
+            return not sc["weak"] or sc[key] >= X.SCINT_WARN_SIGMA_I ** 2
+        hits = [(lab, sc) for lab, sc in points if matters(sc, "sigma_I2")]
+        if hits:
+            self.warn("Scintillation (extension): point / sub-pixel target (smaller than one pixel / blur spot) - its "
+                      "signal through the %.3g mm aperture fluctuates from frame to frame: %s. TRM4 uses the mean "
+                      "signal; the ranges are unchanged." % (
+                          self.D_eff, "; ".join("%s: %s" % (lab, level(sc, "sigma_I2")) for lab, sc in hits)))
+        if active and matters(out, "sigma_I2_0"):
+            self.warn("Scintillation (extension): active illumination (monochromatic source at %.3g um) - at %s the "
+                      "illumination at a point of the target fluctuates: %s (spherical wave from an illuminator at the "
+                      "imager; averaging over the illuminated area reduces it). TRM4 assumes a steady illumination; "
+                      "the ranges are unchanged." % (lam, out["at"], level(out, "sigma_I2_0")))
+        return out
+
     def _turb_info(self, add, s, res):
         """r0, D/r0 and lambda/r0 in IFOV units; without a reference range the turbulence is evaluated at the range of
         the most demanding task."""
@@ -3552,6 +3638,36 @@ class TRM4Model:
                         "%.3g urad = %.3g x" % (an["size"] * 1e6, an["size"] / an["theta_t"]))
                     add(s, "Target distorts within itself (anisoplanatism, extension)", "yes - target larger than the "
                         "tilt-correlation angle, tilt >= %g IFOV" % X.ANISO_TILT_IFOV if an["distorts"] else "no")
+            sc = getattr(self, "scint", None)
+            if sc:
+                def var(v, weak):
+                    # outside the weak regime exp(4 sigma_A^2) - 1 over-predicts by orders of magnitude: no sigma_I %
+                    return "%.3g (sigma_I %.3g %%)" % (v, 100.0 * math.sqrt(v)) if weak else \
+                        "%.3g - not valid, outside the weak regime" % v
+                add(s, "Scintillation at %s, %.3g um: log-amplitude variance sigma_A^2 (spherical wave, extension)" % (
+                    sc["at"], sc["lam"]), "%.3g" % sc["sigma_A2"])
+                add(s, "  weak-turbulence regime (4 sigma_A^2 < 1)", "yes" if sc["weak"] else
+                    "no - 4 sigma_A^2 = %.3g: strong scintillation, the weak-turbulence values over-predict it" % (
+                        4.0 * sc["sigma_A2"]))
+                add(s, "  Cn2 averaged with the spherical-wave weight [z (L - z) / L]^5/6", "%.3g" % sc["cn2"],
+                    "m^-2/3")
+                add(s, "  intensity variance sigma_I^2 = exp(4 sigma_A^2) - 1 at a point",
+                    var(sc["sigma_I2_0"], sc["weak"]))
+                add(s, "  aperture averaging A for D = %.3g mm (Churnside 1991; k D^2 / 4L = %.3g)" % (
+                    self.D_eff, sc["x"]), "%.3g" % sc["A"])
+                add(s, "  sigma_I^2 through the aperture (signal of a point target)", var(sc["sigma_I2"], sc["weak"]))
+                occ = sc["occupancy"]
+                rel = ["point target (target / pixel or blur spot %.3g < 1)" % occ if occ < 1.0 else
+                       "extended target (target / pixel or blur spot %.3g): averaged over the aperture and the "
+                       "pixels" % occ]
+                if sc["active"]:
+                    rel.append("active illumination (monochromatic source): its light on the target fluctuates with "
+                               "the point value")
+                add(s, "  relevance (point / sub-pixel target, active illumination)", "; ".join(rel))
+                for lab, p in sc["points"]:
+                    if p["R"] != sc["R"]:                       # the evaluation range itself is shown above
+                        add(s, "Scintillation of the point target at the %s, through the aperture (extension)" % lab,
+                            var(p["sigma_I2"], p["weak"]))
 
     def _extension_info(self, add, res):
         """System-data rows of the TRM_HADMAA extensions (report phase 3)."""

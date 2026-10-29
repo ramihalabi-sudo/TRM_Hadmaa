@@ -4,7 +4,7 @@
 ; stays writable (camera profiles are stored next to the program).  Settings stay in %APPDATA%\TRM4 on uninstall.
 
 #define AppName "TRM_HADMAAv1"
-#define AppVersion "2.10"
+#define AppVersion "2.11"
 #define AppPublisher "TRM_HADMAA"
 #define AppExe "TRM_HADMAAv1.exe"
 

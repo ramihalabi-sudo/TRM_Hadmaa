@@ -445,7 +445,9 @@ DEFAULT_PROJECT = {
                    # preset table, local calibration factor); cn2_mode slc_night / slc_day / greenwood_good /
                    # greenwood_poor / brookner: altitude profiles of extensions.CN2_PROFILES
                    "aniso": False, "wx_T_K": 298.15, "wx_rh_pct": 40.0, "wx_wind_ms": 3.0, "wx_hour": "h5_6",
-                   "wx_W": 1.0, "wx_calib": 1.0},
+                   "wx_W": 1.0, "wx_calib": 1.0,
+                   # extension (engine 2.11): scintillation diagnostic (point / sub-pixel targets, active illumination)
+                   "scint": False},
     # measured system data (Laboratory & Image Evaluation workflow)
     "measured": {"fom_file": dict(_NOFILE), "fom_kind": "MTDP", "fom_unit": "mrad", "fom_vunit": "K", "fom_use": "compare",
                  "sfr_file": dict(_NOFILE), "sfr_kind": "device", "sfr_unit": "mrad",

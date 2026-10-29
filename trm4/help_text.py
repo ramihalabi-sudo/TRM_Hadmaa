@@ -413,6 +413,18 @@ HELP = {
                         "the target. A warning appears when the target is larger than the tilt-correlation angle and "
                         "the tilt reaches 0.5 IFOV: its parts then move independently - it distorts within itself, "
                         "which TRM4 (one MTF for the whole field) does not model; it degrades Identification most.",
+    "turbulence.scint": "Scintillation diagnostic (extension, the ranges are not changed): System data shows, at the "
+                        "evaluation range of the turbulence rows, the spherical-wave log-amplitude variance sigma_A^2 "
+                        "= 0.124 k^(7/6) L^(11/6) Cn2 (Weiss-Wrana 2005; Cn2 averaged along the line of sight with the "
+                        "weight [z (L - z) / L]^(5/6)), the intensity variance sigma_I^2 = exp(4 sigma_A^2) - 1 at a "
+                        "point, the aperture-averaging factor A = [1 + 0.214 (k D^2 / 4L)^(7/6)]^-1 (Churnside 1991) "
+                        "and A sigma_I^2 through the aperture - the frame-to-frame fluctuation of a point target's "
+                        "signal. Valid in weak turbulence (4 sigma_A^2 < 1); beyond it the values over-predict and are "
+                        "flagged (long horizontal paths near the ground often are beyond it). Scintillation matters "
+                        "for point / sub-pixel targets and active (laser) illumination; an extended target averages it "
+                        "out over the aperture and the pixels. A warning appears only for a target smaller than one "
+                        "pixel / blur spot at a task or the reference range, or for a monochromatic illumination "
+                        "source, once the rms fluctuation reaches 10 %.",
     "turbulence.cn2_preset": "Scenario default for Cn2 from TRM4 Table C.2 (climate, day/night, season, percentile). "
                              "Sets Cn2 at 2 m with the simplified height dependence. Editing Cn2 makes it 'Custom'.",
 

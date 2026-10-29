@@ -34,6 +34,13 @@ Sources (report reference numbers in brackets):
   optical communications: a review", IEEE Access 13, 21279 (2025); TRM4 App. C.7.2 on such preset profiles.
 * Cn2 from macro-meteorology: Sadot & Kopeika, Opt. Eng. 31(2), 200 (1992); fit height 15 m and transfer to Mauna
   Loa: Jellen, Nelson, Brownell & Burkhardt, "Effective benchmarks for optical turbulence modeling", AIES (2024).
+* Scintillation of a spherical wave in weak turbulence, sigma_A^2 = 0.124 k^(7/6) L^(11/6) Cn2: Weiss-Wrana,
+  "Turbulence statistics applied to calculate expected turbulence-induced scintillation effects on electro-optical
+  systems in different climate regions", FGAN-FOM 2005/09.  Spherical-wave aperture averaging A = [1 + 0.214
+  (k D^2 / 4L)^(7/6)]^-1: Churnside, "Aperture averaging of optical scintillations in the turbulent atmosphere",
+  Appl. Opt. 30(15), 1982 (1991), as reproduced in Kaushal & Kaddoum, arXiv:1506.04836 (2015), Eq. (21).  Weak
+  fluctuations = Rytov variance < 1: Andrews & Phillips, "Laser Beam Propagation through Random Media", 2nd ed., SPIE
+  Press (2005).
 """
 import math
 
@@ -437,6 +444,63 @@ def tilt_correlation_angle(D_m, R_km):
     = D / L they separate over the target half of the path, and parts of an extended target further apart move
     independently.  Literature: about 120 urad for 1 km and a 6 cm aperture (~2 D/L) against theta0 ~ 1.3 urad."""
     return float(D_m) / max(float(R_km) * 1000.0, 1e-9)
+
+
+# ---------------------------------------------------------------------------------------------
+# Turbulence: scintillation (point / sub-pixel targets, active illumination)
+# ---------------------------------------------------------------------------------------------
+# weak fluctuations: Rytov variance < 1 (Andrews & Phillips 2005); for the spherical wave it is beta0^2 = 0.5 Cn2
+# k^(7/6) L^(11/6) ~ 4 sigma_A^2, so the weak regime ends at sigma_A^2 = 0.25
+SCINT_WEAK_SIGMA_A2 = 0.25
+SCINT_WARN_SIGMA_I = 0.10         # rms intensity fluctuation from which a relevant case is warned about
+
+
+def scint_log_amplitude_variance(lam_um, L_km, cn2):
+    """Log-amplitude variance sigma_A^2 = 0.124 k^(7/6) L^(11/6) Cn2 of a spherical wave over a path of length L in
+    weak turbulence (Weiss-Wrana, FGAN-FOM 2005/09); cn2 [m^-2/3] uniform, or the path average of scint_path_cn2."""
+    k = 2.0 * math.pi / (float(lam_um) * 1e-6)
+    return 0.124 * k ** (7.0 / 6.0) * (float(L_km) * 1000.0) ** (11.0 / 6.0) * float(cn2)
+
+
+def scint_path_cn2(R_km, cn2_of_z, n=801):
+    """Cn2 [m^-2/3] of a line of sight of length R averaged with the spherical-wave weight w(z) = [z (L - z) / L]^(5/6)
+    of the Rytov theory, so that scint_log_amplitude_variance gives 0.124 / B(11/6, 11/6) k^(7/6) Int Cn2(z) w(z) dz =
+    0.562 k^(7/6) Int Cn2 w dz.  The weight is symmetric (either end may be the source) and largest at mid-path;
+    a uniform Cn2 is returned unchanged.  cn2_of_z(z) as for isoplanatic_angle."""
+    R = float(R_km) * 1000.0
+    if R <= 0:
+        return 0.0
+    z = np.linspace(0.0, R, n)
+    w = (z * (R - z) / R) ** (5.0 / 6.0)
+    return float(np.trapezoid(cn2_of_z(z) * w, z) / np.trapezoid(w, z))
+
+
+def scint_intensity_variance(sigma_A2):
+    """Normalized intensity variance (scintillation index) at a point, sigma_I^2 = exp(4 sigma_A^2) - 1 (log-normal
+    intensity; ~ 4 sigma_A^2 = 0.5 k^(7/6) L^(11/6) Cn2 in weak turbulence).  inf where exp overflows."""
+    x = 4.0 * float(sigma_A2)
+    return math.expm1(x) if x < 700.0 else float("inf")
+
+
+def aperture_averaging_spherical(lam_um, L_km, D_m):
+    """(A, k D^2 / 4L): aperture-averaging factor A = sigma_I^2(D) / sigma_I^2(0) of a spherical wave in weak
+    turbulence, A = [1 + 0.214 (k D^2 / 4L)^(7/6)]^-1 (Churnside, Appl. Opt. 30, 1982 (1991)).  1 for an aperture much
+    smaller than the Fresnel zone sqrt(lambda L), ~ D^(-7/3) for a much larger one."""
+    x = 2.0 * math.pi / (float(lam_um) * 1e-6) * float(D_m) ** 2 / (4.0 * max(float(L_km) * 1000.0, 1e-9))
+    return 1.0 / (1.0 + 0.214 * x ** (7.0 / 6.0)), x
+
+
+def scintillation(lam_um, R_km, cn2_of_z, D_m, n=801):
+    """Scintillation of a point source at the range R seen through the aperture D (spherical wave, weak turbulence):
+    dict with the path-weighted Cn2 `cn2`, `sigma_A2`, the point value `sigma_I2_0` = exp(4 sigma_A^2) - 1, the
+    aperture-averaging factor `A` and `x` = k D^2 / 4L, the value through the aperture `sigma_I2` = A sigma_I2_0 and
+    `weak` (4 sigma_A^2 < 1; outside it the weak-turbulence values over-predict the saturating scintillation)."""
+    c = scint_path_cn2(R_km, cn2_of_z, n)
+    sa2 = scint_log_amplitude_variance(lam_um, R_km, c)
+    si2 = scint_intensity_variance(sa2)
+    A, x = aperture_averaging_spherical(lam_um, R_km, D_m)
+    return {"cn2": c, "sigma_A2": sa2, "sigma_I2_0": si2, "A": A, "x": x, "sigma_I2": A * si2,
+            "weak": sa2 < SCINT_WEAK_SIGMA_A2}
 
 
 # ---------------------------------------------------------------------------------------------

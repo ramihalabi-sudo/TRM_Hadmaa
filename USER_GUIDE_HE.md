@@ -8,7 +8,7 @@
 
 **דרישות:** Windows 10 או 11, ‏64 ביט. אין צורך ב־Python ואין צורך בהרשאות מנהל.
 
-1. מעתיקים את קובץ ההתקנה (למשל `TRM_HADMAAv1_Setup_2.10.exe`) למחשב ולוחצים עליו לחיצה כפולה.
+1. מעתיקים את קובץ ההתקנה (למשל `TRM_HADMAAv1_Setup_2.11.exe`) למחשב ולוחצים עליו לחיצה כפולה.
 2. אם מופיעה ההודעה **"Windows protected your PC"** (הקובץ אינו חתום דיגיטלית): לוחצים **More info** ואז **Run anyway**.
 3. בוחרים שפה, מסמנים אם רוצים קיצור דרך בשולחן העבודה, ולוחצים **Install**.
 4. בסיום, אפשר לסמן **Launch** כדי לפתוח את התוכנה מיד.
@@ -49,6 +49,7 @@
 | טורבולנציה בנתיב אווירי | **Atmosphere & turbulence** ← *Cn2 - Hufnagel-Valley altitude profile*, או פרופיל SLC / ‏Greenwood / ‏Brookner (ממעיטים בטורבולנציה ליד הקרקע) |
 | Cn2 מנתוני מזג אוויר (טמפרטורה, לחות, רוח ושעה ביום) | **Atmosphere & turbulence** ← *Cn2 from the weather* – זמני (PROVISIONAL), צריך כיול מקומי |
 | האם המטרה "מתעוותת" בתוך עצמה (anisoplanatism) | **Atmosphere & turbulence** ← *Anisoplanatism diagnostic*; התוצאות ב־**System data** |
+| הבהוב (scintillation) של מטרה נקודתית או תת־פיקסלית, או בתאורה אקטיבית (לייזר) | **Atmosphere & turbulence** ← *Scintillation diagnostic*; התוצאות ב־**System data**. תקף בטורבולנציה חלשה בלבד; מחוץ לתחום מוצג דגל |
 | טורבולנציה לצופה בווידאו (זמן שילוב העין ורוח רוחבית) | **Atmosphere & turbulence** ← *Type of MTF: Exposure-time dependent* |
 | טווחים לפי שעה ביום ועונה (סטטיסטיקת Cn2) | לשונית **Sensitivity** ← *Cn2 statistics* (אפשר גם h^-2/3 ליום מעונן או חורפי) |
 | מודל פיזיקלי לעיבוד נגד טורבולנציה | **Atmosphere & turbulence** ← *Mitigation processing model: Physical* |
@@ -66,7 +67,7 @@
 
 ## 6. הרחבות שאינן חלק מ־TRM4
 
-מדדים כמו P80/P90, ‏TTP/V50, עומס רקע (clutter), דעיכה מנתוני מזג אוויר, פרופילי Cn2 (Hufnagel-Valley, ‏SLC, ‏Greenwood, ‏Brookner), ‏Cn2 ממזג אוויר, אבחון anisoplanatism ומיפוי טונים מסומנים בכל מקום כ־**extension**. רובם כבויים כברירת מחדל. כשהם כבויים, הטווחים זהים לאלה של TRM4.
+מדדים כמו P80/P90, ‏TTP/V50, עומס רקע (clutter), דעיכה מנתוני מזג אוויר, פרופילי Cn2 (Hufnagel-Valley, ‏SLC, ‏Greenwood, ‏Brookner), ‏Cn2 ממזג אוויר, אבחוני anisoplanatism ו־scintillation ומיפוי טונים מסומנים בכל מקום כ־**extension**. רובם כבויים כברירת מחדל. כשהם כבויים, הטווחים זהים לאלה של TRM4.
 
 ## 7. בעיות נפוצות
 

@@ -24,7 +24,7 @@ python run_trm4.py --cli 0 --ttp                                       -> incl. 
 python run_trm4.py --cli 0 --quick                                     -> geometric quick estimate, no model run
 python run_trm4.py --sfr edge.png --out sfr.txt                        -> slanted-edge SFR of an edge image
 packaging\build_exe.bat                                                -> Windows EXE (dist\TRM_HADMAAv1\)
-packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.10.exe
+packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.11.exe
 python run_trm4.py --cli 4 --cn2-stats Arid:summer --overcast         -> ranges for the Cn2 statistics (Table C.2)
 python run_trm4.py --cli 4 --cn2-stats Arid:winter --overcast --neutral-day   -> the same, overcast / winter noon h^-2/3
 python run_trm4.py --r0-frames seq.npy --lam 0.55 --focal 500 --pitch 5 --aperture 100 --path-km 2 --out r0.txt
@@ -65,6 +65,23 @@ the local copy in `detector_lookup_HTML/`) a few seconds after start-up and ever
 *Close* keeps an item unread (it is shown again at the next start); *Mark as read* / *Mark all as read* hide it for
 good (ids stored under `atlas_news` in `%APPDATA%\TRM4\settings.json`). *News > Detector Atlas news...* reopens the
 window, including already-read items.
+
+## Version 2.11 - scintillation diagnostic for point targets and active illumination
+
+Roadmap item 4 of Table 6 of `reports/מחקר טורבולנציה - שלב ב.pdf` (Sec. 4.8, Appendix B). Engine version 2.11; the
+diagnostic is an extension that is off by default and never changes a range, so the TRM4 template ranges are
+bit-identical (`tests/test_dri_reference.py`). Where it is on, it is named in the assumptions, in `extensions()` and in
+its System data rows.
+
+| Item | Implementation | Source / limits |
+|---|---|---|
+| Scintillation diagnostic | *Scintillation diagnostic* (turbulence page, `turbulence.scint`; `extensions.scintillation`, `TRM4Model._scintillation`). At the evaluation range of the turbulence rows (reference range, else the most demanding task) and the peak-responsivity wavelength (the laser wavelength with a monochromatic source): log-amplitude variance sigma_A^2 = 0.124 k^(7/6) L^(11/6) Cn2 of a spherical wave, with the Cn2 of the line of sight (`_cn2_path`, every Cn2 mode; r0 mode: the uniform Cn2 its scaling implies) averaged with the spherical-wave weight [z (L - z) / L]^(5/6) - symmetric, the **middle of the path weighs most** (r0 weighs the imager end, theta0 the target end); intensity variance sigma_I^2 = exp(4 sigma_A^2) - 1 at a point; aperture-averaging factor A = [1 + 0.214 (k D^2 / 4L)^(7/6)]^-1 for the camera aperture D and A sigma_I^2, the frame-to-frame fluctuation of a point target's signal. Flag when 4 sigma_A^2 >= 1: outside the weak regime the sigma_I rows say "not valid" instead of a percentage. Warning only where it matters, from an rms fluctuation of 10 % (or outside the weak regime): a target smaller than one pixel / blur spot (the dashboard occupancy check) at a task range or the reference range - System data then also shows the value through the aperture at that range - or a monochromatic (laser) illumination source (the point value of the illumination at the target, illuminator at the imager). Visible template, Cn2 1e-14, Identification 5.0 km at 0.65 um: 4 sigma_A^2 = 4.2, strong scintillation, flagged; the target is 9 x the pixel - no warning. Cn2 1e-16: sigma_I 23 % through the 25 mm aperture (A = 0.96). General template with a 2.3 x 1 m target, Cn2 1e-15: sub-pixel at Detection (14.1 km), sigma_I 52 % - warning. | sigma_A^2 and sigma_I^2: Weiss-Wrana, FGAN-FOM 2005/09 (report Sec. 4.8). Path weighting: weak-fluctuation (Rytov) theory of the spherical wave, 0.124 / B(11/6, 11/6) = 0.562 k^(7/6) Int Cn2 w dz. Aperture averaging: Churnside, "Aperture averaging of optical scintillations in the turbulent atmosphere", Appl. Opt. 30(15), 1982 (1991), spherical wave, weak turbulence (as reproduced in Kaushal & Kaddoum, arXiv:1506.04836, Eq. 21). Weak regime = Rytov variance < 1: Andrews & Phillips, "Laser Beam Propagation through Random Media", 2nd ed., SPIE Press (2005). Near the ground, paths of a few km are often beyond the weak regime: there the scintillation index saturates near 1 and these formulas over-predict - a strong-scintillation model (e.g. the all-regime forms of Andrews & Phillips) is not implemented. Time averaging within the exposure / eye integration and the ensquared energy of a point target are not modelled. |
+
+`tests/test_turbulence_scintillation.py` covers the formulas (hand values, path weighting, aperture-averaging limits,
+the weak-turbulence flag) and the diagnostic (off by default, ranges unchanged, point-target and active-illumination
+warnings, r0 mode); `tests/test_gui_layout.py` the new input. Still open (Table 6): a field validation in the Negev,
+the full W table of Sadot & Kopeika, the BKB albedo term, the Middle East vertical profile (Zilberman & Kopeika 2005)
+and a strong-scintillation model.
 
 ## Version 2.10 - turbulence research stage B: anisoplanatism, Cn2 profiles and weather, r0 from video
 
