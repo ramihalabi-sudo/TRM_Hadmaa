@@ -6,6 +6,7 @@ import unittest
 
 from _common import LWIR, MWIR, VIS, template
 from trm4 import derived as DV
+from trm4 import extensions as X
 from trm4 import presets as P
 from trm4.model import run_project
 
@@ -112,6 +113,28 @@ class Pages(unittest.TestCase):
         self.assertTrue(self.visible("target.tasks.0.pot", pot))
         self.assertFalse(self.visible("target.clutter_model", p))
         self.assertTrue(self.visible("target.clutter_model", merged(MWIR, target__clutter="high")))
+
+    def test_turbulence_stage_b_inputs(self):
+        # engine 2.10: the new turbulence inputs sit on the turbulence page and appear only in their mode
+        page = self.page("Atmosphere & turbulence")
+        for path in ("turbulence.aniso", "turbulence.wx_T_K", "turbulence.wx_rh_pct", "turbulence.wx_wind_ms",
+                     "turbulence.wx_hour", "turbulence.wx_W", "turbulence.wx_calib"):
+            self.assertIn(path, page)
+        v = merged(VIS)
+        self.assertTrue(self.visible("turbulence.aniso", v))
+        self.assertFalse(self.visible("turbulence.wx_T_K", v))
+        w = merged(VIS, turbulence__cn2_mode="weather")
+        self.assertTrue(self.visible("turbulence.wx_W", w))
+        self.assertTrue(self.visible("turbulence.time", w))                     # height exponent from 15 m
+        self.assertFalse(self.visible("turbulence.cn2", w))
+        self.assertFalse(self.visible("turbulence.cn2", merged(VIS, turbulence__cn2_mode="slc_night")))
+        self.assertTrue(self.visible("turbulence.cn2", merged(VIS, turbulence__cn2_mode="brookner")))
+        modes = [m for m, _l in G._BY_PATH["turbulence.cn2_mode"]["opts"]]
+        for m in list(X.CN2_PROFILES) + ["weather", "hv", "height", "fixed", "r0"]:
+            self.assertIn(m, modes)
+        self.assertEqual([k for k, _l in G._BY_PATH["turbulence.wx_hour"]["opts"]], ["custom"] + list(X.SK_W_PRESETS))
+        self.assertTrue(all("PROVISIONAL" in G._BY_PATH[p]["label"] for p in ("turbulence.wx_hour", "turbulence.wx_W")))
+        self.assertTrue(callable(G.form_dialog) and callable(G.App.lab_r0))
 
     def test_square_flag_does_not_reach_the_ranges(self):
         p = template(LWIR)

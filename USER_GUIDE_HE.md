@@ -8,7 +8,7 @@
 
 **דרישות:** Windows 10 או 11, ‏64 ביט. אין צורך ב־Python ואין צורך בהרשאות מנהל.
 
-1. מעתיקים את קובץ ההתקנה (למשל `TRM_HADMAAv1_Setup_2.9.exe`) למחשב ולוחצים עליו לחיצה כפולה.
+1. מעתיקים את קובץ ההתקנה (למשל `TRM_HADMAAv1_Setup_2.10.exe`) למחשב ולוחצים עליו לחיצה כפולה.
 2. אם מופיעה ההודעה **"Windows protected your PC"** (הקובץ אינו חתום דיגיטלית): לוחצים **More info** ואז **Run anyway**.
 3. בוחרים שפה, מסמנים אם רוצים קיצור דרך בשולחן העבודה, ולוחצים **Install**.
 4. בסיום, אפשר לסמן **Launch** כדי לפתוח את התוכנה מיד.
@@ -46,10 +46,13 @@
 | טווח עם אי־ודאות (RSS / Monte Carlo) | **Run ← Uncertainty study** |
 | השוואת כמה תרחישים | **Run ← Scenario comparison** |
 | טווחי P80 / P90 או TTP / V50 | עמוד **Target & scenario** ← *Probability and clutter* |
-| טורבולנציה בנתיב אווירי | **Atmosphere & turbulence** ← *Cn2 - Hufnagel-Valley altitude profile* |
+| טורבולנציה בנתיב אווירי | **Atmosphere & turbulence** ← *Cn2 - Hufnagel-Valley altitude profile*, או פרופיל SLC / ‏Greenwood / ‏Brookner (ממעיטים בטורבולנציה ליד הקרקע) |
+| Cn2 מנתוני מזג אוויר (טמפרטורה, לחות, רוח ושעה ביום) | **Atmosphere & turbulence** ← *Cn2 from the weather* – זמני (PROVISIONAL), צריך כיול מקומי |
+| האם המטרה "מתעוותת" בתוך עצמה (anisoplanatism) | **Atmosphere & turbulence** ← *Anisoplanatism diagnostic*; התוצאות ב־**System data** |
 | טורבולנציה לצופה בווידאו (זמן שילוב העין ורוח רוחבית) | **Atmosphere & turbulence** ← *Type of MTF: Exposure-time dependent* |
-| טווחים לפי שעה ביום ועונה (סטטיסטיקת Cn2) | לשונית **Sensitivity** ← *Cn2 statistics* |
+| טווחים לפי שעה ביום ועונה (סטטיסטיקת Cn2) | לשונית **Sensitivity** ← *Cn2 statistics* (אפשר גם h^-2/3 ליום מעונן או חורפי) |
 | מודל פיזיקלי לעיבוד נגד טורבולנציה | **Atmosphere & turbulence** ← *Mitigation processing model: Physical* |
+| מדידת r0 מווידאו של המצלמה | **Run ← Lab: turbulence r0 from a frame sequence** – סצנה סטטית, לפחות 50 פריימים |
 | פלט וידאו 8 ביט / AGC | **Signal processing** ← *Tone mapping / AGC* (פרמטרים מתקדמים) |
 | MTF מתמונת קצה אלכסוני | **Run ← Lab: slanted-edge SFR from an image** |
 | אפיון מצלמה מפריימים של flat ו־dark | **Run ← Lab: photon transfer (EMVA 1288)** |
@@ -63,7 +66,7 @@
 
 ## 6. הרחבות שאינן חלק מ־TRM4
 
-מדדים כמו P80/P90, ‏TTP/V50, עומס רקע (clutter), דעיכה מנתוני מזג אוויר, פרופיל Hufnagel-Valley ומיפוי טונים מסומנים בכל מקום כ־**extension**. רובם כבויים כברירת מחדל. כשהם כבויים, הטווחים זהים לאלה של TRM4.
+מדדים כמו P80/P90, ‏TTP/V50, עומס רקע (clutter), דעיכה מנתוני מזג אוויר, פרופילי Cn2 (Hufnagel-Valley, ‏SLC, ‏Greenwood, ‏Brookner), ‏Cn2 ממזג אוויר, אבחון anisoplanatism ומיפוי טונים מסומנים בכל מקום כ־**extension**. רובם כבויים כברירת מחדל. כשהם כבויים, הטווחים זהים לאלה של TRM4.
 
 ## 7. בעיות נפוצות
 

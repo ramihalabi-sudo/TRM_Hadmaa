@@ -615,6 +615,9 @@ def applicable_inputs(project):
         if path == "turbulence.cn2" and not (p["turbulence"]["on"] and (cat != "Thermal" or
                                                                         p["turbulence"].get("thermal"))):
             continue
+        mode = p["turbulence"]["cn2_mode"]
+        if path == "turbulence.cn2" and (mode == "weather" or mode in X.CN2_PROFILES and not X.CN2_PROFILES[mode][2]):
+            continue                                       # the Cn2 field is not used by these modes (extensions)
         if path == "optics.D_mm" and p["optics"].get("aperture") == "general":
             continue
         if path == "optics.F_general" and p["optics"].get("aperture") != "general":
@@ -936,13 +939,16 @@ def _turbulence_on(p):
 
 def _scale_turbulence(project, scale):
     """Copy of the project with the turbulence strength Cn2 x scale (r0 x scale^-3/5 in the r0 mode, the whole
-    Hufnagel-Valley profile in the hv mode)."""
+    Hufnagel-Valley profile in the hv mode, the whole profile of the other altitude profiles and of the weather
+    mode)."""
     case = copy.deepcopy(project)
     tb = case.setdefault("turbulence", {})
     if tb.get("cn2_mode") == "r0":
         tb["r0_cm"] = float(tb.get("r0_cm", 5.0)) * scale ** (-0.6)
     elif tb.get("cn2_mode") == "hv":
         tb["hv_scale"] = float(tb.get("hv_scale", 1.0)) * scale
+    elif tb.get("cn2_mode") in X.CN2_PROFILES or tb.get("cn2_mode") == "weather":
+        tb["cn2_scale"] = float(tb.get("cn2_scale", 1.0)) * scale
     else:
         tb["cn2"] = float(tb.get("cn2", 1e-14)) * scale
     return case
@@ -1018,13 +1024,45 @@ def _cn2_case(project, cn2, time):
     return case
 
 
-def cn2_statistics(project, climate="Arid", season="summer", overcast=False, progress=None, stop=None, runner=None):
+def cn2_statistics_rows(climate="Arid", season="summer", overcast=False, neutral_day=False):
+    """Rows of the Cn2 statistics (no model run): label, time, statistic, Cn2 at 2 m and the height exponent h_exp
+    ('4/3' clear-sky day, '2/3' night / neutral) of each row - see cn2_statistics."""
+    if (climate, "Noon") not in P.CN2_TABLE or season not in CN2_SEASONS:
+        raise ValueError("Unknown climate / season: %s / %s" % (climate, season))
+    j = CN2_SEASONS.index(season)               # Table C.2 columns: 90 % winter, 90 % summer, 50 % winter, 50 % summer
+    col = {"90 %": 1 - j, "50 %": 3 - j}
+    rows = []
+    # neutral daytime exponent (h^-2/3) for winter noon: passed to the height mode as its 'night' exponent
+    win_neutral = bool(neutral_day) and season == "winter"
+    for t_lab, t_key, tod in (("Noon", "Noon", "day"), ("Night", "Night", "night")):
+        for pct in ("50 %", "90 %"):
+            rows.append({"label": "%s, %s of the occasions%s" % (t_lab, pct, ", h^-2/3" if tod == "day" and
+                                                                  win_neutral else ""), "time": t_lab, "pct": pct,
+                         "cn2": P.CN2_TABLE[(climate, t_key)][col[pct]], "tod": tod,
+                         "h_exp": "2/3" if tod == "night" or win_neutral else "4/3"})
+    if overcast:
+        for pct in ("50 %", "90 %"):
+            rows.append({"label": "Noon overcast, %s (Cn2 x %g%s)" % (pct, X.OVERCAST_NOON_FACTOR, ", h^-2/3" if
+                                                                     neutral_day else ""), "time": "Noon overcast",
+                         "pct": pct, "cn2": P.CN2_TABLE[(climate, "Noon")][col[pct]] * X.OVERCAST_NOON_FACTOR,
+                         "tod": "day", "h_exp": "2/3" if neutral_day else "4/3"})
+    if climate == "Arid" and season == "summer":
+        rows.append({"label": "Sunrise, typical minimum", "time": "Sunrise", "pct": "typical",
+                     "cn2": X.CN2_SUNRISE_ARID_SUMMER, "tod": "night", "h_exp": "2/3"})
+    return rows
+
+
+def cn2_statistics(project, climate="Arid", season="summer", overcast=False, progress=None, stop=None, runner=None,
+                   neutral_day=False):
     """DRI ranges for the measured turbulence statistics of a climate (TRM4 Table C.2, Fraunhofer IOSB long-term
     scintillometer data): noon and night, the Cn2 not exceeded on 50 % and 90 % of the occasions.  The 90 % row is
     the range reached on at least 90 % of the occasions at that time of day.  Optional rows: overcast noon (Cn2 x 0.1,
     clouds reduce the midday Cn2 by 1 - 2 orders) and, for arid summer, the typical sunrise minimum (~1.1e-15 at 2 m,
     Negev measurements of FGAN-FOM).  The
-    turbulence settings of the project (exposure, short-exposure factor, mitigation) are kept."""
+    turbulence settings of the project (exposure, short-exposure factor, mitigation) are kept.
+
+    neutral_day (extension): the daytime height dependence h^-2/3 instead of h^-4/3 for the overcast noon rows and, in
+    winter, the noon rows - FGAN-FOM (Weiss-Wrana 2005): the -4/3 exponent holds under a clear sky only."""
     progress = progress or _noop
     p = P.deep_merge(P.DEFAULT_PROJECT, project)
     if p["mode"]["environment"] != "field":
@@ -1032,24 +1070,9 @@ def cn2_statistics(project, climate="Arid", season="summer", overcast=False, pro
     if p["category"] == "Thermal" and not p["turbulence"].get("thermal"):
         raise ModelError("TRM4 neglects turbulence in the Thermal category: tick 'Apply turbulence in the Thermal "
                          "category' (extension) to evaluate the Cn2 statistics.")
-    if (climate, "Noon") not in P.CN2_TABLE or season not in CN2_SEASONS:
-        raise ValueError("Unknown climate / season: %s / %s" % (climate, season))
-    j = CN2_SEASONS.index(season)               # Table C.2 columns: 90 % winter, 90 % summer, 50 % winter, 50 % summer
-    col = {"90 %": 1 - j, "50 %": 3 - j}
-    rows = []
-    for t_lab, t_key, tod in (("Noon", "Noon", "day"), ("Night", "Night", "night")):
-        for pct in ("50 %", "90 %"):
-            rows.append({"label": "%s, %s of the occasions" % (t_lab, pct), "time": t_lab, "pct": pct,
-                         "cn2": P.CN2_TABLE[(climate, t_key)][col[pct]], "tod": tod})
-    if overcast:
-        for pct in ("50 %", "90 %"):
-            rows.append({"label": "Noon overcast, %s (Cn2 x %g)" % (pct, X.OVERCAST_NOON_FACTOR), "time": "Noon overcast",
-                         "pct": pct, "cn2": P.CN2_TABLE[(climate, "Noon")][col[pct]] * X.OVERCAST_NOON_FACTOR,
-                         "tod": "day"})
-    if climate == "Arid" and season == "summer":
-        rows.append({"label": "Sunrise, typical minimum", "time": "Sunrise", "pct": "typical",
-                     "cn2": X.CN2_SUNRISE_ARID_SUMMER, "tod": "night"})
-    calls = [(_all_atm_ranges, (_cn2_case(project, r["cn2"], r["tod"]),)) for r in rows]
+    rows = cn2_statistics_rows(climate, season, overcast, neutral_day)
+    calls = [(_all_atm_ranges, (_cn2_case(project, r["cn2"], "day" if r["h_exp"] == "4/3" else "night"),))
+             for r in rows]
     calls.append((_all_atm_ranges, (project,)))
     res = (runner or Runner(1)).map(calls, progress, stop, "Cn2 statistics")
     nominal = res[-1]
@@ -1063,12 +1086,15 @@ def cn2_statistics(project, climate="Arid", season="summer", overcast=False, pro
         r["ranges"] = {t: (rr[i_an][1][t] if rr is not None else np.nan) for t in tasks}
     progress("Cn2 statistics: done", 1.0)
     return {"kind": "cn2stats", "climate": climate, "season": season, "overcast": bool(overcast), "tasks": tasks,
+            "neutral_day": bool(neutral_day),
             "base": {t: nominal[i_an][1][t] for t in tasks}, "rows": rows, "analysis_atm": atms[i_an],
             "invalid": [r["label"] for r, rr in zip(rows, res[:-1]) if rr is None], "time": _now(),
             "engine": describe_engine(project),
             "method": "TRM4 Table C.2 (%s climate, %s): Cn2 at 2 m with the simplified height dependence (day h^-4/3, "
-                      "night h^-2/3); full model run per row; the project's other turbulence settings are kept." % (
-                          climate, season)}
+                      "night h^-2/3%s); full model run per row; the project's other turbulence settings are kept." % (
+                          climate, season, "; extension: h^-2/3 also for the %s - FGAN-FOM 2005: h^-4/3 holds under "
+                          "a clear sky only" % ("overcast and winter noon rows" if season == "winter" else
+                                                "overcast noon rows") if neutral_day else "")}
 
 
 def _case_ranges(project, changes):

@@ -372,13 +372,47 @@ HELP = {
                            "(extension): Cn2(h) = 0.00594 (v/27)^2 (1e-5 h)^10 exp(-h/1000) + 2.7e-16 exp(-h/1500) + "
                            "A exp(-h/100) along the slant path, A = the Cn2 field (HV 5/7: 1.7e-14 m^-2/3, v = 21 m/s; "
                            "r0 = 5 cm at 0.5 um vertically). For airborne / high-altitude paths; near the ground the "
-                           "surface-layer Cn2 can differ by an order of magnitude.",
+                           "surface-layer Cn2 can differ by an order of magnitude.\n"
+                           "SLC night / day, Greenwood (good / poor seeing) and Brookner Cn0^2 h^-5/6 exp(-h/320 m) "
+                           "(extensions, Quatresooz & Oestges, IEEE Access 2025): fixed altitude profiles (Brookner: "
+                           "Cn0^2 = the Cn2 field). TRM4 (App. C.7.2) warns that such profiles tend to underestimate "
+                           "the turbulence close to the ground - use them for slant / airborne paths.\n"
+                           "Cn2 from the weather (extension, PROVISIONAL): Sadot & Kopeika (1992) regression from air "
+                           "temperature, humidity, wind and the temporal-hour weight W, fitted at 15 m in the Negev and "
+                           "scaled to the path with the day / night height exponent. It transfers poorly to other "
+                           "sites (R^2 = 0.02 at Mauna Loa) - calibrate it locally.",
     "turbulence.hv_wind_ms": "rms wind speed of the upper atmosphere in the Hufnagel-Valley profile (21 m/s for HV "
                              "5/7); it sets the tropopause turbulence term.",
     "turbulence.cn2": "Refractive index structure constant: strength of turbulence (e.g. 1e-15 weak, 1e-13 "
-                      "strong).",
+                      "strong). Hufnagel-Valley: the ground-level coefficient A; Brookner: Cn0^2, the Cn2 at 1 m "
+                      "height.",
     "turbulence.h_ref_m": "Height above ground where the Cn2 value is given.",
-    "turbulence.time": "Day or night height profile of turbulence (stronger near the ground in daytime).",
+    "turbulence.time": "Day or night height profile of turbulence (stronger near the ground in daytime): Cn2 ~ h^-4/3 "
+                       "by day, h^-2/3 at night and around sunrise / sunset. Also the height exponent of the weather "
+                       "mode (from its 15 m fit height); FGAN-FOM: on overcast (winter) days h^-2/3 fits better.",
+    "turbulence.wx_T_K": "Air temperature for the Cn2-from-the-weather regression (Sadot & Kopeika 1992), in K "
+                         "(25 C = 298.15 K). Valid range of the fit: 9 - 35 C.",
+    "turbulence.wx_rh_pct": "Relative humidity for the Cn2-from-the-weather regression. Valid range of the fit: "
+                            "14 - 92 %.",
+    "turbulence.wx_wind_ms": "Wind speed for the Cn2-from-the-weather regression. Valid range of the fit: 0 - 10 m/s.",
+    "turbulence.wx_hour": "Temporal hour = (t - sunrise) / (day length / 12): sets the weight W of the regression and "
+                          "the day / night height exponent. PROVISIONAL: only these entries of the Sadot & Kopeika "
+                          "table are verified (secondary source, Quatresooz & Oestges 2025): more than 3 h before "
+                          "sunrise 0.11, 3 - 2 h before 0.07, 3 - 4 h after sunrise 0.75, 4 - 5 h 0.95, 5 - 6 h 1.00. "
+                          "For other hours enter W from the original paper (Custom).",
+    "turbulence.wx_W": "Temporal-hour weight W of the Sadot & Kopeika regression (Cn2 term 3.8e-14 W): about 0.1 at "
+                       "night, 1 around midday. PROVISIONAL until the full table of the paper is entered; editing it "
+                       "makes the preset 'Custom'.",
+    "turbulence.wx_calib": "Local calibration: ratio of measured (scintillometer) to predicted Cn2 at the site; the "
+                           "regression Cn2 is multiplied by it. 1 = uncalibrated. The regression was fitted in the "
+                           "Negev (Beer Sheva, Sde Boker); at Mauna Loa it explained R^2 = 0.02 of the variance "
+                           "(Jellen et al. 2024), so a calibration is needed elsewhere.",
+    "turbulence.aniso": "Anisoplanatism diagnostic (extension, the ranges are not changed): System data shows the "
+                        "isoplanatic angle theta0 = 0.314 r0 / h_bar (Fried 1982; h_bar weighted toward the target "
+                        "end), the rms image tilt and the tilt-correlation angle ~ D / L next to the angular size of "
+                        "the target. A warning appears when the target is larger than the tilt-correlation angle and "
+                        "the tilt reaches 0.5 IFOV: its parts then move independently - it distorts within itself, "
+                        "which TRM4 (one MTF for the whole field) does not model; it degrades Identification most.",
     "turbulence.cn2_preset": "Scenario default for Cn2 from TRM4 Table C.2 (climate, day/night, season, percentile). "
                              "Sets Cn2 at 2 m with the simplified height dependence. Editing Cn2 makes it 'Custom'.",
 

@@ -28,6 +28,12 @@ Sources (report reference numbers in brackets):
   044112 (2014).
 * Lucky imaging: Fried, "Probability of getting a lucky short-exposure image through turbulence", JOSA 68, 1651
   (1978); tilt-removed phase variance 0.134 (D/r0)^(5/3): Noll, JOSA 66, 207 (1976).
+* Isoplanatic angle: Fried, "Anisoplanatism in adaptive optics", JOSA 72, 52 (1982); spherical-wave tilt statistics
+  and the tilt correlation of horizontal paths: Hardie et al. 2021 (above), Sec. 3 and Table 2.
+* Cn2 altitude profiles SLC (day / night), Greenwood and Brookner: Quatresooz & Oestges, "Cn2 modeling for free-space
+  optical communications: a review", IEEE Access 13, 21279 (2025); TRM4 App. C.7.2 on such preset profiles.
+* Cn2 from macro-meteorology: Sadot & Kopeika, Opt. Eng. 31(2), 200 (1992); fit height 15 m and transfer to Mauna
+  Loa: Jellen, Nelson, Brownell & Burkhardt, "Effective benchmarks for optical turbulence modeling", AIES (2024).
 """
 import math
 
@@ -257,6 +263,180 @@ def cn2_hufnagel_valley(h_m, A=HV_GROUND_CN2, v_ms=HV_WIND_MS):
     h = np.maximum(np.asarray(h_m, float), 0.0)
     return 0.00594 * (float(v_ms) / 27.0) ** 2 * (1e-5 * h) ** 10 * np.exp(-h / 1000.0) + \
         2.7e-16 * np.exp(-h / 1500.0) + float(A) * np.exp(-h / 100.0)
+
+
+# ---------------------------------------------------------------------------------------------
+# Turbulence: further Cn2 altitude profiles (Quatresooz & Oestges, IEEE Access 13, 21279 (2025))
+# ---------------------------------------------------------------------------------------------
+# cn2_mode -> (label, formula, uses the Cn2 field).  Astronomical-site / free-atmosphere models: TRM4 (App. C.7.2)
+# notes that such preset profiles tend to underestimate the turbulence close to the ground.
+CN2_PROFILES = {
+    "slc_night": ("SLC night", "8.40e-15 (h <= 18.5 m); 2.87e-12 h^-2 (18.5 - 110 m); 2.5e-16 (110 - 1500 m); "
+                  "8.87e-7 h^-3 (1500 - 7200 m); 2.0e-16 h^-0.5 (7200 - 20000 m)", False),
+    "slc_day": ("SLC day", "1.70e-14 (h <= 18.5 m); 3.13e-13 h^-1 (18.5 - 240 m); 1.30e-15 (240 - 880 m); "
+                "8.87e-7 h^-3 (880 - 7200 m); 2.0e-16 h^-0.5 (7200 - 20000 m)", False),
+    "greenwood_good": ("Greenwood, good seeing", "(2.2e-13 (h + 10)^-1.3 + 4.3e-17) exp(-h / 4000 m)", False),
+    "greenwood_poor": ("Greenwood, poor seeing", "(2.2e-12 (h + 10)^-1.3 + 7e-16) exp(-h / 2000 m)", False),
+    "brookner": ("Brookner", "Cn0^2 h^-5/6 exp(-h / 320 m), Cn0^2 = the Cn2 field (Cn2 at 1 m)", True),
+}
+BROOKNER_H0_M = 320.0
+H_MIN_M = 0.1                     # lowest height of the power-law profiles (as the TRM4 height mode)
+
+
+def cn2_slc(h_m, day=False):
+    """SLC (Submarine Laser Communication) Cn2 model, night or day [m^-2/3]; h above ground [m], defined to 20 km
+    (the last term is continued above).  The pieces join within 6 % at the breakpoints."""
+    h = np.maximum(np.asarray(h_m, float), 0.0)
+    hs = np.maximum(h, 1.0)                                  # np.select evaluates every branch
+    if day:
+        return np.select([h <= 18.5, h <= 240.0, h <= 880.0, h <= 7200.0],
+                         [np.full_like(h, 1.70e-14), 3.13e-13 / hs, np.full_like(h, 1.30e-15), 8.87e-7 * hs ** -3],
+                         2.0e-16 * hs ** -0.5)
+    return np.select([h <= 18.5, h <= 110.0, h <= 1500.0, h <= 7200.0],
+                     [np.full_like(h, 8.40e-15), 2.87e-12 * hs ** -2, np.full_like(h, 2.5e-16), 8.87e-7 * hs ** -3],
+                     2.0e-16 * hs ** -0.5)
+
+
+def cn2_greenwood(h_m, poor=False):
+    """Greenwood Cn2 model [m^-2/3], good seeing (2.2e-13 (h + 10)^-1.3 + 4.3e-17) exp(-h / 4000) or poor seeing
+    (2.2e-12 (h + 10)^-1.3 + 7e-16) exp(-h / 2000); h above ground [m]."""
+    h = np.maximum(np.asarray(h_m, float), 0.0)
+    if poor:
+        return (2.2e-12 * (h + 10.0) ** -1.3 + 7e-16) * np.exp(-h / 2000.0)
+    return (2.2e-13 * (h + 10.0) ** -1.3 + 4.3e-17) * np.exp(-h / 4000.0)
+
+
+def cn2_brookner(h_m, cn0):
+    """Brookner Cn2 model Cn0^2 h^(-5/6) exp(-h / 320 m) [m^-2/3]; h above ground [m] (>= 0.1 m), Cn0^2 = Cn2 at 1 m."""
+    h = np.maximum(np.asarray(h_m, float), H_MIN_M)
+    return float(cn0) * h ** (-5.0 / 6.0) * np.exp(-h / BROOKNER_H0_M)
+
+
+def cn2_profile(mode, h_m, cn2=None):
+    """Cn2 [m^-2/3] of a profile of CN2_PROFILES at the heights h [m]; cn2 = Cn0^2 of the Brookner model."""
+    if mode == "slc_night":
+        return cn2_slc(h_m, day=False)
+    if mode == "slc_day":
+        return cn2_slc(h_m, day=True)
+    if mode == "greenwood_good":
+        return cn2_greenwood(h_m, poor=False)
+    if mode == "greenwood_poor":
+        return cn2_greenwood(h_m, poor=True)
+    if mode == "brookner":
+        return cn2_brookner(h_m, cn2)
+    raise ValueError("Unknown Cn2 profile %r" % mode)
+
+
+# ---------------------------------------------------------------------------------------------
+# Turbulence: Cn2 from macro-meteorology (Sadot & Kopeika 1992)
+# ---------------------------------------------------------------------------------------------
+SK_HEIGHT_M = 15.0                # height the regression was fitted at (Jellen et al. 2024)
+SK_VALID = {"T_C": (9.0, 35.0), "rh_pct": (14.0, 92.0), "wind_ms": (0.0, 10.0)}
+# Temporal-hour weight W (Sadot & Kopeika 1992, reproduced as Table 3 of Quatresooz & Oestges 2025).  PROVISIONAL:
+# only these entries are verified (secondary source); the full table of the paper still has to be entered.
+# key -> (label, temporal hours [lo, hi) relative to sunrise, W, time of day of the height exponent)
+SK_W_PRESETS = {
+    "night": ("more than 3 h before sunrise", (-float("inf"), -3.0), 0.11, "night"),
+    "pre_sunrise": ("3 - 2 h before sunrise", (-3.0, -2.0), 0.07, "night"),
+    "h3_4": ("3 - 4 temporal hours after sunrise", (3.0, 4.0), 0.75, "day"),
+    "h4_5": ("4 - 5 temporal hours after sunrise", (4.0, 5.0), 0.95, "day"),
+    "h5_6": ("5 - 6 temporal hours after sunrise", (5.0, 6.0), 1.00, "day"),
+}
+SK_W_PROVISIONAL = True
+SK_TRANSFER_NOTE = ("fitted in the Negev (Beer Sheva, Sde Boker) - it transfers poorly to other sites (R^2 = 0.02 at "
+                    "Mauna Loa, Jellen et al. 2024) and needs a local calibration (scintillometer)")
+
+
+def temporal_hour(t_h, sunrise_h, sunset_h):
+    """Temporal hour (t - sunrise) / (day length / 12) of the clock time t [h]; negative before sunrise."""
+    day = float(sunset_h) - float(sunrise_h)
+    if not day > 0:
+        raise ValueError("Sunset must be later than sunrise")
+    return (float(t_h) - float(sunrise_h)) / (day / 12.0)
+
+
+def sk_weight(th):
+    """(W, preset key) of a temporal hour from the verified part of the W table; (None, None) where the table is not
+    entered yet (PROVISIONAL)."""
+    for key, (_lab, (lo, hi), w, _tod) in SK_W_PRESETS.items():
+        if lo <= float(th) < hi:
+            return w, key
+    return None, None
+
+
+def cn2_sadot_kopeika(T_K, rh_pct, wind_ms, W):
+    """Cn2 [m^-2/3] at 15 m from the weather (Sadot & Kopeika 1992):
+
+    Cn2 = 3.8e-14 W + 2.0e-15 T - 2.5e-15 U + 1.2e-15 U^2 - 8.5e-17 U^3 - 2.8e-15 RH + 2.9e-17 RH^2 - 1.1e-19 RH^3
+          - 5.3e-13
+    T air temperature [K], RH relative humidity [%], U wind speed [m/s], W temporal-hour weight.  A regression: it can
+    be <= 0 outside the fitted regime (valid for 9 - 35 C, RH 14 - 92 %, U 0 - 10 m/s)."""
+    T, rh, U, W = float(T_K), float(rh_pct), float(wind_ms), float(W)
+    return (3.8e-14 * W + 2.0e-15 * T - 2.5e-15 * U + 1.2e-15 * U ** 2 - 8.5e-17 * U ** 3 - 2.8e-15 * rh +
+            2.9e-17 * rh ** 2 - 1.1e-19 * rh ** 3 - 5.3e-13)
+
+
+def sk_out_of_range(T_K, rh_pct, wind_ms):
+    """Inputs outside the validity range of the Sadot & Kopeika regression (list of text, empty = inside)."""
+    out = []
+    t_c = float(T_K) - 273.15
+    for name, v, (lo, hi), unit in (("air temperature", t_c, SK_VALID["T_C"], "C"),
+                                    ("relative humidity", float(rh_pct), SK_VALID["rh_pct"], "%"),
+                                    ("wind speed", float(wind_ms), SK_VALID["wind_ms"], "m/s")):
+        if not lo <= v <= hi:
+            out.append("%s %.3g %s (valid %g - %g %s)" % (name, v, unit, lo, hi, unit))
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Turbulence: anisoplanatism (isoplanatic angle, image tilt, tilt correlation)
+# ---------------------------------------------------------------------------------------------
+ANISO_TILT_IFOV = 0.5             # rms image tilt [IFOV] from which a distortion within the target is visible
+
+
+def isoplanatic_angle(lam_um, R_km, cn2_of_z, n=801):
+    """(theta0 [rad], h_bar [m], plane-wave r0 [m]) of a line of sight of length R (Fried 1982).
+
+    theta0 = [2.914 k^2 Int Cn2(z) z^(5/3) dz]^(-3/5) = 0.314 r0 / h_bar, with the plane-wave (unweighted) r0 =
+    [0.423 k^2 Int Cn2 dz]^(-3/5) and h_bar = [Int Cn2 z^(5/3) dz / Int Cn2 dz]^(3/5).  z is the distance from the
+    imager: rays from two object points theta apart are theta z apart at the distance z from the aperture, so the
+    weight z^(5/3) puts the turbulence at the target end first (the spherical-wave r0 of TRM4 Eq. 4.82 weights the
+    imager end).  cn2_of_z(z) as for mtf.fried_parameter."""
+    R = float(R_km) * 1000.0
+    if R <= 0:
+        return float("inf"), 0.0, float("inf")
+    z = np.linspace(0.0, R, n)
+    c = cn2_of_z(z)
+    i0 = float(np.trapezoid(c, z))
+    i53 = float(np.trapezoid(c * z ** (5.0 / 3.0), z))
+    if not (i0 > 0 and i53 > 0):
+        return float("inf"), 0.0, float("inf")
+    k2 = (2.0 * math.pi / (float(lam_um) * 1e-6)) ** 2
+    return (2.914 * k2 * i53) ** -0.6, (i53 / i0) ** 0.6, (0.423 * k2 * i0) ** -0.6
+
+
+def cn2_uniform_from_r0(r0_m, lam_um, L_km):
+    """Uniform Cn2 [m^-2/3] of a path of length L with the spherical-wave Fried parameter r0 at lambda (TRM4 Eq. 4.82:
+    r0 = 0.185 (3 Cn2 L / (8 lambda^2))^(-3/5))."""
+    lam, L = float(lam_um) * 1e-6, float(L_km) * 1000.0
+    return 8.0 * lam ** 2 / (3.0 * L) * (float(r0_m) / 0.185) ** (-5.0 / 3.0)
+
+
+def tilt_rms(lam_um, r0_m, D_m):
+    """One-axis rms image tilt [rad], Z-tilt sigma^2 = 0.182 (lambda / D)^2 (D / r0)^(5/3).  With the spherical-wave
+    r0 of a horizontal path it reproduces the tilt variance of Hardie et al. 2021, Table 2 (within 0.5 %)."""
+    if not (np.isfinite(r0_m) and r0_m > 0):
+        return 0.0
+    lam = float(lam_um) * 1e-6
+    return math.sqrt(0.182 * (lam / float(D_m)) ** 2 * (float(D_m) / float(r0_m)) ** (5.0 / 3.0))
+
+
+def tilt_correlation_angle(D_m, R_km):
+    """Angle [rad] over which the image tilt stays correlated, of order D / L.  For a spherical wave the ray bundles of
+    two object points theta apart are D (1 - z/L) wide and theta z apart at the distance z from the aperture: at theta
+    = D / L they separate over the target half of the path, and parts of an extended target further apart move
+    independently.  Literature: about 120 urad for 1 km and a 6 cm aperture (~2 D/L) against theta0 ~ 1.3 urad."""
+    return float(D_m) / max(float(R_km) * 1000.0, 1e-9)
 
 
 # ---------------------------------------------------------------------------------------------

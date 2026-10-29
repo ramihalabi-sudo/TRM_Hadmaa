@@ -4,8 +4,12 @@
     python run_trm4.py --list                  list the built-in templates
     python run_trm4.py --cli <template-number | project.json> [--out report.txt] [--save project.json]
                        [--limiting] [--uncertainty] [--advisor] [--min-fov DEG] [--scenario scenario.json]
-                       [--pdf-he report.pdf] [--ttp] [--quick] [--cn2-stats Arid:summer [--overcast]]
+                       [--pdf-he report.pdf] [--ttp] [--quick]
+                       [--cn2-stats Arid:summer [--overcast] [--neutral-day]]
     python run_trm4.py --sfr edge.png [--out sfr.txt]   slanted-edge SFR of an edge image (ISO 12233 e-SFR)
+    python run_trm4.py --r0-frames frames.npy --lam 0.55 --focal 500 --pitch 5 --aperture 100 [--alpha A]
+                       [--register] [--path-km L] [--out r0.txt]
+                                               Fried parameter r0 from a frame sequence (spectral ratio)
     python -m unittest discover -s tests       run the regression / acceptance test suite
 """
 import argparse
@@ -42,9 +46,26 @@ def main():
                     help="add the ranges for the Cn2 statistics of TRM4 Table C.2, e.g. Arid:summer (climates Arid, "
                          "Moderate, Subarctic; seasons summer, winter)")
     ap.add_argument("--overcast", action="store_true", help="with --cn2-stats: add the overcast-noon rows")
+    ap.add_argument("--neutral-day", action="store_true",
+                    help="with --cn2-stats: daytime height dependence h^-2/3 for the overcast noon rows and, in winter, "
+                         "the noon rows (extension; FGAN-FOM 2005: h^-4/3 holds under a clear sky only)")
     ap.add_argument("--sfr", metavar="IMAGE",
                     help="slanted-edge SFR of an edge region (.npy / .csv / .png / .tif); --out writes the curve "
                          "in cycles/pixel for the measured-MTF import")
+    ap.add_argument("--r0-frames", nargs="+", metavar="FRAMES",
+                    help="Fried parameter r0 from a frame sequence of a static scene (one .npy stack N x rows x cols "
+                         "or the frame files; spectral ratio, Hardie et al. 2021); needs --lam --focal --pitch "
+                         "--aperture; --out writes the result and the spectral-ratio curve")
+    ap.add_argument("--lam", type=float, metavar="UM", help="with --r0-frames: mean wavelength [um]")
+    ap.add_argument("--focal", type=float, metavar="MM", help="with --r0-frames: focal length [mm]")
+    ap.add_argument("--pitch", type=float, metavar="UM", help="with --r0-frames: pixel pitch of the frames [um]")
+    ap.add_argument("--aperture", type=float, metavar="MM", help="with --r0-frames: aperture diameter [mm]")
+    ap.add_argument("--alpha", type=float, default=0.0,
+                    help="with --r0-frames: fraction of the turbulence tilt removed by a registration (default 0)")
+    ap.add_argument("--register", action="store_true",
+                    help="with --r0-frames: register the frames globally first (camera motion; enter --alpha)")
+    ap.add_argument("--path-km", type=float, metavar="KM",
+                    help="with --r0-frames: path length to the scene (TRM r0 inputs, path-averaged Cn2)")
     a = ap.parse_args()
     names = list(P.TEMPLATES)
     if a.list:
@@ -63,6 +84,21 @@ def main():
             print("SFR written to %s (MTF50 %s cycles/pixel)" % (a.out, "%.4f" % res["mtf50"] if res["mtf50"] else "-"))
         else:
             print(text)
+        return
+    if a.r0_frames:
+        from trm4 import labtools as LT
+        missing = [n for n in ("lam", "focal", "pitch", "aperture") if getattr(a, n) is None]
+        if missing:
+            ap.error("--r0-frames needs " + ", ".join("--" + n for n in missing))
+        res = LT.r0_from_frames(LT.load_frames(a.r0_frames), a.lam, a.focal, a.pitch, a.aperture, alpha=a.alpha,
+                                register=a.register, path_km=a.path_km)
+        name = os.path.basename(a.r0_frames[0]) + (" (+%d)" % (len(a.r0_frames) - 1) if len(a.r0_frames) > 1 else "")
+        if a.out:
+            with open(a.out, "w", encoding="utf-8") as fh:
+                fh.write(LT.r0_to_text(res, name))
+            print("r0 = %.4g cm written to %s" % (res["r0_cm"], a.out))
+        else:
+            print("\n".join(LT.r0_summary(res)))
         return
     if a.cli is None:
         from trm4.gui import main as gui_main
@@ -102,7 +138,7 @@ def main():
             with AN.Runner() as rn:
                 analyses["cn2stats"] = AN.cn2_statistics(project, climate.strip().capitalize(),
                                                          (season or "summer").strip().lower(), a.overcast, log,
-                                                         runner=rn)
+                                                         runner=rn, neutral_day=a.neutral_day)
         if a.uncertainty:
             analyses["uncertainty"] = AN.run_uncertainty(project, log)
         if a.advisor:

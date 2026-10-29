@@ -439,7 +439,13 @@ DEFAULT_PROJECT = {
                    "thermal": False, "mitigation": 1.0,
                    # extensions: exposure = "time" (crosswind wind_ms), short-exposure factor far (TRM4) / near / auto,
                    # physical mitigation model (registration tilt fraction, lucky-region selection)
-                   "wind_ms": 2.0, "se_factor": "far", "mit_model": "gain", "mit_alpha": 0.5, "mit_select": True},
+                   "wind_ms": 2.0, "se_factor": "far", "mit_model": "gain", "mit_alpha": 0.5, "mit_select": True,
+                   # extensions (engine 2.10): anisoplanatism diagnostic; Cn2 from the weather (cn2_mode = "weather",
+                   # Sadot & Kopeika 1992: air temperature, humidity, wind, temporal-hour weight W from a PROVISIONAL
+                   # preset table, local calibration factor); cn2_mode slc_night / slc_day / greenwood_good /
+                   # greenwood_poor / brookner: altitude profiles of extensions.CN2_PROFILES
+                   "aniso": False, "wx_T_K": 298.15, "wx_rh_pct": 40.0, "wx_wind_ms": 3.0, "wx_hour": "h5_6",
+                   "wx_W": 1.0, "wx_calib": 1.0},
     # measured system data (Laboratory & Image Evaluation workflow)
     "measured": {"fom_file": dict(_NOFILE), "fom_kind": "MTDP", "fom_unit": "mrad", "fom_vunit": "K", "fom_use": "compare",
                  "sfr_file": dict(_NOFILE), "sfr_kind": "device", "sfr_unit": "mrad",

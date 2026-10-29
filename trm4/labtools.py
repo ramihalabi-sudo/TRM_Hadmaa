@@ -1,4 +1,5 @@
-"""Laboratory frame tools: slanted-edge SFR and photon-transfer characterization of a camera.
+"""Laboratory frame tools: slanted-edge SFR and photon-transfer characterization of a camera, and the turbulence
+Fried parameter r0 measured from a frame sequence of the camera itself.
 
 * Slanted-edge SFR after ISO 12233 (e-SFR): edge location per row by the centroid of the line derivative, straight
   edge fit, 4x oversampled edge spread function along the edge normal, Hamming-windowed line spread function,
@@ -6,10 +7,15 @@
 * Photon transfer after EMVA 1288 (Release 4.0 Linear): mean and temporal variance from pairs of frames at several
   exposures and a dark pair; conversion gain K from the linear part of the photon-transfer curve, read noise,
   saturation capacity, DSNU, PRNU and dark current, with the TRM detector inputs they correspond to.
+* r0 from a frame sequence, spectral-ratio method of Hardie, Rucci, Bose-Pillai & Van Hook, "Application of tilt
+  correlation statistics to anisoplanatic optical turbulence modeling and mitigation", Appl. Opt. 60 (2021),
+  arXiv:2108.00528, Sec. 5: the magnitude spectrum of the long exposure (average of the frames, optionally registered)
+  over the average magnitude spectrum of the short exposures is the Gaussian G(rho) = exp(-rho^2 / (2 sigma_G^2)) of the
+  residual tilt (Eqs. 34 - 36, 43), r0 = [6.88 (lambda l sigma_G)^2 (1 - alpha) / D^(1/3)]^(3/5) (Eq. 44).
 
-Both are verified on synthetic frames with known MTF / gain / noise (synthetic_edge, synthetic_ptc and
-tests/test_labtools.py).  Real images still need the measurement conditions recorded (Validation data /
-Metadata) - the tools do not know the camera's operating mode, processing state or temperature.
+All are verified on synthetic frames with known MTF / gain / noise / r0 (synthetic_edge, synthetic_ptc,
+synthetic_turbulence_frames and tests/test_labtools.py).  Real images still need the measurement conditions recorded
+(Validation data / Metadata) - the tools do not know the camera's operating mode, processing state or temperature.
 """
 import math
 
@@ -283,3 +289,256 @@ def synthetic_ptc(K=0.25, read_e=5.0, full_well=20000.0, prnu=0.01, dsnu_e=3.0, 
     dark = (frame(0.0), frame(0.0))
     series = [(t, frame(0.0, dark_e_s * t), frame(0.0, dark_e_s * t)) for t in t_dark]
     return flats, dark, series
+
+
+# ---------------------------------------------------------------------------------------------
+# Fried parameter r0 from a frame sequence (spectral ratio, Hardie et al. 2021, Sec. 5)
+# ---------------------------------------------------------------------------------------------
+R0_RATIO_BAND = (0.15, 0.95)        # spectral-ratio values used for the Gaussian fit
+R0_MIN_FRAMES = 10
+
+
+def load_frames(paths):
+    """Frame sequence (N, rows, cols) from one .npy stack (N x rows x cols) or from several frame files (load_frame),
+    all of the same size."""
+    paths = [paths] if isinstance(paths, str) else list(paths)
+    if len(paths) == 1 and str(paths[0]).lower().endswith(".npy"):
+        a = np.asarray(np.load(paths[0], allow_pickle=False), float)
+        if a.ndim == 3:
+            return a
+    frames = [load_frame(p) for p in paths]
+    if len({f.shape for f in frames}) > 1:
+        raise ValueError("All frames of the sequence must have the same size")
+    return np.array(frames)
+
+
+def _tukey(n, frac):
+    """Tukey (tapered cosine) window of n points with the fraction `frac` of them in the two cosine tapers."""
+    x = (np.arange(n) + 0.5) / n
+    w = np.ones(n)
+    a = float(frac)
+    if a > 0:
+        lo, hi = x < a / 2.0, x > 1.0 - a / 2.0
+        w[lo] = 0.5 * (1.0 - np.cos(2.0 * np.pi * x[lo] / a))
+        w[hi] = 0.5 * (1.0 - np.cos(2.0 * np.pi * (1.0 - x[hi]) / a))
+    return w
+
+
+def _freq_grid(rows, cols):
+    return np.fft.fftfreq(rows)[:, None], np.fft.fftfreq(cols)[None, :]
+
+
+def _shift_estimate(ref_f, img_f, fy, fx):
+    """Shift (dy, dx) [pixels] of a frame relative to the reference from their spectra: integer peak of the phase
+    correlation, refined twice by a weighted least-squares fit of the cross-spectrum phase below 0.2 cycles/pixel."""
+    cross = img_f * np.conj(ref_f)                       # |F|^2 exp(-i 2 pi f.d) for a frame shifted by d
+    pc = np.real(np.fft.ifft2(cross / np.maximum(np.abs(cross), 1e-300)))
+    rows, cols = pc.shape
+    iy, ix = np.unravel_index(int(np.argmax(pc)), pc.shape)
+    d = np.array([iy if iy <= rows // 2 else iy - rows, ix if ix <= cols // 2 else ix - cols], float)
+    rho = np.hypot(fy, fx)
+    low = (rho < 0.2) & (rho > 0)
+    fyl, fxl = np.broadcast_to(fy, low.shape)[low], np.broadcast_to(fx, low.shape)[low]
+    a = 2.0 * np.pi * np.stack([fyl, fxl])
+    for _ in range(2):
+        res = cross[low] * np.exp(2j * np.pi * (fyl * d[0] + fxl * d[1]))
+        phi, w = np.angle(res), np.abs(res)
+        try:
+            d = d + np.linalg.solve((w * a) @ a.T, -(w * a) @ phi)
+        except np.linalg.LinAlgError:
+            break
+    return d
+
+
+def _shifted(img, dy, dx, fy, fx):
+    """Frame shifted by (dy, dx) pixels (Fourier shift: periodic, exact for band-limited content)."""
+    return np.real(np.fft.ifft2(np.fft.fft2(img) * np.exp(-2j * np.pi * (fy * dy + fx * dx))))
+
+
+def register_frames(frames, iterations=2):
+    """Global registration of a frame sequence (camera motion): every frame is shifted onto the mean frame (phase
+    correlation with a sub-pixel phase-slope fit, Fourier shift), the second time onto the mean of the registered
+    frames.  -> (registered frames, shifts (N, 2) [pixels] that were removed, zero mean)."""
+    F = np.asarray(frames, float)
+    n, rows, cols = F.shape
+    fy, fx = _freq_grid(rows, cols)
+    win = np.outer(_tukey(rows, 0.25), _tukey(cols, 0.25))
+    total = np.zeros((n, 2))
+    out = F
+    for _ in range(int(iterations)):
+        ref = out.mean(axis=0)
+        ref_f = np.fft.fft2(win * (ref - ref.mean()))
+        step = np.array([_shift_estimate(ref_f, np.fft.fft2(win * (out[k] - out[k].mean())), fy, fx)
+                         for k in range(n)])
+        total += step - step.mean(axis=0)                # the common shift is arbitrary: keep the mean position
+        out = np.array([_shifted(F[k], -total[k, 0], -total[k, 1], fy, fx) for k in range(n)])
+    return out, total
+
+
+def r0_from_frames(frames, lam_um, focal_mm, pitch_um, D_mm, alpha=0.0, register=False, path_km=None, tukey=0.25,
+                   f_max=0.5, band=R0_RATIO_BAND):
+    """Fried parameter r0 from a short-exposure frame sequence (spectral ratio, Hardie et al. 2021, Sec. 5).
+
+    frames: (N, rows, cols) of a static scene, N >= 10 (Hardie et al. used 300); lam_um: mean wavelength [um];
+    focal_mm: focal length l [mm]; pitch_um: pixel pitch of the frames (binning included) [um]; D_mm: aperture [mm];
+    alpha: fraction of the turbulence tilt removed by a registration of the frames (0 = raw frames of a fixed camera;
+    Hardie et al.: about 0.52 for a global registration of their 501 x 501 frames); register: register the frames
+    globally first (camera motion - it also removes part of the turbulence tilt, so enter its alpha); path_km: path
+    length to the scene (TRM r0 inputs and the path-averaged Cn2).
+
+    Every frame minus its mean is Tukey-windowed; ratio = |FFT(mean frame)| / mean |FFT(frame)|, median over the angle
+    per radial frequency, corrected for the noise floor of the N-frame average (E|S|^2 = G^2 + (1 - G^2) / N) and fitted
+    with ln G = -rho^2 / (2 sigma_G^2) (weights G^2) where band[0] <= G <= band[1] and rho <= f_max [cycles/pixel].
+    Units: rho and sigma_G in cycles per metre of the focal plane (= cycles/pixel / pitch), lambda, l and D in metres:
+    r0 = [6.88 (lambda l sigma_G)^2 (1 - alpha) / D^(1/3)]^(3/5) [m] (Eq. 44)."""
+    F = np.asarray(frames, float)
+    if F.ndim != 3:
+        raise ValueError("The frame sequence must be N x rows x cols")
+    n, rows, cols = F.shape
+    if n < R0_MIN_FRAMES:
+        raise ValueError("At least %d frames are needed (%d given); Hardie et al. used 300" % (R0_MIN_FRAMES, n))
+    if min(rows, cols) < 32:
+        raise ValueError("The frames must be at least 32 x 32 pixels")
+    lam, l, pitch, D = float(lam_um) * 1e-6, float(focal_mm) * 1e-3, float(pitch_um) * 1e-6, float(D_mm) * 1e-3
+    if not (lam > 0 and l > 0 and pitch > 0 and D > 0):
+        raise ValueError("Wavelength, focal length, pixel pitch and aperture must be > 0")
+    alpha = float(alpha)
+    if not 0.0 <= alpha < 1.0:
+        raise ValueError("The tilt correction factor alpha must be in [0, 1)")
+    notes = []
+    shifts = None
+    if register:
+        F, shifts = register_frames(F)
+        if alpha == 0.0:
+            notes.append("The frames were registered but alpha = 0: the registration also removes part of the "
+                         "turbulence tilt, so r0 is over-estimated - enter the tilt correction factor of the "
+                         "registration (Hardie et al.: about 0.52 for a global registration of 501 x 501 frames).")
+    win = np.outer(_tukey(rows, tukey), _tukey(cols, tukey))
+    mag = np.zeros((rows, cols))
+    acc = np.zeros((rows, cols))
+    for fr in F:
+        g = win * (fr - fr.mean())
+        mag += np.abs(np.fft.fft2(g))
+        acc += g
+    mag /= n
+    long_ = np.abs(np.fft.fft2(acc / n))
+    ratio = np.where(mag > 0, long_ / np.where(mag > 0, mag, 1.0), 0.0)
+    fy, fx = _freq_grid(rows, cols)
+    rho = np.hypot(fy, fx)
+    step = 1.0 / min(rows, cols)
+    edges = np.arange(0.5 * step, f_max + step, step)
+    f_b, g_b = [], []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        sel = (rho >= lo) & (rho < hi)
+        if sel.sum() >= 4:
+            m = float(np.median(ratio[sel]))
+            f_b.append(0.5 * (lo + hi))
+            g_b.append(math.sqrt(max(m * m - 1.0 / n, 0.0) / (1.0 - 1.0 / n)))
+    f_b, g_b = np.array(f_b), np.array(g_b)
+    used = (f_b <= f_max) & (g_b >= band[0]) & (g_b <= band[1])
+    if used.sum() < 3:
+        if g_b.size and g_b[-1] > band[1]:
+            # ratio still above band[1] at f_max: G(f_max) >= band[1] -> sigma_G >= f_max / sqrt(-2 ln band[1])
+            sg_min = f_b[-1] / math.sqrt(-2.0 * math.log(band[1]))
+            r0_min = (6.88 * (lam * l * sg_min / pitch) ** 2 * (1.0 - alpha) / D ** (1.0 / 3.0)) ** 0.6
+            raise ValueError("The spectral ratio stays above %.2f up to %.2f cycles/pixel: the turbulence tilt is not "
+                             "resolved by the pixels (r0 > %.3g cm, or the frames are registered / stabilised)." % (
+                                 band[1], f_b[-1], 100.0 * r0_min))
+        raise ValueError("Too few spectral-ratio points between %.2f and %.2f for the Gaussian fit: the tilt is too "
+                         "large for the frame size, or the frames are not of one static scene." % tuple(band))
+    x, y, w = f_b[used] ** 2, -np.log(g_b[used]), g_b[used] ** 2
+    b = float(np.sum(w * x * y) / np.sum(w * x * x))
+    if not b > 0:
+        raise ValueError("The spectral ratio does not fall with frequency - no turbulence tilt found")
+    sg_px = math.sqrt(1.0 / (2.0 * b))                       # sigma_G [cycles/pixel]
+    resid = y - b * x
+    r2 = 1.0 - float(np.sum(w * resid ** 2) / max(np.sum(w * (y - np.average(y, weights=w)) ** 2), 1e-300))
+    sg = sg_px / pitch                                       # cycles/m in the focal plane
+    r0 = (6.88 * (lam * l * sg) ** 2 * (1.0 - alpha) / D ** (1.0 / 3.0)) ** 0.6
+    tilt_px = 1.0 / (2.0 * math.pi * sg_px)                  # residual tilt in the averaged frames, per axis
+    if n < 50:
+        notes.append("Only %d frames: the noise floor 1 / sqrt(N) = %.2f of the averaged spectrum limits the fit "
+                     "(Hardie et al. used 300 frames)." % (n, 1.0 / math.sqrt(n)))
+    if tilt_px < 0.2:
+        notes.append("The residual tilt is %.2f pixels rms: hardly resolved by the pixels, r0 is uncertain." % tilt_px)
+    if r2 < 0.9:
+        notes.append("The spectral ratio is not Gaussian (R^2 = %.2f): scene motion, camera vibration, noise or "
+                     "registration errors?" % r2)
+    out = {"r0_m": r0, "r0_cm": 100.0 * r0, "lam_um": float(lam_um), "D_over_r0": D / r0, "sigma_G_px": sg_px,
+           "sigma_G_per_mm": sg * 1e-3, "tilt_px": tilt_px, "tilt_urad": tilt_px * pitch / l * 1e6, "r2": r2,
+           "n_frames": n, "shape": (rows, cols), "alpha": alpha, "registered": bool(register), "shifts": shifts,
+           "f": f_b, "ratio": g_b, "fit": np.exp(-b * f_b ** 2), "used": used, "path_km": None, "cn2": None,
+           "notes": notes, "trm": {},
+           "method": "Spectral ratio (Hardie et al. 2021, Eq. 44): |FFT(mean frame)| / mean |FFT(frame)|, Tukey "
+                     "window, median over the angle, Gaussian fit; r0 = [6.88 (lambda l sigma_G)^2 (1 - alpha) / "
+                     "D^(1/3)]^(3/5)%s" % (", frames registered globally" if register else "")}
+    if path_km and float(path_km) > 0:
+        from .extensions import cn2_uniform_from_r0
+        out["path_km"] = float(path_km)
+        out["cn2"] = cn2_uniform_from_r0(r0, lam_um, path_km)
+        out["trm"] = {"turbulence.on": True, "turbulence.cn2_mode": "r0", "turbulence.cn2_preset": "custom",
+                      "turbulence.r0_cm": round(100.0 * r0, 4), "turbulence.r0_lambda_um": float(lam_um),
+                      "turbulence.r0_L_km": float(path_km)}
+    return out
+
+
+def r0_summary(res):
+    """Text lines of an r0 measurement (r0_from_frames)."""
+    rows, cols = res["shape"]
+    f_used = res["f"][res["used"]]
+    lines = [res["method"], "",
+             "Frames: %d of %d x %d pixels%s" % (res["n_frames"], rows, cols, ", registered" if res["registered"]
+                                                 else ""),
+             "Fried parameter r0 = %.4g cm at %.3g um (D / r0 = %.3g, tilt correction alpha = %.3g)" % (
+                 res["r0_cm"], res["lam_um"], res["D_over_r0"], res["alpha"]),
+             "Gaussian width sigma_G = %.4g cycles/pixel = %.4g cycles/mm; fit R^2 = %.3f over %d radial bins "
+             "(%.3g - %.3g cycles/pixel)" % (res["sigma_G_px"], res["sigma_G_per_mm"], res["r2"], len(f_used),
+                                             f_used.min(), f_used.max()),
+             "Residual tilt in the averaged frames: %.3g pixels = %.3g urad rms per axis" % (res["tilt_px"],
+                                                                                      res["tilt_urad"])]
+    if res["path_km"]:
+        lines.append("Path %.4g km: path-averaged Cn2 = %.3g m^-2/3 (uniform path, spherical wave, TRM4 Eq. 4.82)" % (
+            res["path_km"], res["cn2"]))
+    return lines + ["Note: " + n for n in res["notes"]]
+
+
+def r0_to_text(res, name="frames"):
+    """Text report of an r0 measurement with the spectral-ratio curve."""
+    lines = ["# r0 from the frame sequence %s" % name] + ["# " + s for s in r0_summary(res) if s] + \
+        ["# frequency [cycles/pixel]   ratio G   Gaussian fit   used in the fit"]
+    lines += ["%.6f %.6f %.6f %d" % (f, g, m, u) for f, g, m, u in zip(res["f"], res["ratio"], res["fit"], res["used"])]
+    return "\n".join(lines) + "\n"
+
+
+def synthetic_turbulence_frames(r0_m, lam_um, focal_mm, pitch_um, D_mm, n=300, shape=(128, 128), alpha=0.0, noise=0.0,
+                                seed=0):
+    """Frames of a static random scene seen through turbulence of Fried parameter r0 -> (frames, tilt rms [pixels]).
+
+    Every frame is blurred by the same short-exposure OTF (diffraction x Fried near-field short exposure, Hardie et al.
+    2021 Eqs. 29, 30) and shifted by a random Gaussian tilt, independent per axis and frame, whose variance gives the
+    Gaussian of Eqs. (35), (36): tilt rms = 1 / (2 pi sigma_G) [pixels]; with alpha > 0 the residual tilt after a
+    registration that removed the fraction alpha.  The scene has a 1/f amplitude spectrum (periodic, so the Fourier
+    shift is exact); additive white noise of `noise` times the scene standard deviation."""
+    rng = np.random.default_rng(seed)
+    rows, cols = shape
+    fy, fx = _freq_grid(rows, cols)
+    rho_px = np.hypot(fy, fx)
+    scene_f = np.fft.fft2(rng.standard_normal(shape)) / np.maximum(rho_px, 1.0 / max(rows, cols))
+    scene_f[0, 0] = 0.0
+    s_std = float(np.real(np.fft.ifft2(scene_f)).std())
+    lam, l, D, pitch = float(lam_um) * 1e-6, float(focal_mm) * 1e-3, float(D_mm) * 1e-3, float(pitch_um) * 1e-6
+    rho = rho_px / pitch                                     # cycles/m in the focal plane
+    x = np.clip(rho * lam * l / D, 0.0, 1.0)                 # rho / rho_c, rho_c = 1 / (lambda f#)
+    h_dif = 2.0 / np.pi * (np.arccos(x) - x * np.sqrt(1.0 - x * x))
+    s = lam * l * rho
+    h_se = np.exp(-3.44 * (s / float(r0_m)) ** (5.0 / 3.0) * np.clip(1.0 - (s / D) ** (1.0 / 3.0), 0.0, None))
+    base = scene_f * h_dif * h_se * (20.0 / s_std)
+    sg2 = float(r0_m) ** (5.0 / 3.0) * D ** (1.0 / 3.0) / (6.88 * (1.0 - float(alpha)) * (lam * l) ** 2)
+    tilt = 1.0 / (2.0 * math.pi * math.sqrt(sg2) * pitch)    # pixels
+    frames = np.empty((int(n), rows, cols))
+    for k in range(int(n)):
+        dy, dx = rng.normal(0.0, tilt, 2)
+        frames[k] = 100.0 + np.real(np.fft.ifft2(base * np.exp(-2j * np.pi * (fy * dy + fx * dx))))
+    if noise > 0:
+        frames += rng.normal(0.0, 20.0 * float(noise), frames.shape)
+    return frames, tilt

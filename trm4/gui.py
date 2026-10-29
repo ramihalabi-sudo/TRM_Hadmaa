@@ -258,6 +258,10 @@ WEATHER = lambda p: p["atmosphere"]["mode"] == "weather"
 TURB_CAT = lambda p: NOT_THERMAL(p) or p["turbulence"].get("thermal", False)
 TURB_ON = lambda p: TURB_CAT(p) and p["turbulence"]["on"]
 R0_MODE = lambda p: p["turbulence"]["cn2_mode"] == "r0"
+WX_CN2 = lambda p: p["turbulence"]["cn2_mode"] == "weather"
+# the Cn2 field is used by the fixed / height / HV / Brookner modes (not by r0, the weather or the fixed profiles)
+CN2_FIELD = lambda p: not R0_MODE(p) and not WX_CN2(p) and (p["turbulence"]["cn2_mode"] not in X.CN2_PROFILES or
+                                                           X.CN2_PROFILES[p["turbulence"]["cn2_mode"]][2])
 ATM_DOC = lambda p: SPEC_ATM(p) or NOT_THERMAL(p) and p["atmosphere"].get("path_mode") == "import"
 # the target depth is seen only from the side / diagonal or on an oblique line of sight (Eqs. 3.81-3.84)
 TARGET_DEPTH = lambda p: p["target"]["aspect"] != "front" or (
@@ -825,18 +829,34 @@ TABS = [
         F("turbulence.cn2_mode", "Turbulence specified via", "choice",
           [("fixed", "Cn2 - fixed value"), ("height", "Cn2 - simplified height dependence"),
            ("hv", "Cn2 - Hufnagel-Valley altitude profile (extension)"),
+           ("slc_night", "Cn2 - SLC night altitude profile (extension)"),
+           ("slc_day", "Cn2 - SLC day altitude profile (extension)"),
+           ("greenwood_good", "Cn2 - Greenwood profile, good seeing (extension)"),
+           ("greenwood_poor", "Cn2 - Greenwood profile, poor seeing (extension)"),
+           ("brookner", "Cn2 - Brookner profile Cn0^2 h^-5/6 exp(-h/320 m) (extension)"),
+           ("weather", "Cn2 from the weather - Sadot & Kopeika 1992 (extension, PROVISIONAL)"),
            ("r0", "Fried parameter r0 with reference conditions")], cond=TURB_ON),
-        F("turbulence.cn2", "Cn2 (Hufnagel-Valley: ground-level coefficient A)", cond=lambda p: TURB_ON(p) and
-          not R0_MODE(p), unit="m^-2/3"),
+        F("turbulence.cn2", "Cn2 (Hufnagel-Valley: ground coefficient A; Brookner: Cn0^2 at 1 m)",
+          cond=lambda p: TURB_ON(p) and CN2_FIELD(p), unit="m^-2/3"),
         F("turbulence.hv_wind_ms", "  rms upper-altitude wind (HV 5/7: 21)", unit="m/s",
           cond=lambda p: TURB_ON(p) and p["turbulence"]["cn2_mode"] == "hv"),
+        F("turbulence.wx_T_K", "  air temperature (weather Cn2)", unit="K", cond=lambda p: TURB_ON(p) and WX_CN2(p)),
+        F("turbulence.wx_rh_pct", "  relative humidity (weather Cn2)", unit="%",
+          cond=lambda p: TURB_ON(p) and WX_CN2(p)),
+        F("turbulence.wx_wind_ms", "  wind speed (weather Cn2)", unit="m/s", cond=lambda p: TURB_ON(p) and WX_CN2(p)),
+        F("turbulence.wx_hour", "  temporal hour: W preset (PROVISIONAL table)", "choice",
+          [("custom", "Custom (enter W)")] + [(k, "%s: W = %.2f" % (v[0], v[2])) for k, v in X.SK_W_PRESETS.items()],
+          cond=lambda p: TURB_ON(p) and WX_CN2(p)),
+        F("turbulence.wx_W", "  temporal-hour weight W (PROVISIONAL)", cond=lambda p: TURB_ON(p) and WX_CN2(p)),
+        F("turbulence.wx_calib", "  local calibration factor (measured / predicted Cn2)",
+          cond=lambda p: TURB_ON(p) and WX_CN2(p)),
         F("turbulence.r0_cm", "Fried parameter r0", cond=lambda p: TURB_ON(p) and R0_MODE(p), unit="cm"),
         F("turbulence.r0_lambda_um", "  r0 reference wavelength", unit="um", cond=lambda p: TURB_ON(p) and R0_MODE(p)),
         F("turbulence.r0_L_km", "  r0 reference path length", unit="km", cond=lambda p: TURB_ON(p) and R0_MODE(p)),
         F("turbulence.h_ref_m", "Cn2 specified at height", cond=lambda p: TURB_ON(p)
           and p["turbulence"]["cn2_mode"] == "height", unit="m"),
         F("turbulence.time", "Day / night", "choice", [("day", "Day"), ("night", "Night")],
-          cond=lambda p: TURB_ON(p) and p["turbulence"]["cn2_mode"] == "height"),
+          cond=lambda p: TURB_ON(p) and (p["turbulence"]["cn2_mode"] == "height" or WX_CN2(p))),
         F("turbulence.L0_m", "Outer scale L0, von Karman (0 = Kolmogorov)", unit="m", cond=TURB_ON),
         F("turbulence.mit_model", "Mitigation processing model", "choice",
           [("gain", "Effective r0 gain (empirical)"),
@@ -847,6 +867,8 @@ TABS = [
           cond=lambda p: TURB_ON(p) and p["turbulence"].get("mit_model", "gain") == "physical"),
         F("turbulence.mit_select", "  lucky-region selection among the frame-integration frames", "bool",
           cond=lambda p: TURB_ON(p) and p["turbulence"].get("mit_model", "gain") == "physical"),
+        F("turbulence.aniso", "Anisoplanatism diagnostic: isoplanatic / tilt-correlation angle vs the target "
+          "(extension, ranges unchanged)", "bool", cond=TURB_ON),
     ]),
     ("Metadata", [
         H("Imported optics MTF", cond=OPT_FILE),
@@ -1233,6 +1255,40 @@ class Splash(tk.Toplevel):
         self.update_idletasks()
 
 
+def form_dialog(app, title, fields):
+    """Small form dialog: fields = [(key, label, default, options-or-None)] -> dict or None."""
+    dlg = app._dialog(title)
+    fr = ttk.Frame(dlg, padding=18)
+    fr.pack(fill="both", expand=True)
+    vals = {}
+    for i, (key, label, default, opts) in enumerate(fields):
+        ttk.Label(fr, text=label).grid(row=i, column=0, sticky="w", pady=3, padx=(0, 10))
+        if opts:
+            w = ttk.Combobox(fr, values=[l for _, l in opts], state="readonly", width=36)
+            w.set(dict(opts).get(default, opts[0][1]))
+            vals[key] = (w, opts)
+        else:
+            v = tk.StringVar(value=default)
+            w = ttk.Entry(fr, textvariable=v, width=38)
+            vals[key] = (v, None)
+        w.grid(row=i, column=1, sticky="we", pady=3)
+    out = {}
+
+    def ok():
+        for key, (w, opts) in vals.items():
+            if opts:
+                out[key] = next(v for v, l in opts if l == w.get())
+            else:
+                out[key] = w.get().strip()
+        dlg.destroy()
+    bar = ttk.Frame(fr)
+    bar.grid(row=len(fields), column=0, columnspan=2, sticky="e", pady=(14, 0))
+    ttk.Button(bar, text="OK", style="Accent.TButton", command=ok).pack(side="left", padx=4)
+    ttk.Button(bar, text="Cancel", command=dlg.destroy).pack(side="left")
+    dlg.wait_window()
+    return out or None
+
+
 class ProfileBar(ttk.Frame):
     """Camera profile selector (Quick setup) or manager (Camera profile page)."""
 
@@ -1328,36 +1384,7 @@ class ProfileBar(ttk.Frame):
 
     def _ask(self, title, fields):
         """Small form dialog: fields = [(key, label, default, options-or-None)] -> dict or None."""
-        dlg = self.app._dialog(title)
-        fr = ttk.Frame(dlg, padding=18)
-        fr.pack(fill="both", expand=True)
-        vals = {}
-        for i, (key, label, default, opts) in enumerate(fields):
-            ttk.Label(fr, text=label).grid(row=i, column=0, sticky="w", pady=3, padx=(0, 10))
-            if opts:
-                w = ttk.Combobox(fr, values=[l for _, l in opts], state="readonly", width=36)
-                w.set(dict(opts).get(default, opts[0][1]))
-                vals[key] = (w, opts)
-            else:
-                v = tk.StringVar(value=default)
-                w = ttk.Entry(fr, textvariable=v, width=38)
-                vals[key] = (v, None)
-            w.grid(row=i, column=1, sticky="we", pady=3)
-        out = {}
-
-        def ok():
-            for key, (w, opts) in vals.items():
-                if opts:
-                    out[key] = next(v for v, l in opts if l == w.get())
-                else:
-                    out[key] = w.get().strip()
-            dlg.destroy()
-        bar = ttk.Frame(fr)
-        bar.grid(row=len(fields), column=0, columnspan=2, sticky="e", pady=(14, 0))
-        ttk.Button(bar, text="OK", style="Accent.TButton", command=ok).pack(side="left", padx=4)
-        ttk.Button(bar, text="Cancel", command=dlg.destroy).pack(side="left")
-        dlg.wait_window()
-        return out or None
+        return form_dialog(self.app, title, fields)
 
     def _save_new(self):
         p = self.app.collect()
@@ -1535,6 +1562,7 @@ class SensitivityTab(ttk.Frame):
         self.c2_climate = tk.StringVar(value="Arid")
         self.c2_season = tk.StringVar(value="summer")
         self.c2_overcast = tk.BooleanVar(value=False)
+        self.c2_neutral = tk.BooleanVar(value=False)
         self.show_mode("limiting")
 
     # ------------------------------------------------------------------ state
@@ -1555,7 +1583,8 @@ class SensitivityTab(ttk.Frame):
         elif mode == "bands":
             extra = [self.band_factor.get()]
         elif mode == "cn2stats":
-            extra = [self.c2_climate.get(), self.c2_season.get(), bool(self.c2_overcast.get())]
+            extra = [self.c2_climate.get(), self.c2_season.get(), bool(self.c2_overcast.get()),
+                     bool(self.c2_neutral.get())]
         return json.dumps([p, extra], sort_keys=True, default=str)
 
     def check_stale(self, p=None):
@@ -1693,7 +1722,9 @@ class SensitivityTab(ttk.Frame):
                                        "of the occasions at that time of day. Overcast noon: clouds reduce the midday "
                                        "Cn2 by 1 - 2 orders (x 0.1 used). Arid summer adds the typical sunrise minimum. "
                                        "The exposure, short-exposure factor and mitigation settings of the project are "
-                                       "kept; the analysis atmosphere is the one chosen above.")
+                                       "kept; the analysis atmosphere is the one chosen above. Extension: h^-2/3 for "
+                                       "overcast / winter noon - FGAN-FOM 2005 found the daytime h^-4/3 under a clear "
+                                       "sky only.")
         fr = ttk.Frame(self.opts)
         fr.pack(fill="x", pady=(6, 0))
         ttk.Label(fr, text="Climate").pack(side="left")
@@ -1703,6 +1734,8 @@ class SensitivityTab(ttk.Frame):
         ttk.Combobox(fr, values=list(AN.CN2_SEASONS), state="readonly", textvariable=self.c2_season, width=8).pack(
             side="left", padx=(6, 16))
         ttk.Checkbutton(fr, text="Add overcast noon", variable=self.c2_overcast).pack(side="left")
+        ttk.Checkbutton(fr, text="Overcast / winter noon: h^-2/3 (extension)", variable=self.c2_neutral).pack(
+            side="left", padx=(16, 0))
 
     def _opts_limiting(self):
         self._section_label(self.opts, "What limits the nominal range? Each degradation of the imaging chain is "
@@ -2022,10 +2055,12 @@ class SensitivityTab(ttk.Frame):
             return lambda prog, stop: AN.range_bands(p, prog, stop=stop, factor=fac)
         if mode == "cn2stats":
             climate, season, overcast = self.c2_climate.get(), self.c2_season.get(), bool(self.c2_overcast.get())
+            neutral = bool(self.c2_neutral.get())
 
             def job(prog, stop):
                 with AN.Runner() as rn:
-                    return AN.cn2_statistics(p, climate, season, overcast, prog, stop=stop, runner=rn)
+                    return AN.cn2_statistics(p, climate, season, overcast, prog, stop=stop, runner=rn,
+                                             neutral_day=neutral)
             return job
         if mode == "uncertainty":
             if not AN.items_from_settings(AN.uncertainty_settings(p)):
@@ -2943,6 +2978,7 @@ class App(tk.Tk):
         mr.add_separator()
         mr.add_command(label="Lab: slanted-edge SFR from an image...", command=self.lab_sfr)
         mr.add_command(label="Lab: photon transfer (EMVA 1288) from flat / dark frames...", command=self.lab_ptc)
+        mr.add_command(label="Lab: turbulence r0 from a frame sequence (spectral ratio)...", command=self.lab_r0)
         mr.add_separator()
         mr.add_command(label="Detector lookup...", accelerator="Ctrl+D", command=self.detector_lookup)
         m.add_cascade(label="Run", menu=mr)
@@ -3268,6 +3304,8 @@ class App(tk.Tk):
         if path in ("turbulence.cn2", "turbulence.cn2_mode", "turbulence.h_ref_m", "turbulence.time") and \
                 get_path(self.project, "turbulence.cn2_preset") != "custom":
             self._set_value("turbulence.cn2_preset", "custom")
+        if path == "turbulence.wx_W" and get_path(self.project, "turbulence.wx_hour") != "custom":
+            self._set_value("turbulence.wx_hour", "custom")
         if path in ("stab.random_on", "stab.rand_h_mrad", "stab.rand_v_mrad") and \
                 get_path(self.project, "stab.jitter_preset") != "custom":
             self._set_value("stab.jitter_preset", "custom")
@@ -3375,6 +3413,15 @@ class App(tk.Tk):
                 for key, val in (("cn2", c["cn2"]), ("cn2_mode", "height"), ("h_ref_m", 2.0), ("time", c["time"])):
                     self._set_value("turbulence." + key, val)
                     self._set_source("turbulence." + key, "preset")
+        if path == "turbulence.wx_hour":
+            key = json.loads(var.get())
+            if key in X.SK_W_PRESETS:
+                lab, _hours, w, tod = X.SK_W_PRESETS[key]
+                for k, val in (("wx_W", w), ("time", tod)):
+                    self._set_value("turbulence." + k, val)
+                    self._set_source("turbulence." + k, "preset")
+                self.status.set("Temporal-hour weight W = %.2f (%s) - PROVISIONAL: only part of the Sadot & Kopeika "
+                                "table is verified" % (w, lab))
         self.refresh()
 
     # ------------------------------------------------------------------ values
@@ -4064,6 +4111,58 @@ class App(tk.Tk):
         if messagebox.askyesno("Photon transfer (EMVA 1288)", msg + "\n\nWrite these values into the detector "
                                "inputs (source: measured)?", parent=self):
             self._apply_to_project(res["trm"])
+
+    def lab_r0(self):
+        """Fried parameter r0 from a frame sequence (spectral ratio, Hardie et al. 2021) -> turbulence r0 inputs."""
+        title = "Turbulence r0 from a frame sequence"
+        fns = filedialog.askopenfilenames(parent=self, title="Frame sequence of a static scene: one .npy stack (N x rows "
+                                          "x cols) or the frames, same size", initialdir=self._start_dir(),
+                                          filetypes=self._FRAME_TYPES)
+        if not fns:
+            return
+        p = self.collect()
+        o, d = p["optics"], p["detector"]
+        D0 = float(o["f_mm"]) / float(o["F_general"]) if o.get("aperture") == "general" else float(o["D_mm"])
+        lam0 = float(o.get("lambda_diff_um") or 0.0) or 0.55
+        bins = int(p["basic"].get("bin_h", 1) or 1)
+        vals = form_dialog(self, title, [
+            ("lam", "Mean wavelength of the frames [um]", fmt(lam0), None),
+            ("f", "Focal length [mm]", fmt(o["f_mm"]), None),
+            ("pitch", "Pixel pitch of the frames, binning included [um]", fmt(float(d["pitch_h_um"]) * bins), None),
+            ("D", "Aperture diameter [mm]", fmt(D0), None),
+            ("register", "Camera motion", "no", [("no", "Fixed camera - use the raw frames"),
+                                                 ("yes", "Register the frames globally first")]),
+            ("alpha", "Tilt removed by the registration, alpha (0 = none; global ~ 0.5)", "0", None),
+            ("L", "Path length to the scene [km] (0 = unknown)", fmt(float(p["mode"]["ref_range_km"])), None)])
+        if not vals:
+            return
+        try:
+            num = {k: float(vals[k]) for k in ("lam", "f", "pitch", "D", "alpha", "L")}
+        except ValueError:
+            messagebox.showerror(title, "Enter numbers for all values.", parent=self)
+            return
+        self.configure(cursor="watch")
+        self.update_idletasks()
+        try:
+            res = LT.r0_from_frames(LT.load_frames(fns), num["lam"], num["f"], num["pitch"], num["D"],
+                                    alpha=num["alpha"], register=vals["register"] == "yes",
+                                    path_km=num["L"] if num["L"] > 0 else None)
+        except (ValueError, OSError, MemoryError) as e:
+            messagebox.showerror(title, str(e), parent=self)
+            return
+        finally:
+            self.configure(cursor="")
+        msg = "\n".join(LT.r0_summary(res))
+        if not res["trm"]:
+            messagebox.showinfo(title, msg + "\n\nEnter the path length to use r0 as the turbulence input (r0 is "
+                                "only valid with its wavelength and path length).", parent=self)
+            return
+        if messagebox.askyesno(title, msg + "\n\nUse it as the turbulence input (Fried parameter r0 with reference "
+                               "conditions, source: measured)?%s" % (
+                                   "\nThermal category: tick 'Apply turbulence in the Thermal category' as well."
+                                   if p["category"] == "Thermal" else ""), parent=self):
+            self._apply_to_project(res["trm"])
+            self.goto_page("Atmosphere & turbulence")
 
     def _done(self, model, res, err):
         self.busy = False

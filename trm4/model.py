@@ -22,7 +22,7 @@ from . import imports as IM
 from . import extensions as X
 from .amop import amop as amop_sim
 
-MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.9"
+MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.10"
 MODEL_REFERENCE = "Fraunhofer IOSB TR 2021/04 (TRM4.v3 parameter description and model documentation)"
 # version of the acceptance/regression suite (kept separate from the model version, field map App. D)
 VALIDATION_VERSION = "acceptance suite FM-1.1 (field map v1.1, 14.10.2026)"
@@ -1609,41 +1609,117 @@ class TRM4Model:
             return 0
         return self.n_frames if self.n_frames > 1 else 0
 
-    def _turb_table(self, R_km):
-        key = round(R_km, 9)
-        if key in self._turb_cache:
-            return self._turb_cache[key]
+    def weather_cn2(self):
+        """Cn2 [m^-2/3] at the 15 m fit height from the weather (Sadot & Kopeika 1992, extension), with the local
+        calibration factor."""
         tb = self.p["turbulence"]
+        c = X.cn2_sadot_kopeika(float(tb.get("wx_T_K", 298.15)), float(tb.get("wx_rh_pct", 40.0)),
+                                float(tb.get("wx_wind_ms", 3.0)), float(tb.get("wx_W", 1.0)))
+        return c * float(tb.get("wx_calib", 1.0))
+
+    def _cn2_path(self, R_km):
+        """(cn2_of_z, integration points) of the line of sight at slant range R: Cn2 [m^-2/3] as a function of the
+        distance z [m] from the imager.  (None, 0) in the r0 mode."""
+        tb = self.p["turbulence"]
+        mode = tb["cn2_mode"]
+        if mode == "r0":
+            return None, 0
         tg = self.p["target"]
         h_t = max(float(tg["alt_m"]), 0.1)
         av = self.los_angle(R_km)
         h_i = h_t + R_km * 1000.0 * math.sin(av)
         R_m = R_km * 1000.0
         cn2 = float(tb["cn2"])
-        if tb["cn2_mode"] == "height":
+
+        def height(zz):
+            # height above ground along the line of sight, from the imager (z = 0) to the target (z = R)
+            return h_i + (h_t - h_i) * zz / max(R_m, 1e-9)
+        if mode == "height":
             delta = 4.0 / 3.0 if tb["time"] == "day" else 2.0 / 3.0
             href = float(tb["h_ref_m"])
 
             def cn2_of_z(zz):
-                h = np.maximum(h_i + (h_t - h_i) * zz / max(R_m, 1e-9), 0.1)
+                h = np.maximum(height(zz), 0.1)
                 return cn2 * (h / href) ** (-delta)                                  # Eq. (4.84)
-        elif tb["cn2_mode"] == "hv":
+        elif mode == "hv":
             v_w = float(tb.get("hv_wind_ms", X.HV_WIND_MS))
             k_hv = float(tb.get("hv_scale", 1.0))          # whole-profile factor (range bands of the analyses)
             if cn2 < 0 or v_w < 0 or k_hv < 0:
                 raise ModelError("Hufnagel-Valley profile: ground Cn2 and wind speed must be >= 0")
-            if not self._turb_cache:
-                self.assume("Turbulence from the Hufnagel-Valley altitude profile (%s): Cn2(h) = 0.00594 (v/27)^2 "
-                            "(1e-5 h)^10 exp(-h/1000) + 2.7e-16 exp(-h/1500) + A exp(-h/100), A = %.3g m^-2/3, v = "
-                            "%.3g m/s, h above ground along the line of sight (HV 5/7: A = 1.7e-14, v = 21 m/s). A "
-                            "free-atmosphere model: near the ground the Cn2 of the surface layer can differ by an "
-                            "order of magnitude." % (X.EXTENSION, cn2, v_w))
 
             def cn2_of_z(zz):
-                return k_hv * X.cn2_hufnagel_valley(h_i + (h_t - h_i) * zz / max(R_m, 1e-9), cn2, v_w)
+                return k_hv * X.cn2_hufnagel_valley(height(zz), cn2, v_w)
+        elif mode in X.CN2_PROFILES:
+            k = float(tb.get("cn2_scale", 1.0))            # whole-profile factor (range bands of the analyses)
+            if k < 0 or X.CN2_PROFILES[mode][2] and cn2 < 0:
+                raise ModelError("%s Cn2 profile: Cn2 must be >= 0" % X.CN2_PROFILES[mode][0])
+
+            def cn2_of_z(zz):
+                return k * X.cn2_profile(mode, height(zz), cn2)
+        elif mode == "weather":
+            c15 = self.weather_cn2()
+            if not c15 > 0:
+                raise ModelError("Cn2 from the weather: the Sadot & Kopeika regression gives Cn2 = %.3g m^-2/3 (<= 0) "
+                                 "for these inputs - outside the regime it was fitted to; enter Cn2 directly." % c15)
+            k = float(tb.get("cn2_scale", 1.0))
+            delta = 4.0 / 3.0 if tb["time"] == "day" else 2.0 / 3.0
+
+            def cn2_of_z(zz):
+                h = np.maximum(height(zz), 0.1)
+                return k * c15 * (h / X.SK_HEIGHT_M) ** (-delta)                     # Eq. (4.84) from 15 m
         else:
             def cn2_of_z(zz):
                 return np.full_like(zz, cn2)
+        # the HV boundary-layer term (scale height 100 m) and the other altitude profiles need a finer path grid
+        return cn2_of_z, (801 if mode == "hv" or mode in X.CN2_PROFILES else 201)
+
+    def _cn2_notes(self):
+        """Assumptions / warnings of the Cn2 altitude profiles and of the weather mode (extensions)."""
+        tb = self.p["turbulence"]
+        mode, cn2 = tb["cn2_mode"], float(tb["cn2"])
+        if mode == "hv":
+            self.assume("Turbulence from the Hufnagel-Valley altitude profile (%s): Cn2(h) = 0.00594 (v/27)^2 "
+                        "(1e-5 h)^10 exp(-h/1000) + 2.7e-16 exp(-h/1500) + A exp(-h/100), A = %.3g m^-2/3, v = "
+                        "%.3g m/s, h above ground along the line of sight (HV 5/7: A = 1.7e-14, v = 21 m/s). A "
+                        "free-atmosphere model: near the ground the Cn2 of the surface layer can differ by an "
+                        "order of magnitude." % (X.EXTENSION, cn2, float(tb.get("hv_wind_ms", X.HV_WIND_MS))))
+        elif mode in X.CN2_PROFILES:
+            label, formula, uses_cn2 = X.CN2_PROFILES[mode]
+            self.assume("Turbulence from the %s Cn2 altitude profile (%s): Cn2(h) = %s%s, h above ground along the line "
+                        "of sight (Quatresooz & Oestges, IEEE Access 2025). Models of astronomical sites / the free "
+                        "atmosphere: TRM4 (App. C.7.2) notes that such preset profiles tend to underestimate the "
+                        "turbulence close to the ground - for near-ground paths use the TRM4 height dependence or a "
+                        "measured Cn2." % (label, X.EXTENSION, formula, " with Cn0^2 = %.3g m^-2/3" % cn2
+                                           if uses_cn2 else ""))
+        elif mode == "weather":
+            T, rh, U = float(tb.get("wx_T_K", 298.15)), float(tb.get("wx_rh_pct", 40.0)), float(tb.get("wx_wind_ms",
+                                                                                                         3.0))
+            W, cal = float(tb.get("wx_W", 1.0)), float(tb.get("wx_calib", 1.0))
+            pre = X.SK_W_PRESETS.get(tb.get("wx_hour", "custom"))
+            self.assume("Turbulence from the weather (%s, PROVISIONAL): Sadot & Kopeika (1992) regression Cn2(15 m) = "
+                        "3.8e-14 W + 2.0e-15 T - 2.5e-15 U + 1.2e-15 U^2 - 8.5e-17 U^3 - 2.8e-15 RH + 2.9e-17 RH^2 - "
+                        "1.1e-19 RH^3 - 5.3e-13 = %.3g m^-2/3 at T = %.5g K (%.3g C), RH = %.3g %%, U = %.3g m/s, W = "
+                        "%.3g (%s)%s, scaled from the 15 m fit height (Jellen et al. 2024) to the path with the TRM4 "
+                        "height dependence h^-%s (%s). The temporal-hour weights W are only partly verified (secondary "
+                        "source) - PROVISIONAL until the full table of the paper is entered. The regression was %s." % (
+                            X.EXTENSION, self.weather_cn2() / cal, T, T - 273.15, rh, U, W,
+                            "temporal hours %s" % pre[0] if pre else "entered", "" if cal == 1.0 else
+                            ", local calibration factor %.3g" % cal, "4/3" if tb["time"] == "day" else "2/3",
+                            tb["time"], X.SK_TRANSFER_NOTE))
+            bad = X.sk_out_of_range(T, rh, U)
+            if bad:
+                self.warn("Cn2 from the weather: %s - outside the validity range of the Sadot & Kopeika regression "
+                          "(9 - 35 C, RH 14 - 92 %%, wind 0 - 10 m/s); the predicted Cn2 is an extrapolation." %
+                          "; ".join(bad))
+
+    def _turb_table(self, R_km):
+        key = round(R_km, 9)
+        if key in self._turb_cache:
+            return self._turb_cache[key]
+        tb = self.p["turbulence"]
+        cn2_of_z, n_path = self._cn2_path(R_km)
+        if not self._turb_cache:
+            self._cn2_notes()
         if tb["cn2_mode"] == "r0":
             # measured / specified Fried parameter: only meaningful with its wavelength and path length;
             # scaled as r0 ~ lambda^(6/5) L^(-3/5) (uniform Cn2 along the path)
@@ -1655,8 +1731,8 @@ class TRM4Model:
             self.assume("Turbulence from r0 = %.3g cm at %.3g um over %.3g km, scaled with lambda^(6/5) and path "
                         "length^(-3/5) (uniform Cn2 along the path)." % (r0_cm, lam_r, L_r))
         else:
-            # r0 at 1 um; r0 ~ lambda^(6/5); the HV boundary-layer term (scale height 100 m) needs a finer path grid
-            r0_ref = M.fried_parameter(1.0, R_km, cn2_of_z, 801 if tb["cn2_mode"] == "hv" else 201)
+            # r0 at 1 um; r0 ~ lambda^(6/5)
+            r0_ref = M.fried_parameter(1.0, R_km, cn2_of_z, n_path)
         lam_s = self.lam[::4]
         w = np.interp(lam_s, self.lam, self.w)
         w = w / ph.trapz(w, lam_s)
@@ -1980,8 +2056,16 @@ class TRM4Model:
             checks.append(("Integration duty cycle", d["duty"], "in (0, 1]", lambda v: 0 < v <= 1))
         if d["tint_mode"] == "wellfill":
             checks.append(("Well fill", d["wellfill_pct"], "in (0, 100] %", lambda v: 0 < v <= 100))
-        if tb["on"] and tb["cn2_mode"] != "r0":
+        mode = tb["cn2_mode"]
+        if tb["on"] and mode != "r0" and mode != "weather" and (mode not in X.CN2_PROFILES or X.CN2_PROFILES[mode][2]):
             checks.append(("Cn2", tb["cn2"], ">= 0", lambda v: v >= 0))
+        if tb["on"] and mode == "weather":
+            checks += [("Weather Cn2: air temperature [K]", tb.get("wx_T_K", 298.15), "> 0", lambda v: v > 0),
+                       ("Weather Cn2: relative humidity", tb.get("wx_rh_pct", 40.0), "in [0, 100] %",
+                        lambda v: 0 <= v <= 100),
+                       ("Weather Cn2: wind speed", tb.get("wx_wind_ms", 3.0), ">= 0", lambda v: v >= 0),
+                       ("Weather Cn2: temporal-hour weight W", tb.get("wx_W", 1.0), ">= 0", lambda v: v >= 0),
+                       ("Weather Cn2: calibration factor", tb.get("wx_calib", 1.0), "> 0", lambda v: v > 0)]
         for i, at in enumerate(p["atmosphere"]["atm"]):
             if at.get("on") and "F_PR" in at:
                 checks.append(("Atm %d path radiance factor" % (i + 1), at["F_PR"], ">= 0", lambda v: v >= 0))
@@ -2075,6 +2159,7 @@ class TRM4Model:
             if self.p["mode"]["niirs"]:
                 self.progress("NIIRS calculation", 0.9)
                 res["niirs"] = self._niirs()
+            self.aniso = self._anisoplanatism(res)          # diagnostic after the ranges (extension, off by default)
         res["spectral"] = {"lam": self.lam, "qe": self.eta * 100, "w": self.w,
                            "rho_T": self.rho_T, "rho_B": self.rho_B, "eps_T": self.eps_T, "eps_B": self.eps_B,
                            "I": self.I, "tau_o": np.broadcast_to(self.tau_o, self.lam.shape).copy()}
@@ -2727,6 +2812,15 @@ class TRM4Model:
             if tb.get("se_factor", "far") in ("near", "auto"):
                 out.append("short-exposure factor: %s" % ("near field (1)" if tb["se_factor"] == "near" else
                                                           "from D / sqrt(lambda L)"))
+            if tb["cn2_mode"] == "hv":
+                out.append("Cn2 altitude profile: Hufnagel-Valley")
+            elif tb["cn2_mode"] in X.CN2_PROFILES:
+                out.append("Cn2 altitude profile: %s (may underestimate near-ground turbulence)" %
+                           X.CN2_PROFILES[tb["cn2_mode"]][0])
+            elif tb["cn2_mode"] == "weather":
+                out.append("Cn2 from the weather (Sadot & Kopeika 1992, PROVISIONAL W table, site-specific)")
+            if tb.get("aniso"):
+                out.append("anisoplanatism diagnostic (theta0, tilt-correlation angle; ranges unchanged)")
         if self.compression_blur_px() > 0:
             out.append("lossy compression as %.3g px Gaussian blur" % self.compression_blur_px())
         if self.pot_mode:
@@ -3347,18 +3441,78 @@ class TRM4Model:
                                "rer": np.array(rers), "dsnr": np.array(dsnrs)})
 
 
-    def _turb_info(self, add, s, res):
-        """r0, D/r0 and lambda/r0 in IFOV units; without a reference range the turbulence is evaluated at the range of
-        the most demanding task."""
+    def _turb_eval_range(self, res):
+        """(range [km], description, task name or None) of the turbulence diagnostics: the reference range, else the
+        range of the most demanding task."""
         rg = res.get("range") or {}
-        R_t, at = self.R_ref, "reference range"
+        R_t, at, task = self.R_ref, "reference range", None
         if R_t <= 0 and rg.get("atm"):
             done = [t for t in rg["atm"][0]["tasks"] if t["R0"] is not None and np.isfinite(t["R0"])]
             if done:
                 R_t, at = float(done[-1]["R0"]), "the %s range (%.3g km)" % (done[-1]["name"], done[-1]["R0"])
+                task = done[-1]["name"]
+        return R_t, at, task
+
+    def _anisoplanatism(self, res):
+        """Anisoplanatism diagnostic (extension; the ranges are not changed): isoplanatic angle theta0 (Fried 1982),
+        rms image tilt and the tilt-correlation angle ~ D / L against the angular size of the target at the evaluation
+        range of the turbulence diagnostics.  Warns when the target is larger than the tilt-correlation angle and the
+        tilt is visible (>= ANISO_TILT_IFOV): its parts then move independently - the target distorts within itself."""
+        tb = self.p["turbulence"]
+        if not (tb.get("aniso") and self.turbulence_active()):
+            return None
+        R_t, at, task = self._turb_eval_range(res)
+        if not R_t > 0:
+            return None
+        r0 = self._turb_table(R_t)[2]                         # spherical-wave r0 at the peak wavelength [m]
+        lam, D = self.lam_peak, self.D_eff / 1000.0
+        cn2_of_z, _n = self._cn2_path(R_t)
+        if cn2_of_z is None:
+            # r0 mode: the model scales r0 as for a uniform Cn2 along the path - use that uniform Cn2
+            c = X.cn2_uniform_from_r0(r0, lam, R_t)
+
+            def cn2_of_z(zz):
+                return np.full_like(zz, c)
+        th0, h_bar, _r0pw = X.isoplanatic_angle(1.0, R_t, cn2_of_z)
+        th0 *= lam ** 1.2                                     # theta0 ~ lambda^(6/5)
+        ifov = math.sqrt(self.alpha_s["h"] * self.alpha_s["v"]) * 1e-3          # rad
+        ah, av, _A = self.target_dims(self.los_angle(R_t))
+        out = {"R": R_t, "at": at, "theta0": th0, "h_bar": h_bar, "tilt": X.tilt_rms(lam, r0, D),
+               "theta_t": X.tilt_correlation_angle(D, R_t), "size": math.sqrt(ah * av) / (R_t * 1000.0), "ifov": ifov}
+        out["distorts"] = out["size"] > out["theta_t"] and out["tilt"] >= X.ANISO_TILT_IFOV * ifov
+        self.assume("Anisoplanatism diagnostic (%s; the ranges are not changed - TRM4 applies one turbulence MTF to the "
+                    "whole field): isoplanatic angle theta0 = 0.314 r0 / h_bar (Fried 1982) with the plane-wave r0 and "
+                    "h_bar = [Int Cn2 z^5/3 dz / Int Cn2 dz]^3/5, z from the imager (the target end weighs most); rms "
+                    "image tilt per axis sqrt(0.182) (lambda / D) (D / r0)^5/6; tilt-correlation angle ~ D / L (the ray "
+                    "bundles of two object points separate over the target half of the path). The target distorts "
+                    "within itself when it is larger than the tilt-correlation angle and the tilt is >= %g IFOV." % (
+                        X.EXTENSION, X.ANISO_TILT_IFOV))
+        if out["distorts"]:
+            self.warn("Anisoplanatism (extension): at %s the target subtends %.3g urad = %.0f x the tilt-correlation "
+                      "angle D / L = %.3g urad, with an rms image tilt of %.3g urad = %.2f IFOV - parts of the target "
+                      "move independently (it distorts within itself), which degrades %s beyond the turbulence MTF. "
+                      "TRM4 does not model this; the ranges are unchanged." % (
+                          at, out["size"] * 1e6, out["size"] / out["theta_t"], out["theta_t"] * 1e6,
+                          out["tilt"] * 1e6, out["tilt"] / ifov, task or "Identification"))
+        return out
+
+    def _turb_info(self, add, s, res):
+        """r0, D/r0 and lambda/r0 in IFOV units; without a reference range the turbulence is evaluated at the range of
+        the most demanding task."""
+        R_t, at, _task = self._turb_eval_range(res)
         if self.turbulence_active() and R_t > 0:
             r0 = self._turb_table(R_t)[2]
             add(s, "Fried parameter r0 at %s" % at, "%.4g" % (r0 * 100), "cm")
+            tb = self.p["turbulence"]
+            if tb["cn2_mode"] == "weather":
+                add(s, "Cn2 from the weather at 15 m (Sadot & Kopeika, PROVISIONAL W, extension)",
+                    "%.3g" % self.weather_cn2(), "m^-2/3")
+            if tb["cn2_mode"] in X.CN2_PROFILES or tb["cn2_mode"] == "weather":
+                f, _n = self._cn2_path(R_t)
+                c = f(np.array([0.0, R_t * 1000.0]))
+                add(s, "Cn2 at the imager / target end of the path (%s, extension)" % (
+                    X.CN2_PROFILES[tb["cn2_mode"]][0] if tb["cn2_mode"] in X.CN2_PROFILES else "from the weather"),
+                    "%.3g / %.3g" % (c[0], c[1]), "m^-2/3")
             if r0 > 0:
                 # D/r0 > 1: the aperture is turbulence-limited; lambda/r0 against the IFOV says whether a longer
                 # focal length still resolves more (blur angle >> IFOV: optics gains are eaten by turbulence)
@@ -3383,6 +3537,21 @@ class TRM4Model:
                     P = X.lucky_probability(self.D_eff / 1000.0 / r0)
                     add(s, "Lucky-region selection: P per frame / frames N / P(lucky in window) (extension)",
                         "%.3g / %d / %.3g" % (P, n, 1.0 - (1.0 - P) ** n if n else 0.0))
+                an = getattr(self, "aniso", None)
+                if an:
+                    ifov_ = an["ifov"]
+                    add(s, "Isoplanatic angle theta0 at %s (Fried 1982, extension)" % an["at"],
+                        "%.3g urad = %.3g IFOV" % (an["theta0"] * 1e6, an["theta0"] / ifov_))
+                    add(s, "  Cn2-weighted distance h_bar from the imager (theta0 = 0.314 r0 / h_bar)",
+                        "%.3g km = %.0f %% of the path" % (an["h_bar"] / 1000.0, 100.0 * an["h_bar"] / (an["R"] * 1e3)))
+                    add(s, "rms image tilt per axis (anisoplanatism, extension)",
+                        "%.3g urad = %.3g IFOV" % (an["tilt"] * 1e6, an["tilt"] / ifov_))
+                    add(s, "Tilt-correlation angle ~ D / L (anisoplanatism, extension)", "%.3g" % (an["theta_t"] * 1e6),
+                        "urad")
+                    add(s, "Target size (critical dimension) / tilt-correlation angle (extension)",
+                        "%.3g urad = %.3g x" % (an["size"] * 1e6, an["size"] / an["theta_t"]))
+                    add(s, "Target distorts within itself (anisoplanatism, extension)", "yes - target larger than the "
+                        "tilt-correlation angle, tilt >= %g IFOV" % X.ANISO_TILT_IFOV if an["distorts"] else "no")
 
     def _extension_info(self, add, res):
         """System-data rows of the TRM_HADMAA extensions (report phase 3)."""

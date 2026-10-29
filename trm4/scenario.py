@@ -9,6 +9,7 @@ engine does not read it back, the project file remains the input.
 import json
 import math
 
+from . import extensions as X
 from . import presets as P
 from .model import COMPONENTS, MODEL_VERSION, VALIDATION_VERSION, run_id
 
@@ -22,6 +23,21 @@ def _file_id(fobj, imports, what=None):
         if im["name"] == name and (what is None or what in im["what"]):
             return {"name": name, "sha256": im["sha256"]}
     return {"name": name, "sha256": None}
+
+
+def _turbulence_id(tb):
+    """Short description of the turbulence specification."""
+    mode = tb["cn2_mode"]
+    if mode == "r0":
+        return "r0 %g cm @ %g um, %g km" % (tb["r0_cm"], tb["r0_lambda_um"], tb["r0_L_km"])
+    if mode == "weather":
+        return "Cn2 from the weather (Sadot & Kopeika, PROVISIONAL W): T %g K, RH %g %%, wind %g m/s, W %g, " \
+               "calibration x%g, %s" % (tb["wx_T_K"], tb["wx_rh_pct"], tb["wx_wind_ms"], tb["wx_W"], tb["wx_calib"],
+                                        tb["time"])
+    if mode in X.CN2_PROFILES:
+        label, _formula, uses_cn2 = X.CN2_PROFILES[mode]
+        return "%s Cn2 profile%s" % (label, " (Cn0^2 %g m^-2/3)" % tb["cn2"] if uses_cn2 else "")
+    return "Cn2 %g m^-2/3 (%s)" % (tb["cn2"], mode)
 
 
 def _range(R0, a):
@@ -103,9 +119,7 @@ def build(project, res):
             "rt_versioning": {k: (am.get("meta") or {}).get(k) or None
                               for k in ("database", "rt_code", "profile", "aerosol", "resolution")},
             "turbulence_outer_scale_m": tb.get("L0_m") or None if tb["on"] else None,
-            "turbulence_profile_id": None if not tb["on"] else (
-                "r0 %g cm @ %g um, %g km" % (tb["r0_cm"], tb["r0_lambda_um"], tb["r0_L_km"]) if tb["cn2_mode"] == "r0"
-                else "Cn2 %g m^-2/3 (%s)" % (tb["cn2"], tb["cn2_mode"]))},
+            "turbulence_profile_id": None if not tb["on"] else _turbulence_id(tb)},
         "noise": {
             "source": "measured_netd" if (p["category"] == "Thermal" and (
                 p["imager_type"] == "uncooled" or d["noise_mode"] == "measured")) else "detector_model",
