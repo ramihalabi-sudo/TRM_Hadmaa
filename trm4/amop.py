@@ -8,7 +8,111 @@ AMOP cannot be calculated analytically.  As in TRM, the imaging of the standard 
 For each phase the average modulation between adjacent (apparent) maxima and minima of the
 reproduced pattern is determined; AMOP is the maximum over all phases (optimum phase).
 """
+import heapq
+import math
+
 import numpy as np
+
+
+def _remove_wiggles_direct(seq, rel_threshold, abs_threshold):
+    """Reference: repeatedly merge the smallest adjacent difference while it is below rel_threshold x the largest
+    one (O(n^2) - very slow for spiky signals, e.g. an ideal observer MTF)."""
+    seq = [list(e) for e in seq]
+    while len(seq) >= 2:
+        diffs = np.abs(np.diff([v for v, _ in seq]))
+        thr = max(rel_threshold * diffs.max(), abs_threshold)
+        i = int(np.argmin(diffs))
+        if diffs[i] >= thr:
+            break
+        if i == 0:
+            seq.pop(0)
+        elif i + 1 == len(seq) - 1:
+            seq.pop()
+        else:
+            a_prev, a_next = seq[i - 1], seq[i + 2]
+            if a_prev[1] > 0:
+                a_prev[0] = max(a_prev[0], seq[i + 1][0])
+                a_next[0] = min(a_next[0], seq[i][0])
+            else:
+                a_prev[0] = min(a_prev[0], seq[i + 1][0])
+                a_next[0] = max(a_next[0], seq[i][0])
+            del seq[i:i + 2]
+    return seq
+
+
+def _remove_wiggles(seq, rel_threshold, abs_threshold):
+    """Same merges in the same order as _remove_wiggles_direct, in O(n log n) (finite values).
+
+    The sequence is a linked list; the adjacent differences live in a min-heap keyed (difference, left element) -
+    elements keep their relative order, so ties resolve like np.argmin - and the largest one in a max-heap.  A merge
+    only changes the differences next to it; outdated heap entries are skipped by a version number."""
+    n = len(seq)
+    val = [float(v) for v, _ in seq]
+    typ = [t for _, t in seq]
+    prv = list(range(-1, n - 1))
+    nxt = list(range(1, n + 1))
+    nxt[-1] = -1
+    alive, ver = [True] * n, [0] * n
+    push, pop = heapq.heappush, heapq.heappop
+    lo = [(abs(val[i + 1] - val[i]), i, 0) for i in range(n - 1)]
+    hi = [(-d, i, v) for d, i, v in lo]
+    heapq.heapify(lo)
+    heapq.heapify(hi)
+
+    def update(i):                          # (re)publish the difference between i and its successor
+        ver[i] += 1
+        j = nxt[i]
+        if j >= 0:
+            d = abs(val[j] - val[i])
+            push(lo, (d, i, ver[i]))
+            push(hi, (-d, i, ver[i]))
+
+    head, tail, count = 0, n - 1, n
+    while count >= 2:
+        while True:                         # smallest valid difference
+            dmin, i, v = lo[0]
+            if alive[i] and v == ver[i] and nxt[i] >= 0:
+                break
+            pop(lo)
+        while True:                         # largest valid difference
+            dmax, k, v = hi[0]
+            if alive[k] and v == ver[k] and nxt[k] >= 0:
+                break
+            pop(hi)
+        if dmin >= max(rel_threshold * -dmax, abs_threshold):
+            break
+        if i == head:                       # seq.pop(0)
+            alive[i] = False
+            head = nxt[i]
+            prv[head] = -1
+            count -= 1
+        elif nxt[i] == tail:                # seq.pop()
+            alive[tail] = False
+            tail = i
+            nxt[i] = -1
+            ver[i] += 1
+            count -= 1
+        else:                               # merge the pair (i, j) into its neighbours a and b
+            j = nxt[i]
+            a, b = prv[i], nxt[j]
+            if typ[a] > 0:
+                val[a] = max(val[a], val[j])
+                val[b] = min(val[b], val[i])
+            else:
+                val[a] = min(val[a], val[j])
+                val[b] = max(val[b], val[i])
+            alive[i] = alive[j] = False
+            nxt[a], prv[b] = b, a
+            count -= 2
+            if prv[a] >= 0:
+                update(prv[a])
+            update(a)
+            update(b)
+    out, k = [], head
+    while k >= 0:
+        out.append([val[k], typ[k]])
+        k = nxt[k]
+    return out
 
 
 def _extrema_modulation(y, rel_threshold=0.1, abs_threshold=1e-6):
@@ -43,26 +147,10 @@ def _extrema_modulation(y, rel_threshold=0.1, abs_threshold=1e-6):
         elif len(seq) >= 2:
             # small counter-move: ignore it (the running extreme is kept)
             pass
-    # remove small wiggles
-    while len(seq) >= 2:
-        diffs = np.abs(np.diff([v for v, _ in seq]))
-        thr = max(rel_threshold * diffs.max(), abs_threshold)
-        i = int(np.argmin(diffs))
-        if diffs[i] >= thr:
-            break
-        if i == 0:
-            seq.pop(0)
-        elif i + 1 == len(seq) - 1:
-            seq.pop()
-        else:
-            a_prev, a_next = seq[i - 1], seq[i + 2]
-            if a_prev[1] > 0:
-                a_prev[0] = max(a_prev[0], seq[i + 1][0])
-                a_next[0] = min(a_next[0], seq[i][0])
-            else:
-                a_prev[0] = min(a_prev[0], seq[i + 1][0])
-                a_next[0] = max(a_next[0], seq[i][0])
-            del seq[i:i + 2]
+    if all(math.isfinite(v) for v, _ in seq):
+        seq = _remove_wiggles(seq, rel_threshold, abs_threshold)
+    else:
+        seq = _remove_wiggles_direct(seq, rel_threshold, abs_threshold)
     while seq and seq[0][1] < 0:
         seq.pop(0)
     while seq and seq[-1][1] < 0:

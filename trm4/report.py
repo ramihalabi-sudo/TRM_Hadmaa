@@ -79,6 +79,9 @@ def format_analyses(analyses):
                     L.append("    " + "  ".join("%8s" % _km(v) for v in row))
             for d in an["invalid"]:
                 L.append("  Invalid: " + d)
+        elif key == "advisor":
+            from . import advisor as ADV
+            L.extend(ADV.format_text(an))
         elif key == "scenarios":
             L.append("[Scenario comparison - deltas relative to '%s']" % an["rows"][0]["name"])
             for r in an["rows"]:
@@ -151,6 +154,24 @@ def format_report(project, res, analyses=None):
         L.append("  Confidence / uncertainty method: %s" % ("nominal (input uncertainties not specified)" if not (
             analyses or {}).get("uncertainty") else "with stated input uncertainties (see below)"))
         L.append("  Aliasing risk (presampled MTF): %s" % db.get("aliasing", "-"))
+        ctx = db.get("context")
+        if ctx:
+            L.append("")
+            L.append("[DRI context - reported with every range]")
+            for k, lab in (("task", "Task"), ("target", "Target geometry"), ("operating_point", "Operating point"),
+                           ("scene", "Illumination / atmosphere"), ("mtf_source", "MTF source"),
+                           ("observer", "Observer"), ("uncertainty", "Uncertainty"), ("validation", "Validation status")):
+                L.append("  %-30s %s" % (lab, ctx.get(k, "")))
+            L.append("  " + ctx.get("statement", ""))
+    ex = (db or {}).get("exposure")
+    if ex:
+        L.append("")
+        L.append("[Exposure budget - t_int <= min(saturation, timing, motion, hardware); SNR >= required]")
+        for n, t in ex["limits"]:
+            L.append("  %-50s %s" % (n, "%.4g ms" % (t * 1e3) if np.isfinite(t) else "none"))
+        L.append("  %-50s %.4g ms" % ("selected integration time", ex["t_sel"] * 1e3))
+        L.append("  %-50s %s" % ("status", ("feasible" if ex["feasible"] else "INFEASIBLE") +
+                                 ("; " + "; ".join(ex["violations"]) if ex["violations"] else "")))
     L.extend(format_analyses(analyses))
     val = res.get("validation")
     if val:

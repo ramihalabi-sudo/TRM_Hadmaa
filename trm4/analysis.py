@@ -23,10 +23,16 @@ Analyses
 
 Ranges are those of the first active atmosphere.  Standard task criteria (line pairs) are never changed.
 These are numerical recalculations of the TRM performance model - not image simulations.
+
+Independent model runs can be handed to a Runner, which spreads them over a process pool (same results, wall time
+divided by the number of cores) and falls back to running them in this process.
 """
 import copy
 import datetime
 import math
+import os
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures.process import BrokenProcessPool
 from statistics import NormalDist
 
 import numpy as np
@@ -44,6 +50,72 @@ class AnalysisCancelled(Exception):
 
 def _noop(msg, frac=None):
     return None
+
+
+def default_workers():
+    """Worker processes for independent model runs: TRM4_WORKERS, else the number of cores - 1 (max. 8)."""
+    try:
+        return max(1, int(os.environ["TRM4_WORKERS"]))
+    except (KeyError, ValueError):
+        return max(1, min(8, (os.cpu_count() or 2) - 1))
+
+
+class Runner:
+    """Runs independent model evaluations, in a process pool when workers > 1.
+
+    map([(fn, args), ...]) returns the results in call order; fn must be a module-level function.  The results are
+    identical to running the calls one after the other.  If the pool cannot be started or breaks, the remaining work
+    runs in this process.  Use as a context manager so the pool is shut down (also on Stop).
+    """
+
+    def __init__(self, workers=None):
+        self.workers = default_workers() if workers is None else max(1, int(workers))
+        self._ex = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def close(self):
+        if self._ex is not None:
+            self._ex.shutdown(wait=False, cancel_futures=True)
+            self._ex = None
+
+    def map(self, calls, progress=None, stop=None, label="Model runs", f0=0.0, f1=1.0):
+        progress, stop = progress or _noop, stop or (lambda: False)
+        n = len(calls)
+        if self.workers > 1 and n > 1:
+            try:
+                return self._map_pool(calls, progress, stop, label, f0, f1)
+            except (BrokenProcessPool, OSError, RuntimeError):
+                self.close()
+                self.workers = 1
+        out = []
+        for i, (fn, args) in enumerate(calls):
+            if stop():
+                raise AnalysisCancelled()
+            progress("%s (%d/%d)" % (label, i + 1, n), f0 + (f1 - f0) * i / max(n, 1))
+            out.append(fn(*args))
+        return out
+
+    def _map_pool(self, calls, progress, stop, label, f0, f1):
+        if self._ex is None:
+            self._ex = ProcessPoolExecutor(max_workers=self.workers)
+        futs = [self._ex.submit(fn, *args) for fn, args in calls]
+        n, pending = len(futs), set(futs)
+        progress("%s (0/%d, %d processes)" % (label, n, self.workers), f0)
+        while pending:
+            if stop():
+                for f in pending:
+                    f.cancel()
+                raise AnalysisCancelled()
+            _done, pending = wait(pending, timeout=0.3, return_when=FIRST_COMPLETED)
+            if _done:
+                k = n - len(pending)
+                progress("%s (%d/%d, %d processes)" % (label, k, n, self.workers), f0 + (f1 - f0) * k / n)
+        return [f.result() for f in futs]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -80,16 +152,22 @@ def model_ranges(project):
     rg = res.get("range")
     if not rg or not rg["atm"]:
         raise ModelError("Range analyses need 'Field performance' mode and at least one task.")
-    a0 = rg["atm"][0]
+    return task_ranges(rg["atm"][0]), list(res["warnings"])
+
+
+def task_ranges(a, below="first"):
+    """{task: range km} of one atmosphere with the engine's sentinels mapped to numbers: infinite (beyond the grid)
+    -> last range; None (task fails already at the first range) -> the first range (below="first", keeps log
+    elasticities finite) or 0 (below="zero", no percentage gain from an undefined reference)."""
     out = {}
-    for t in a0["tasks"]:
+    for t in a["tasks"]:
         R0 = t["R0"]
         if R0 is None:
-            R0 = float(a0["R"][0])
+            R0 = float(a["R"][0]) if below == "first" else 0.0
         elif not np.isfinite(R0):
-            R0 = float(a0["R"][-1])
+            R0 = float(a["R"][-1])
         out[t["name"]] = float(R0)
-    return out, list(res["warnings"])
+    return out
 
 
 def _evaluator(evaluate):
@@ -280,29 +358,46 @@ def _classify(project):
     return out
 
 
-def limiting_factors(project, progress=None, stop=None):
-    """Range gain per task when each degradation is removed.  Returns dict with 'base', 'rows'."""
-    progress, stop = progress or _noop, stop or (lambda: False)
+def _what_if_ranges(project, what_if):
+    """Ranges with the what-if switches applied, None for an invalid case (worker function)."""
+    p = copy.deepcopy(project)
+    p["_what_if"] = what_if
+    try:
+        return model_ranges(p)[0]
+    except ModelError:
+        return None
+
+
+def limiting_plan(project):
+    """(calls, finish) of the limiting-factor analysis: the independent runs for a Runner and the assembly."""
     facs = factor_list(project)
-    progress("Limiting factors: nominal run", 0.0)
-    base, _w = model_ranges(project)
-    rows = []
-    for i, (name, wi) in enumerate(facs):
-        if stop():
-            raise AnalysisCancelled()
-        progress("Limiting factors: %s" % name, (i + 1) / (len(facs) + 1))
-        p = copy.deepcopy(project)
-        p["_what_if"] = wi
-        try:
-            r, _w = model_ranges(p)
-        except ModelError:
-            continue
-        gain = {t: 100.0 * (r[t] / base[t] - 1.0) if base[t] > 0 else 0.0 for t in base}
-        rows.append({"factor": name, "ranges": r, "gain_pct": gain})
+    calls = [(model_ranges, (project,))] + [(_what_if_ranges, (project, wi)) for _name, wi in facs]
+
+    def finish(results):
+        base = results[0][0]
+        rows = []
+        for (name, _wi), r in zip(facs, results[1:]):
+            if r is None:
+                continue
+            gain = {t: 100.0 * (r[t] / base[t] - 1.0) if base[t] > 0 else 0.0 for t in base}
+            rows.append({"factor": name, "ranges": r, "gain_pct": gain})
+        return _limiting_result(project, base, rows)
+    return calls, finish
+
+
+def limiting_factors(project, progress=None, stop=None, runner=None):
+    """Range gain per task when each degradation is removed.  Returns dict with 'base', 'rows'."""
+    progress = progress or _noop
+    calls, finish = limiting_plan(project)
+    out = finish((runner or Runner(1)).map(calls, progress, stop, "Limiting factors"))
+    progress("Limiting factors: done", 1.0)
+    return out
+
+
+def _limiting_result(project, base, rows):
     tasks = list(base)
     key = tasks[-1] if tasks else None          # the most demanding (last) task decides the ranking
     rows.sort(key=lambda x: -x["gain_pct"].get(key, 0.0))
-    progress("Limiting factors: done", 1.0)
     return {"kind": "limiting", "base": base, "rows": rows, "rank_task": key, "time": _now(),
             "limit_type": _classify(project), "engine": describe_engine(project),
             "dominant": rows[0]["factor"] if rows and rows[0]["gain_pct"].get(key, 0) > 1.0 else None,
@@ -466,7 +561,9 @@ def applicable_inputs(project):
     return out
 
 
-UNC_DEFAULTS = {"method": "rss", "mc_n": 200, "seed": 1, "coverage": 0.95, "k": 2.0, "deriv_step_pct": 1.0,
+# Derivative step 5 %: ranges are quantised by the AMOP / range grids (steps of a few %), so a 1 % central
+# difference can return a wrong sign for target size, focal length and pitch in sampling-limited systems.
+UNC_DEFAULTS = {"method": "rss", "mc_n": 200, "seed": 1, "coverage": 0.95, "k": 2.0, "deriv_step_pct": 5.0,
                 "correlations": []}
 
 
@@ -573,7 +670,7 @@ def _normalize_items(items):
 
 
 def uncertainty(project, items, progress=None, method="rss", correlations=None, mc_n=200, seed=1,
-                coverage=0.95, k=2.0, stop=None, evaluate=None, deriv_step=0.01):
+                coverage=0.95, k=2.0, stop=None, evaluate=None, deriv_step=0.05):
     """Uncertainty study.
 
     items: [(path, label, pct)] or [{"path", "label", "pct", "meaning", "dist"}]
@@ -611,21 +708,22 @@ def uncertainty(project, items, progress=None, method="rss", correlations=None, 
             except ModelError as e:
                 res[sgn] = (xv, dict(base))
                 notes.append("%s at %+g %%: model error (%s) - nominal value used" % (it["label"], sgn * it["pct"], e))
-        # local sensitivity dR/dx by central differences (small step)
+        # local sensitivity dR/dx by central differences; the step stays inside the input's valid interval
         h = abs(x0) * deriv_step if x0 else deriv_step
-        r_hi, r_lo = None, None
+        r_hi, r_lo, x_hi, x_lo = None, None, x0, x0
         for sgn in (1, -1):
             case = copy.deepcopy(project)
-            set_path(case, path, x0 + sgn * h)
+            xs = _clip(path, x0 + sgn * h)
+            set_path(case, path, xs)
             try:
                 rr = run(case)
             except ModelError:
-                rr = dict(base)
+                rr, xs = dict(base), x0
             if sgn > 0:
-                r_hi = rr
+                r_hi, x_hi = rr, xs
             else:
-                r_lo = rr
-        c = {t: (r_hi[t] - r_lo[t]) / (2 * h) for t in tasks}
+                r_lo, x_lo = rr, xs
+        c = {t: (r_hi[t] - r_lo[t]) / (x_hi - x_lo) if x_hi != x_lo else 0.0 for t in tasks}
         row = {"path": path, "label": it["label"], "pct": float(it["pct"]), "meaning": it["meaning"],
                "dist": it["dist"], "x0": x0, "x_low": res[-1][0], "x_high": res[1][0],
                "low": res[-1][1], "high": res[1][1], "u_rel": u_rel, "u_abs": u_rel * abs(x0), "c": c,

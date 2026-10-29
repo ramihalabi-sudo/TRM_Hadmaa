@@ -63,13 +63,29 @@ def build(project, res):
                                                   and d["uncooled_response"] == "flat") else
             "flat %g-%g um" % (d["cuton_um"], d["cutoff_um"]),
             "integration_ms": t_int, "frame_rate_hz": b["frame_rate"],
-            "readout": b.get("readout", "global"), "readout_ms": b.get("readout_ms", 0.0)},
+            "readout": b.get("readout", "global"), "readout_ms": b.get("readout_ms", 0.0),
+            # operating-mode profile and input semantics (research review Sec. 3.1, 3.5 - 3.8)
+            "operating_mode": d.get("op_mode") or None, "roi": b.get("roi") or None,
+            "exposure_overlaps_readout": b.get("exp_overlap", True), "guard_ms": b.get("guard_ms", 0.0),
+            "hardware_exposure_ms": [b.get("exp_min_ms", 0.0) or None, b.get("exp_max_ms", 0.0) or None],
+            "binning": {"factor": [b["bin_h"], b["bin_v"]], "kind": b.get("bin_kind", "charge")},
+            "qe_basis": d.get("qe_basis", "unspecified"),
+            "capacity": {"storage_e": d["storage_e"], "node": d.get("cap_node", "unknown"),
+                         "camera_saturation_e": d.get("sat_e") or None,
+                         "adc_full_scale_e": (2 ** int(d["adc_bits"])) * d["lsb_e"] if d.get("adc_bits") and
+                         d["adc_mode"] == "carriers" else None,
+                         "usable_limit": pv.get("capacity_limit"), "verified": pv.get("capacity_verified")},
+            "dark_current": {"mode": d.get("dark_mode", "value"), "A": d["dark_A"] if d.get("dark_mode", "value") ==
+                             "value" else None, "T_sensor_K": d.get("T_sensor_K") or None}},
         "optical_transfer": {
             "source": mtf_src, "domain": "end_to_end" if src == "device" else "lens_only",
             "file_id": _file_id(o.get("zemax_mtf"), imports, "MTF") if src != "model" else None,
             "included_components": included,
             "field": o.get("zemax_mtf_field") if src != "model" else None,
             "metadata": o.get("mtf_meta") or None,
+            "conditions": {k: o.get("mtf_" + k) or None for k in ("band", "focus", "temp", "uncert")}
+            if src != "model" else None,
+            "documentation": pv.get("mtf_doc"),
             "frequency_unit": o.get("zemax_mtf_unit") if src != "model" else None,
             "transmission": {"source": "spectral" if o.get("tau_mode") == "zemax" else "scalar",
                              "file_id": _file_id(o.get("zemax_tau"), imports, "transmission"),
@@ -84,6 +100,9 @@ def build(project, res):
             if am.get("path_mode") == "import" else None,
             "geometry_id": (am.get("meta") or {}).get("geometry") or None,
             "data_source": (am.get("meta") or {}).get("source") or None,
+            "rt_versioning": {k: (am.get("meta") or {}).get(k) or None
+                              for k in ("database", "rt_code", "profile", "aerosol", "resolution")},
+            "turbulence_outer_scale_m": tb.get("L0_m") or None if tb["on"] else None,
             "turbulence_profile_id": None if not tb["on"] else (
                 "r0 %g cm @ %g um, %g km" % (tb["r0_cm"], tb["r0_lambda_um"], tb["r0_L_km"]) if tb["cn2_mode"] == "r0"
                 else "Cn2 %g m^-2/3 (%s)" % (tb["cn2"], tb["cn2_mode"]))},
@@ -94,7 +113,7 @@ def build(project, res):
             "netd_mK": d["netd_mK"] if p["category"] == "Thermal" else None,
             "acquisition_config": {"blackbody_K": d.get("netd_TB_K"), "f_number": d.get("netd_F"),
                                    "integration_ms": d.get("netd_tint_ms"), "frames_averaged": d.get("netd_frames"),
-                                   "gain_nuc": d.get("netd_nuc")},
+                                   "gain_nuc": d.get("netd_nuc"), "measurement_port": d.get("noise_port", "raw")},
             "nps_file": _file_id(d.get("nps_file"), imports, "NPS")},
         "motion": {
             "source": "none" if (st["neglect"] or mode == "none") else
@@ -124,13 +143,20 @@ def build(project, res):
             "validation_version": pv.get("validation_version", VALIDATION_VERSION),
             "input_hashes": {im["what"]: im["sha256"] for im in imports},
             "component_coverage": pv.get("coverage", []), "components": list(COMPONENTS),
-            "assumptions": list(res.get("assumptions", [])), "warnings": list(res.get("warnings", []))},
+            "assumptions": list(res.get("assumptions", [])), "warnings": list(res.get("warnings", [])),
+            "preset_data": pv.get("presets", [])},
     }
     rg = res.get("range")
     if rg and rg["atm"]:
         rec["results"] = {"atmosphere": rg["atm"][0]["label"],
                           "ranges_km": {t["name"]: _range(t["R0"], rg["atm"][0]) for t in rg["atm"][0]["tasks"]},
-                          "status": (res.get("dashboard") or {}).get("calibration")}
+                          "status": (res.get("dashboard") or {}).get("calibration"),
+                          "context": (res.get("dashboard") or {}).get("context")}
+    ex = (res.get("dashboard") or {}).get("exposure")
+    if ex:
+        rec["exposure_budget"] = {"limits_ms": {n: t * 1e3 if math.isfinite(t) else None for n, t in ex["limits"]},
+                                  "selected_ms": ex["t_sel"] * 1e3, "limiter": ex["limiter"],
+                                  "feasible": ex["feasible"], "violations": ex["violations"]}
     return rec
 
 

@@ -264,6 +264,46 @@ def task_preset_values(project):
         return tuple(tm["tasks"]) if tm and project["category"] == "Thermal" else None
     return (TASK_PRESETS.get(key) or (None, None))[1]
 
+
+# Lifecycle record of every preset data family (research review Sec. 3.24): source, version, date,
+# applicability, uncertainty and a usage warning.  A calibrated, sensor-specific curve always has priority.
+PRESET_DATA_VERSION = "TRM_HADMAA preset data 1.1 (2026-10-25)"
+_APPC = "Fraunhofer IOSB TR 2021/04, Appendix C"
+PRESET_META = {
+    "qe": {"source": _APPC + ".1 (digitised approximately from the figures)", "date": "2021",
+           "applicability": "generic detector family, not a specific device",
+           "uncertainty": "shape and level approx. +/-10-20 % (digitisation, device spread)",
+           "warning": "replace by the measured / datasheet QE of the actual detector (state its QE basis)"},
+    "qe:XBn MWIR 3.6-4.2 um": {"source": "engineering curve (not Appendix C): 50 % points 3.6 / 4.2 um, QE > 85 %",
+                               "date": "2026", "applicability": "XBn / InAsSb barrier MWIR FPAs",
+                               "uncertainty": "band edges +/-0.05 um, level +/-5 %",
+                               "warning": "check the cut-off of the actual FPA at its operating temperature"},
+    "material": {"source": _APPC + ".5 (digitised approximately from the figures)", "date": "2021",
+                 "applicability": "typical material sample, Lambertian, no viewing-angle (BRDF) dependence",
+                 "uncertainty": "approx. +/-0.05 absolute reflectivity / emissivity",
+                 "warning": "spectral signatures vary with moisture, ageing and angle - use measured spectra"},
+    "source": {"source": _APPC + " (peak irradiances exact from the table, spectra digitised)", "date": "2021",
+               "applicability": "nominal natural illumination at the target",
+               "uncertainty": "illumination varies by orders of magnitude with sun / moon elevation and cloud",
+               "warning": "the field spectrum cannot be inferred from a visible luminance alone"},
+    "cn2": {"source": _APPC + ".7, Table C.2 (values exact)", "date": "2021",
+            "applicability": "near-ground horizontal paths, climate / season percentiles",
+            "uncertainty": "Cn2 varies by > 1 order of magnitude within an hour",
+            "warning": "not representative of slant or strongly time-dependent paths - use measured Cn2 / r0"},
+    "atmosphere": {"source": "engineering typical extinction values (Koschmieder for VIS)", "date": "2026",
+                   "applicability": "horizontal paths near the ground, band-effective (no spectral structure)",
+                   "uncertainty": "factor ~2 between real days with the same label",
+                   "warning": "use versioned spectral RT data (e.g. MODTRAN / HITRAN-based) for long or narrow-band "
+                              "paths"},
+}
+
+
+def preset_record(kind, name):
+    """Lifecycle record of a preset (kind: qe, material, source, cn2, atmosphere)."""
+    rec = dict(PRESET_META.get("%s:%s" % (kind, name)) or PRESET_META[kind])
+    rec.update(kind=kind, name=name, version=PRESET_DATA_VERSION)
+    return rec
+
 # Data source (provenance) categories shown next to each parameter
 SOURCES = [("preset", "Preset / template"), ("assumption", "Assumption"), ("user", "Entered by user"),
            ("manufacturer", "Manufacturer datasheet"), ("measurement", "Measurement"), ("import", "Imported file"),
@@ -278,15 +318,23 @@ DEFAULT_PROJECT = {
     "basic": {"frame_rate": 50.0, "fov_mode": "calculate", "fov_h_deg": 0.0, "fov_v_deg": 0.0,
               "interlace": "progressive", "microscan": "none", "ms_steps_h": 2, "ms_steps_v": 2,
               "integ_during_move": False, "bin_h": 1, "bin_v": 1, "n_sensors": 1,
-              "readout": "global", "readout_ms": 0.0},
+              "readout": "global", "readout_ms": 0.0,
+              # camera operating-mode profile (research review Sec. 3.1 / 3.8): timing architecture and hardware
+              # exposure limits; 0 = not specified.  bin_kind: charge (hardware) or digital (sum after readout)
+              "exp_overlap": True, "guard_ms": 0.0, "exp_min_ms": 0.0, "exp_max_ms": 0.0, "bin_kind": "charge",
+              "roi": ""},
     "optics": {"aperture": "circular", "D_mm": 50.0, "D_obsc_mm": 0.0, "W_trunc_h_mm": 0.0,
                "W_trunc_v_mm": 0.0, "f_mm": 100.0, "diff_focal": False, "f_v_mm": 100.0, "F_general": 2.0,
-               "diffraction": "spectral", "lambda_diff_um": 10.0, "aberration": "none", "q": 1.3,
+               "diffraction": "spectral", "lambda_diff_um": 0.0, "aberration": "none", "q": 1.3,
                "blur_um": 5.0, "tau_opt": 0.8, "tau_filter": 1.0,
                "mtf_source": "model", "zemax_mtf": {"name": "", "text": ""}, "zemax_mtf_unit": "auto",
                "zemax_mtf_field": 1, "zemax_mtf_h": "sagittal", "mtf_meta": "",
                # component coverage of an imported MTF (field map Sec. 12.3 / 15.4)
                "mtf_incl_diffraction": True, "mtf_incl_detector": False, "mtf_incl_motion": False,
+               # structured metadata of an imported MTF (research review Sec. 3.3 / 3.21 / 7.4)
+               "mtf_band": "", "mtf_focus": "", "mtf_temp": "", "mtf_uncert": "",
+               # relative illumination (vignetting x cos^4) at the field edge, 1 = not specified (Sec. 3.2)
+               "rel_illum": 1.0,
                "tau_mode": "value", "zemax_tau": {"name": "", "text": ""}, "tau_kind": "absolute",
                "tau_scope": "optics", "F_spec": 0.0},
     "detector": {"shape": "rectangular", "a_h_um": 14.0, "a_v_um": 14.0, "d_um": 14.0, "d_hole_um": 2.0,
@@ -308,7 +356,21 @@ DEFAULT_PROJECT = {
                  # measured noise power spectrum (quality check only, not used for the ranges)
                  "nps_file": dict(_NOFILE), "nps_unit": "mrad", "nps_stage": "raw",
                  "fpn_mode": "estimate", "ietd_mK": 20.0, "fpn_fraction": 0.5, "prnu_pct": 0.5,
-                 "dsnu_A": 1e-15},
+                 "dsnu_A": 1e-15,
+                 # research review Sec. 3.5 - 3.11 / 7.1 - 7.3 / 7.5:
+                 # QE convention: unspecified (TRM active-area convention assumed), active_area or pixel_area
+                 "qe_basis": "unspecified",
+                 # node that storage_e describes, and an optional input-referred camera saturation capacity
+                 "cap_node": "unknown", "sat_e": 0.0,
+                 # gain / conversion-gain / readout / temperature mode that capacity, read noise and dark belong to
+                 "op_mode": "",
+                 # exposure budget: permitted fill of the usable capacity, brightest credible scene pixel,
+                 # required pixel SNR (0 = not checked)
+                 "fill_limit_pct": 70.0, "bright_refl": 0.9, "bright_dT_K": 30.0, "snr_req": 0.0,
+                 # dark current: single value or calibrated table I_dark(T_sensor)
+                 "dark_mode": "value", "dark_table": "", "T_sensor_K": 0.0,
+                 # measurement port of a measured camera NETD: raw, post_nuc or processed video
+                 "noise_port": "raw"},
     "dsp": {"filter_on": False, "filter_dir": "both", "h_type": "odd", "h_coef": [1.0, 0.5, 0.0, 0.0, 0.0],
             "v_type": "odd", "v_coef": [1.0, 0.5, 0.0, 0.0, 0.0], "zoom": 1, "zoom_type": "pixel",
             "lrep": 1, "lrep_type": "pixel", "crep": 1, "crep_type": "pixel",
@@ -326,7 +388,9 @@ DEFAULT_PROJECT = {
              "lin_on": False, "lin_h": 0.0, "lin_v": 0.0, "sin_on": False, "sin_h": 0.0, "sin_v": 0.0,
              "jitter_mode": "model", "jitter_file": dict(_NOFILE), "jitter_unit": "urad", "jitter_rate_hz": 0.0,
              # angular PSD of the residual line-of-sight motion (field map Sec. 15.2.9)
-             "psd_file": dict(_NOFILE), "psd_unit": "urad2", "residual_los": True},
+             "psd_file": dict(_NOFILE), "psd_unit": "urad2", "residual_los": True,
+             # allowed image smear during one exposure for the exposure budget [pixels] (review Sec. 4.3)
+             "smear_allow_px": 0.5},
     "additional": {"pre_h_type": "none", "pre_h_par": 10.0, "pre_v_type": "none", "pre_v_par": 10.0,
                    "post_h_type": "none", "post_h_par": 10.0, "post_v_type": "none", "post_v_par": 10.0},
     "target": {"preset": "STANAG 4347", "alt_m": 1.0, "dT_K": 2.0, "W_m": 2.3, "H_m": 2.3, "D_m": 0.0,
@@ -348,17 +412,24 @@ DEFAULT_PROJECT = {
                    "spec_file": dict(_NOFILE), "spec_L_km": 1.0,
                    "path_mode": "model", "path_file": dict(_NOFILE), "path_L_km": 1.0,
                    # documentation of imported atmospheric data (field map Sec. 15.2.12)
-                   "meta": {"geometry": "", "source": "", "conditions": ""}},
+                   "meta": {"geometry": "", "source": "", "conditions": "",
+                            # versioning of spectral RT data (research review Sec. 3.18 / 7.6)
+                            "database": "", "rt_code": "", "profile": "", "aerosol": "", "resolution": ""}},
     "turbulence": {"on": False, "exposure": "short", "cn2_mode": "fixed", "cn2": 1e-14, "h_ref_m": 2.0,
                    "time": "day", "cn2_preset": "custom",
                    # Fried parameter input with its reference conditions (cn2_mode = "r0")
-                   "r0_cm": 5.0, "r0_lambda_um": 0.55, "r0_L_km": 1.0},
+                   "r0_cm": 5.0, "r0_lambda_um": 0.55, "r0_L_km": 1.0,
+                   # von Karman outer scale [m], 0 = Kolmogorov (infinite outer scale) - review Sec. 3.20
+                   "L0_m": 0.0},
     # measured system data (Laboratory & Image Evaluation workflow)
     "measured": {"fom_file": dict(_NOFILE), "fom_kind": "MTDP", "fom_unit": "mrad", "fom_vunit": "K", "fom_use": "compare",
                  "sfr_file": dict(_NOFILE), "sfr_kind": "device", "sfr_unit": "mrad",
                  "netd_mK": 0.0, "netd_TB_K": 0.0,
                  "meta": {"instrument": "", "date": "", "method": "", "focus": "", "temperature": "",
-                          "processing": "", "uncertainty": "", "config_id": ""}},
+                          "processing": "", "uncertainty": "", "config_id": "",
+                          # mandatory test metadata of the research review (Sec. 5)
+                          "firmware": "", "op_mode": "", "frame_rate": "", "roi": "", "exposure": "",
+                          "f_number": "", "raw_files": "", "calib_id": ""}},
     "profile": {"name": "", "config": ""},
     "provenance": {},                # parameter path -> data source (see SOURCES)
     "uncertainty": {},               # uncertainty-study settings (see analysis.uncertainty_settings)

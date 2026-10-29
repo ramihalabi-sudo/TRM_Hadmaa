@@ -106,8 +106,8 @@
   "ranges": {
    "Atm 1 (sigma=0.2/km)": {
     "Detection": 18.27199097006264,
-    "Recognition": 7.627662324886094,
-    "Identification": 3.982892063048393
+    "Recognition": 7.556621624315826,
+    "Identification": 3.5111917342151306
    },
    "Atm 2 (sigma=1/km)": {
     "Detection": 6.201146719533738,

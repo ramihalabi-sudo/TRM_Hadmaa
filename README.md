@@ -18,7 +18,120 @@ Requirements: Python 3 with `numpy`, `matplotlib`, `tkinter` (all already presen
 ```
 python run_trm4.py --cli 0 --limiting --uncertainty --out report.txt   -> batch run incl. analyses
 python -m unittest discover -s tests                                   -> regression / acceptance tests
+python run_trm4.py --cli 0 --pdf-he report.pdf                         -> Hebrew DRI report (PDF, runs the advisor)
 ```
+
+### Hebrew DRI report (PDF)
+
+*File > Export Hebrew DRI report (PDF)...* (or *Hebrew PDF report...* on the Sensitivity tab, `--pdf-he` on the
+command line) writes a right-to-left scholarly report in Hebrew, structured like
+"TRM_Range_Improvement_Advisor_Scientific_RTL_Hebrew.pdf": title page, abstract with the key finding, table of
+contents, baseline snapshot, DRI results (ranges, pixels / cycles on target, MTF, CNR, limiter, range-vs-threshold
+figure), bottleneck diagnosis and limiting factors, normalized sensitivities, all what-if actions, decision cards
+of the top 3 recommendations (before / after per task, evidence level, trade-offs, robustness, validation method),
+guidance per bottleneck type, *measure first*, limitations, model warnings and bibliography. The advisor result
+of the Sensitivity tab is reused when it matches the current inputs, otherwise the advisor is run first.
+Implemented in `trm4/report_he.py` with matplotlib only (own bidi / RTL layout; Hebrew in Frank Ruehl / David,
+Latin and numbers in Times New Roman, headings in Arial, DejaVu fallback).
+
+Run time: the advisor's ~60 independent model runs go to a process pool (`analysis.Runner`, cores - 1 workers,
+max. 8, `TRM4_WORKERS` overrides; identical results to a serial run), and the AMOP wiggle removal is O(n log n)
+instead of O(n^2) (same merges, `tests/test_performance.py`). Typical advisor times: LWIR / SWIR templates
+~20 s (was ~85 s), daylight CMOS template with turbulence ~5 min (was over an hour). While the advisor runs for
+the report, the Sensitivity tab shows the progress, elapsed time and *Stop*.
+
+### Detector Atlas news
+
+The Detectors_Atlas GitHub repository runs a watcher every 6 h that scans manufacturer catalogs and records
+newly detected listings as events in `data/live.json`. TRM reads that feed (GitHub Pages, then raw GitHub, then
+the local copy in `detector_lookup_HTML/`) a few seconds after start-up and every hour while it is open
+(`trm4/atlas_news.py`). New detectors open the *Detector Atlas news* window and the menu shows *News (n new)*.
+*Close* keeps an item unread (it is shown again at the next start); *Mark as read* / *Mark all as read* hide it for
+good (ids stored under `atlas_news` in `%APPDATA%\TRM4\settings.json`). *News > Detector Atlas news...* reopens the
+window, including already-read items.
+
+## Version 2.5 - corrections from the parameter-sensitivity study (reports/)
+
+A one-at-a-time and 2-D sensitivity study over four representative systems (about 2,500 runs) found results
+that contradict simple physical expectations. They are corrected in the engine (engine version 2.5):
+
+| Finding | Correction |
+|---|---|
+| Cooled thermal with optics transmission, QE scale or integration time 0 crashed (ZeroDivisionError) | Rejected with a `ModelError` (dN/dT = 0); electron gain must be > 0. |
+| Visible / General with turbulence: no Detection range for large targets or long focal lengths | At bar frequencies below the AMOP band the 4-bar pattern did not fit the simulation window (AMOP = 0). The band's lowest frequency is used there, as in the tabulated path. |
+| More linear motion blur gave a longer range (e.g. 20 -> 35 mrad/s: Recognition +70 %) | Bar frequencies above the first zero of the signed motion MTF (sinc / J0 / frame integration) are contrast-reversed (spurious resolution) and are no longer credited; the zero is listed under assumptions. |
+| A darker display, a longer viewing distance or a higher NETD could lengthen the range; ranges showed plateaus | The resolution limit (first AMOP <= 0.1 %) was found only to the 8 % step of the 70-point frequency grid. It is now refined by bisection, so the limiting frequency varies continuously. |
+
+Consistency and transparency (first batch of the report's phase 1):
+
+| Item | Change |
+|---|---|
+| Physical bounds | Target W, H > 0, D >= 0; T_bg > 0; threshold SNR and eye integration time > 0; q >= 1; CTE, duty cycle in (0, 1]; well fill in (0, 100] %; Cn2 >= 0; path radiance factor >= 0 - otherwise a `ModelError` (before: parsed as numbers only). |
+| "No range" convention | Visible / General report `None` ("< first range") when the task fails already at the first range, as Thermal does (before: 0.01 km). Analyses and advisor share `analysis.task_ranges()` (analyses: first range; advisor: 0, no percentage gain). |
+| NIIRS | Ticking *Calculate NIIRS* no longer switches the DRI ranges to still-frame noise; Still is used for the NIIRS curves only (TRM4 Sec. 2). |
+| Uncertainty derivative step | Default 5 % instead of 1 % (1 % lies inside the grid quantisation and gave wrong signs); the step is clipped to the input's valid interval and the actual step is used. |
+| Detector Atlas | The FPA operating temperature goes to *Sensor operating temperature* (not the cold shield temperature); the active size follows the pitch (100 % fill, editable); the maximum frame rate is offered but not ticked. |
+| F lambda / d indicator | Summary card and System data: F lambda / d with the signal-weighted mean wavelength and the effective pitch, the regime (detector-limited < 1, balanced 1-2, optics-limited >= 2) and the hardware lever in that regime. |
+| Generic defaults | Read noise and ADC step equal to the generic defaults (500 e-, 1000 e-) are listed under assumptions unless their provenance is a datasheet / measurement. |
+| Single-wavelength diffraction | *Wavelength for diffraction* 0 (new default) = the signal-weighted mean wavelength of the band, instead of a fixed 10 um that was wrong for VIS / SWIR / MWIR. Templates and saved projects keep their explicit values. |
+| Turbulence run time | A Visible run with turbulence takes about 2 s (before: 6 s, 21 s for large targets) - a consequence of the low-frequency AMOP fix above, which no longer simulates oversized bar patterns. |
+| Measured NETD - not converted (decision) | Considered and kept as is: a measured NETD whose F-number, integration time or frame averaging differ from the scenario is used unchanged and flagged in the warnings (DS-03, no false precision; TRM4 does not scale a *Device measured* NETD). For a scaled value use *Detector measured* or *Calculate*. |
+
+`tests/test_consistency.py` covers these items.
+
+The template DRI values are unchanged except *General - MWIR sun-lit scene*, Atm 1: Recognition 7.628 -> 7.557 km,
+Identification 3.983 -> 3.511 km. A 2,800-point frequency grid gives 7.558 / 3.511 km, i.e. the previous values
+were a grid artefact. `tests/test_invariants.py` checks that more motion, a darker display or a higher NETD never
+lengthen a range, that zero throughput is rejected and that turbulence keeps the Detection range of large targets.
+
+## Version 2.4 - changes from "TRM4v3_Research_Improvements_English.pdf"
+
+The review keeps TRM4's physics and asks for correct input semantics, operating-point consistency and
+traceability. Items the application already had (MTF component coverage / no double diffraction, required MTF
+frequency unit, spectral L_sensor = tau L + L_path, imported path radiance, measured SFR and aliasing, pipeline
+documentation, observer types, run ID / scenario record, Monte Carlo percentiles, separate NIIRS) are unchanged.
+New inputs default to the previous behaviour, so the template DRI values are unchanged (only checks and reports
+are added). Engine version 2.4.
+
+| Review item | Implementation |
+|---|---|
+| 3.5 / 7.2 QE basis (critical) | *QE refers to*: not stated (TRM active-area convention) / active area / full pixel area (total or EMVA 1288 QE). With *full pixel area* the photon -> carrier conversion uses the pixel area and the fill factor is not applied again (active size only for the detector MTF). Not stated + fill factor < 1 is an assumption, or a warning when the QE comes from a datasheet / measurement. |
+| 3.6 / 3.7 / 7.1 Saturation capacity (critical) | *Capacity above refers to* (physical full well / ROIC node / camera saturation / not stated), optional *input-referred camera saturation capacity*, and the ADC full scale: the smallest is the **usable capacity** that the well fill and the well-fill exposure use. An unverified capacity is flagged (warning when the exposure is chosen from it). *Operating mode* text ties capacity, read noise and dark current to one gain / readout / temperature mode. |
+| 3.7 / 7.3 Brightest pixel | Well fill is also checked for the brightest credible scene pixel (reflectivity 0.9 / +30 K by default, editable); saturation is reported. 70 % is a design margin input, not a rule. |
+| 3.1 / 3.8 Operating mode and timing | Exposure overlap with readout, readout and guard time, hardware min / max exposure, ROI; *charge* vs *digital* binning (digital adds the read noise of every summed read-out). The timing limit is reported separately from the saturation and motion limits. |
+| 4.3 / 7.3 Exposure budget | t_int <= min(t_sat, t_timing, t_motion, t_hardware) with t_motion = allowed smear x IFOV / image velocity, and SNR(t) >= required SNR (optional). Violations at the selected time and infeasible combinations are warned; shown on Summary, in the report and the scenario record. |
+| 4.1 / 3.9 Radiometry bookkeeping | Background photon arrival rate and photoelectron rate per pixel (photons/s, e-/s); field-edge rate with a relative-illumination input; sub-pixel target warning (target smaller than the pixel / diffraction blur at a task range). |
+| 3.11 Dark current vs temperature | *Calibrated table* I_dark(T_sensor), log-linear interpolation, warning outside the table (no generic doubling rule). |
+| 3.10 / 7.5 Noise port, 3.12 bolometers | Measured camera NETD port (RAW / after NUC / processed video; processed is flagged as possible double counting). Microbolometers: explicit note that no full-well model is applied and the time constant is not an exposure. |
+| 3.3 / 3.21 / 7.4 MTF metadata | Band, focus, temperature and uncertainty of imported MTF data; incomplete metadata is listed. |
+| 3.18 / 7.6 Atmosphere versioning | Spectroscopy database edition (e.g. HITRAN2024), RT code / version, profile, aerosol, resolution for imported spectral data. |
+| 3.20 Turbulence | Optional von Karman outer scale L0 (first-order structure-function correction). |
+| 3.24 Preset lifecycle | Every preset in use is reported with source, date, applicability, uncertainty, warning and data version. |
+| 3.22 / 7.7 DRI context | Every range is reported with task, target geometry, operating point (incl. capacity basis and QE basis), scene / atmosphere, MTF source, observer, uncertainty and validation status, and "a nominal range is not an assured operational outcome". |
+| Sec. 5 Test metadata | Validation metadata adds firmware, gain / readout mode, frame rate, ROI, exposure, F-number, RAW file references and calibration IDs. |
+| Tests | `tests/test_research_review.py`: the Sec. 4.4 SWIR worked example through the engine (5.16e7 photons/s, 41.28 % at 10 ms, 16.96 ms to 70 %), QE basis, capacity limits, timing, motion / SNR / infeasible budget, brightest pixel, dark table, digital binning, noise port, presets, atmosphere versioning, DRI context, outer scale. |
+
+Not implemented (laboratory / research work in the review): observer trials and success probabilities, BRDF and
+spectral reflectance import, nonlinear (HDR / learned) processing profiles, measured slant-path Cn2 profiles,
+and the Sec. 5 bench tests themselves.
+
+## Version 2.3 - changes from "TRM_Range_Improvement_Advisor_Scientific_RTL_Hebrew.pdf"
+
+New *Sensitivity > Improve performance* mode (also *Run > Improve performance (advisor)*, `--advisor [--min-fov DEG]`
+on the command line), implemented in `trm4/advisor.py`. It is advisory only: the project is never modified and the
+existing *Calculate* flow is unchanged (T-01).
+
+| Report item | Implementation |
+|---|---|
+| Ch. 2.1 Baseline snapshot | `baseline_id` + deterministic run ID, model version, inputs, ranges, geometry, time. |
+| Ch. 2.2 / 2.3 Delta and evidence | Delta_R = R(x_a) - R(x_0) and Gain % per task through the same engine, target and environment; no % when R_0 = 0 (T-03); every action is labelled *Model-supported*, *Approximate estimate* or *Measure first*. |
+| Ch. 4 Bottleneck diagnosis | Per task a *bottleneck candidate* (angular sampling, optical MTF, SNR/contrast, environment, motion, observer) with the reason (cycles vs Nyquist, CNR, largest limiting-factor gain) and the separation test of the report's table. |
+| Ch. 5.1 / 6 Consistent actions | Longer lens at the same F-number (f and D together) or same aperture, faster optics, a complete smaller-pitch detector at the same FOV (flagged *incomplete simulation*, T-06), more pixels (shows FOV, not IFOV, changes), lower NETD / read noise, frame rate / integration time (conditional, T-07), transmission, diffraction-limited optics, stabilization; clearer atmosphere only as a *scenario* (T-08). Each case is validated before the run. |
+| Ch. 5.2 Sensitivities | S_i = (x_i / R) dR/dx_i by central differences (+/-5 %), zero-effect inputs flagged as a possible model limitation. |
+| Ch. 5.3 / 8.1 Ranking and cards | Top 3 materially different actions (one per group) for the chosen task, inside a minimum-FOV constraint (T-09); Pareto flag on gain vs FOV; before/after, trade-offs (FOV, F-number, mass), evidence and notes per action. |
+| Ch. 5.4 Uncertainty | Paired robustness: base and action recalculated on the same low/high values of the main assumptions (atmosphere, target) - a range of Delta_R, no invented confidence. |
+| Ch. 8 usability rule | *Measure first* list (theoretical MTF, calculated NETD, generic QE, preset target / atmosphere, no LOS motion) with the measurement to make. |
+| App. A tests | `tests/test_advisor.py`: T-01, T-02, T-03, T-06 ... T-10, consistent lens change, pixel count vs IFOV, distinct top 3, report / CSV. |
 
 ## Version 2.2 - changes from "TRM_Imaging_Research_Engineering_Field_Map_HE_v1_1.pdf"
 

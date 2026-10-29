@@ -28,12 +28,15 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from . import presets as P
 from .model import run_project, ModelError, MODEL_VERSION, MODEL_REFERENCE, VALIDATION_VERSION
 from . import report
+from . import report_he
 from . import scenario as SC
 from . import zemax as Z
 from . import imports as IM
 from . import derived as DV
 from . import profiles as PR
 from . import analysis as AN
+from . import advisor as ADV
+from . import atlas_news as NEWS
 from .help_text import help_for
 from . import __version__
 
@@ -323,11 +326,22 @@ TABS = [
         F("basic.bin_h", "Binned pixels horizontal", "int"),
         F("basic.bin_v", "Binned pixels vertical", "int"),
         F("basic.n_sensors", "Number of identical sensors", "choice", [(1, "One"), (2, "Two")]),
-        H("Readout / exposure (exposure = integration time on 'Detector sensitivity', shared with the motion model)",
-          level="adv", active=lambda p: p["basic"].get("readout", "global") != "global"),
+        F("basic.bin_kind", "Binning type", "choice", [("charge", "Charge / hardware binning (one read-out)"),
+                                                       ("digital", "Digital binning (sum of read-outs)")],
+          cond=lambda p: p["basic"]["bin_h"] > 1 or p["basic"]["bin_v"] > 1),
+        H("Readout / exposure timing (exposure = integration time on 'Detector sensitivity', shared with the motion "
+          "model)", level="adv",
+          active=lambda p: p["basic"].get("readout", "global") != "global" or not p["basic"].get("exp_overlap", True)
+          or p["basic"].get("guard_ms", 0) > 0 or p["basic"].get("exp_min_ms", 0) > 0 or
+          p["basic"].get("exp_max_ms", 0) > 0),
         F("basic.readout", "Readout mode", "choice", [("global", "Global shutter"), ("rolling", "Rolling shutter")]),
+        F("basic.exp_overlap", "Exposure may overlap the readout of the previous frame", "bool"),
         F("basic.readout_ms", "Frame readout time (row 1 to last row)", unit="ms",
-          cond=lambda p: p["basic"].get("readout") == "rolling"),
+          cond=lambda p: p["basic"].get("readout") == "rolling" or not p["basic"].get("exp_overlap", True)),
+        F("basic.guard_ms", "Guard / trigger dead time per frame", unit="ms"),
+        F("basic.exp_min_ms", "Hardware minimum exposure (0 = not specified)", unit="ms"),
+        F("basic.exp_max_ms", "Hardware maximum exposure (0 = not specified)", unit="ms"),
+        F("basic.roi", "ROI / window mode (documentation)", "text"),
         H("Interlace (legacy video - not used by staring digital cameras)", level="legacy",
           active=lambda p: p["basic"]["interlace"] != "progressive"),
         F("basic.interlace", "Electronic interlace", "choice",
@@ -367,6 +381,10 @@ TABS = [
           [("sagittal", "Sagittal (vertical = tangential)"), ("tangential", "Tangential (vertical = sagittal)")],
           cond=OPT_FILE),
         F("optics.mtf_meta", "Spectrum / field / zoom-focus of the data", "text", cond=OPT_FILE),
+        F("optics.mtf_band", "Wavelength / band of the data", "text", cond=OPT_FILE),
+        F("optics.mtf_focus", "Focus state", "text", cond=OPT_FILE),
+        F("optics.mtf_temp", "Operating temperature", "text", cond=OPT_FILE),
+        F("optics.mtf_uncert", "Measurement / model uncertainty", "text", cond=OPT_FILE),
         H("Component coverage of the imported MTF (no double counting)", cond=OPT_FILE),
         F("optics.mtf_incl_diffraction", "Data include diffraction (else computed and applied once)", "bool",
           cond=OPT_FILE),
@@ -377,7 +395,7 @@ TABS = [
           active=lambda p: p["optics"]["aberration"] != "none" or p["optics"]["diffraction"] != "spectral"),
         F("optics.diffraction", "Diffraction MTF", "choice", [("spectral", "Automatic spectral weighting"),
                                                              ("single", "Single wavelength")], cond=OPT_MODEL),
-        F("optics.lambda_diff_um", "Wavelength for diffraction",
+        F("optics.lambda_diff_um", "Wavelength for diffraction (0 = band mean)",
           cond=lambda p: OPT_MODEL(p) and p["optics"]["diffraction"] == "single", unit="um"),
         F("optics.aberration", "Aberration (approximation)", "choice", [("none", "No aberration"),
                                                                         ("q", "Aberration parameter q"),
@@ -399,6 +417,9 @@ TABS = [
           cond=lambda p: p["optics"].get("tau_mode") == "zemax"),
         F("optics.tau_filter", "Transmission additional filter",
           cond=lambda p: not (p["optics"].get("tau_mode") == "zemax" and p["optics"].get("tau_scope") == "system")),
+        H("Field-edge throughput (ranges use the on-axis paraxial irradiance)", level="adv",
+          active=lambda p: p["optics"].get("rel_illum", 1.0) < 1.0),
+        F("optics.rel_illum", "Relative illumination at the field edge (vignetting x cos^4, 1 = none)"),
     ]),
     ("Detector geometry", [
         H("Focal plane array (Sec. 2.9)"),
@@ -437,6 +458,9 @@ TABS = [
         F("detector.qe_unit", "Custom QE values are", "choice", [("auto", "Auto (<= 1 means fraction)"),
                                                                  ("percent", "Percent"), ("fraction", "Fraction")],
           cond=lambda p: p["detector"]["qe_preset"] == "Custom" and (not UNCOOLED(p) or p["detector"]["uncooled_response"] == "preset")),
+        F("detector.qe_basis", "QE refers to", "choice",
+          [("unspecified", "Not stated (TRM: active area)"), ("active_area", "Active area (intrinsic QE)"),
+           ("pixel_area", "Full pixel area (total / EMVA 1288 QE, incl. fill factor)")], COOLED),
         H("Temporal noise / NETD"),
         F("detector.noise_mode", "Noise / sensitivity source", "choice",
           [("calculated", "Physics model (detector noise sources)"), ("measured", "Measured camera NETD")],
@@ -453,6 +477,8 @@ TABS = [
           cond=lambda p: CAM_NETD(p) and COOLED(p)),
         F("detector.netd_frames", "Frames averaged in the test", "int", cond=CAM_NETD),
         F("detector.netd_nuc", "Gain / NUC / processing state", "text", cond=CAM_NETD),
+        F("detector.noise_port", "Measurement port", "choice", [("raw", "RAW (before NUC)"), ("post_nuc", "After NUC"),
+                                                                 ("processed", "Processed video output")], CAM_NETD),
         H("NETD measurement conditions (detector-level NETD)", cond=lambda p: UNCOOLED(p) and p["detector"]["noise_mode"] == "detector"),
         F("detector.meas_F", "Measurement F-number (0 = project)", cond=lambda p: UNCOOLED(p) and p["detector"]["noise_mode"] == "detector"),
         F("detector.meas_tau", "Measurement transmission (0 = project)", cond=lambda p: UNCOOLED(p) and p["detector"]["noise_mode"] == "detector"),
@@ -463,12 +489,35 @@ TABS = [
                                                                   ("duty", "Integration duty cycle"), ("wellfill", "Well fill")], COOLED),
         F("detector.tint_ms", "Integration time", cond=lambda p: COOLED(p) and p["detector"]["tint_mode"] == "direct", unit="ms"),
         F("detector.duty", "Integration duty cycle", cond=lambda p: COOLED(p) and p["detector"]["tint_mode"] == "duty"),
-        F("detector.wellfill_pct", "Well fill", cond=lambda p: COOLED(p) and p["detector"]["tint_mode"] == "wellfill", unit="%"),
-        H("Charge-based noise sources and full well", cond=RADIOMETRIC, level="adv",
-          active=lambda p: p["detector"]["electron_gain"] != 1 or p["detector"]["noise_figure"] != 1),
+        F("detector.wellfill_pct", "Well fill (of the usable capacity)", cond=lambda p: COOLED(p) and p["detector"]["tint_mode"] == "wellfill", unit="%"),
+        H("Operating point and saturation capacity (one gain / readout / temperature mode)", cond=COOLED),
+        F("detector.op_mode", "Operating mode (gain, conversion gain, readout, temperature)", "text", cond=COOLED),
         F("detector.storage_e", "Full well (storage) capacity", cond=COOLED, unit="carriers"),
+        F("detector.cap_node", "Capacity above refers to", "choice",
+          [("unknown", "Not stated (generic)"), ("pixel", "Physical pixel full well"),
+           ("roic", "ROIC integration capacitor / storage node"),
+           ("camera", "Camera saturation capacity (input-referred, measured)")], COOLED),
+        F("detector.sat_e", "Camera saturation capacity, input-referred (0 = unknown)", cond=COOLED, unit="e-"),
+        H("Exposure budget: saturation, timing, motion and SNR checked together", cond=COOLED, level="adv",
+          active=lambda p: p["detector"].get("snr_req", 0) > 0),
+        F("detector.fill_limit_pct", "Permitted fill of the usable capacity (design margin)", cond=COOLED, unit="%"),
+        F("detector.bright_refl", "Brightest credible scene reflectivity", cond=lambda p: COOLED(p) and NOT_THERMAL(p)),
+        F("detector.bright_dT_K", "Brightest credible scene temperature above background", unit="K",
+          cond=lambda p: COOLED(p) and not VISIBLE(p)),
+        F("detector.snr_req", "Required pixel SNR (0 = not checked)", cond=COOLED),
+        H("Charge-based noise sources and dark current", cond=RADIOMETRIC, level="adv",
+          active=lambda p: p["detector"]["electron_gain"] != 1 or p["detector"]["noise_figure"] != 1 or
+          p["detector"].get("dark_mode", "value") != "value"),
         F("detector.electron_gain", "Electron gain", cond=RADIOMETRIC),
-        F("detector.dark_A", "Dark current", cond=RADIOMETRIC, unit="A"),
+        F("detector.dark_mode", "Dark current via", "choice", [("value", "Single value"),
+                                                              ("table", "Calibrated table vs sensor temperature")],
+          RADIOMETRIC),
+        F("detector.dark_A", "Dark current", cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode", "value") == "value",
+          unit="A"),
+        F("detector.dark_table", "Dark current table: 'T_sensor[K] I_dark[A]' per line", "multiline",
+          cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") == "table"),
+        F("detector.T_sensor_K", "Sensor operating temperature", unit="K",
+          cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") == "table"),
         F("detector.noise_floor_e", "Read noise (additive floor)", cond=RADIOMETRIC, unit="e-"),
         F("detector.noise_figure", "Noise figure (multiplicative)", cond=RADIOMETRIC),
         H("ADC resolution", level="adv", active=lambda p: p["detector"].get("adc_bits", 0) > 0),
@@ -584,6 +633,8 @@ TABS = [
         F("stab.lin_on", "Linear motion", "bool", cond=JIT_MODEL),
         F("stab.lin_h", "Horizontal linear image velocity", cond=lambda p: JIT_MODEL(p) and p["stab"]["lin_on"], unit="mrad/s"),
         F("stab.lin_v", "Vertical linear image velocity", cond=lambda p: JIT_MODEL(p) and p["stab"]["lin_on"], unit="mrad/s"),
+        F("stab.smear_allow_px", "Allowed smear per exposure (exposure budget)", unit="pixels",
+          cond=lambda p: JIT_MODEL(p) and p["stab"]["lin_on"]),
         F("stab.sin_on", "Sinusoidal vibrations", "bool", cond=JIT_MODEL),
         F("stab.sin_h", "Horizontal sinusoidal amplitude", cond=lambda p: JIT_MODEL(p) and p["stab"]["sin_on"], unit="mrad"),
         F("stab.sin_v", "Vertical sinusoidal amplitude", cond=lambda p: JIT_MODEL(p) and p["stab"]["sin_on"], unit="mrad"),
@@ -701,6 +752,11 @@ TABS = [
         F("atmosphere.meta.geometry", "Path geometry (horizontal / slant, altitudes)", "text", cond=ATM_DOC),
         F("atmosphere.meta.source", "Generating model / source (e.g. MODTRAN version)", "text", cond=ATM_DOC),
         F("atmosphere.meta.conditions", "Conditions (humidity, temperature, pressure, date)", "text", cond=ATM_DOC),
+        F("atmosphere.meta.database", "Spectroscopy database edition (e.g. HITRAN2024)", "text", cond=ATM_DOC),
+        F("atmosphere.meta.rt_code", "Radiative-transfer code / version", "text", cond=ATM_DOC),
+        F("atmosphere.meta.profile", "T-p-h profile / gas concentrations", "text", cond=ATM_DOC),
+        F("atmosphere.meta.aerosol", "Aerosol model / visibility", "text", cond=ATM_DOC),
+        F("atmosphere.meta.resolution", "Spectral resolution / output bandpass", "text", cond=ATM_DOC),
         H("Turbulence (Sec. 2.28)", cond=NOT_THERMAL),
         F("turbulence.on", "Consider turbulence", "bool", cond=NOT_THERMAL),
         F("turbulence.cn2_preset", "Scenario default (Table C.2)", "choice",
@@ -724,6 +780,8 @@ TABS = [
           and p["turbulence"]["cn2_mode"] == "height", unit="m"),
         F("turbulence.time", "Day / night", "choice", [("day", "Day"), ("night", "Night")],
           cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"] and p["turbulence"]["cn2_mode"] == "height"),
+        F("turbulence.L0_m", "Outer scale L0, von Karman (0 = Kolmogorov)", unit="m",
+          cond=lambda p: NOT_THERMAL(p) and p["turbulence"]["on"]),
     ]),
     ("Validation data", [
         H("Measured performance curve (MTDP / MRTD / MCP)"),
@@ -753,6 +811,14 @@ TABS = [
         F("measured.meta.processing", "Frame processing (NUC, filters, AGC)", "text"),
         F("measured.meta.uncertainty", "Measurement uncertainty", "text"),
         F("measured.meta.config_id", "Configuration identifier", "text"),
+        F("measured.meta.firmware", "Camera firmware", "text"),
+        F("measured.meta.op_mode", "Gain / readout mode", "text"),
+        F("measured.meta.frame_rate", "Frame rate", "text"),
+        F("measured.meta.roi", "ROI / window", "text"),
+        F("measured.meta.exposure", "Exposure / integration time", "text"),
+        F("measured.meta.f_number", "F-number", "text"),
+        F("measured.meta.raw_files", "RAW file references", "text"),
+        F("measured.meta.calib_id", "Calibration identifiers (traceable sources)", "text"),
     ]),
 ]
 
@@ -1260,8 +1326,8 @@ class SensitivityTab(ttk.Frame):
     Each mode keeps its own last result; a result whose inputs have changed is marked as not updated.
     """
 
-    MODES = (("limiting", "Limiting factors"), ("sweep", "Parameter sweep"), ("uncertainty", "Uncertainty"),
-             ("scenarios", "Scenarios"))
+    MODES = (("advisor", "Improve performance"), ("limiting", "Limiting factors"), ("sweep", "Parameter sweep"),
+             ("uncertainty", "Uncertainty"), ("scenarios", "Scenarios"))
     MODE_NAME = dict(MODES)
 
     def __init__(self, master, app):
@@ -1287,6 +1353,7 @@ class SensitivityTab(ttk.Frame):
         self.stop_btn.pack(side="left", padx=4)
         ttk.Button(bar2, text="Reset", command=self.reset).pack(side="left")
         ttk.Button(bar2, text="Export CSV...", command=self.export_csv).pack(side="left", padx=4)
+        ttk.Button(bar2, text="Hebrew PDF report...", command=lambda: self.app.export_report_he()).pack(side="left")
         ttk.Label(bar2, text="History", style="Unit.TLabel").pack(side="left", padx=(10, 4))
         self.hist_cb = ttk.Combobox(bar2, state="readonly", width=24)
         self.hist_cb.pack(side="left", fill="x", expand=True)
@@ -1353,6 +1420,10 @@ class SensitivityTab(ttk.Frame):
         self.unc_rows, self.corr = [], []
         self.u_method = tk.StringVar(value="rss")
         self.u_adv = {k: tk.StringVar() for k in ("mc_n", "seed", "coverage", "k", "deriv_step_pct")}
+        self.adv_task = tk.StringVar()
+        self.adv_minfov = tk.StringVar(value="0")
+        self.adv_step = tk.StringVar(value="25")
+        self.adv_robust = tk.BooleanVar(value=True)
         self.show_mode("limiting")
 
     # ------------------------------------------------------------------ state
@@ -1368,6 +1439,8 @@ class SensitivityTab(ttk.Frame):
             extra = self._unc_settings_from_ui(store=False)
         elif mode == "scenarios":
             extra = [s["name"] for s in self.app.project.get("scenarios", [])]
+        elif mode == "advisor":
+            extra = [self.adv_task.get(), self.adv_minfov.get(), self.adv_step.get(), self.adv_robust.get()]
         return json.dumps([p, extra], sort_keys=True, default=str)
 
     def check_stale(self, p=None):
@@ -1431,6 +1504,32 @@ class SensitivityTab(ttk.Frame):
 
     def _section_label(self, parent, text):
         autowrap(ttk.Label(parent, style="Muted.TLabel", justify="left", text=text)).pack(fill="x", anchor="w")
+
+    def _opts_advisor(self):
+        self._section_label(self.opts, "Range Improvement Advisor: diagnoses the bottleneck of each task, applies "
+                                       "physically consistent what-if changes (lens, aperture, detector, noise, "
+                                       "exposure, transmission, stabilization) through the same range engine and "
+                                       "ranks the three best materially different actions. Environment changes are "
+                                       "shown as scenarios, never as improvements. Advisory only - the project is not "
+                                       "changed.")
+        fr = ttk.Frame(self.opts)
+        fr.pack(fill="x", pady=(6, 0))
+        try:
+            tasks = [t["name"] for t in self.app.collect()["target"]["tasks"] if t.get("on")]
+        except Exception:
+            tasks = []
+        if self.adv_task.get() not in tasks:
+            self.adv_task.set(tasks[-1] if tasks else "")
+        ttk.Label(fr, text="Rank by task").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(fr, values=tasks, state="readonly", textvariable=self.adv_task, width=16).grid(
+            row=0, column=1, sticky="w", padx=(6, 16))
+        ttk.Label(fr, text="Minimum FOV (h)").grid(row=0, column=2, sticky="w")
+        ttk.Entry(fr, textvariable=self.adv_minfov, width=7).grid(row=0, column=3, sticky="w", padx=(6, 2))
+        ttk.Label(fr, text="deg (0 = no limit)", style="Unit.TLabel").grid(row=0, column=4, sticky="w", padx=(0, 16))
+        ttk.Label(fr, text="What-if step [%]").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(fr, textvariable=self.adv_step, width=7).grid(row=1, column=1, sticky="w", padx=(6, 2), pady=(4, 0))
+        ttk.Checkbutton(fr, text="Paired robustness under assumption ranges (top 3)", variable=self.adv_robust).grid(
+            row=1, column=2, columnspan=3, sticky="w", pady=(4, 0))
 
     def _opts_limiting(self):
         self._section_label(self.opts, "What limits the nominal range? Each degradation of the imaging chain is "
@@ -1702,6 +1801,7 @@ class SensitivityTab(ttk.Frame):
         t0 = time.time()
 
         def progress(msg, frac=None):
+            msg = "%s  -  %s elapsed" % (msg, time.strftime("%M:%S", time.gmtime(time.time() - t0)))
             self.after(0, lambda: (self.state_lbl.configure(text=msg),
                                    frac is not None and self.app.prog.configure(value=frac)))
 
@@ -1719,6 +1819,16 @@ class SensitivityTab(ttk.Frame):
         threading.Thread(target=work, daemon=True).start()
 
     def _job(self, mode, p):
+        if mode == "advisor":
+            try:
+                fov, step = float(self.adv_minfov.get() or 0), float(self.adv_step.get() or 25) / 100.0
+            except ValueError:
+                raise ValueError("Enter a numeric minimum FOV and what-if step.")
+            if not 0.02 <= step <= 1.0:
+                raise ValueError("The what-if step must be between 2 and 100 %.")
+            task, rob = self.adv_task.get() or None, bool(self.adv_robust.get())
+            return lambda prog, stop: ADV.advise(p, prog, stop=stop, rank_task=task, min_fov_deg=fov, step=step,
+                                                 robustness=rob)
         if mode == "limiting":
             return lambda prog, stop: AN.limiting_factors(p, prog, stop=stop)
         if mode == "uncertainty":
@@ -1760,6 +1870,8 @@ class SensitivityTab(ttk.Frame):
         self.stop_btn.state(["disabled"])
         self.app.configure(cursor="")
         self.app.prog.configure(value=0)
+        if mode == "advisor":                          # a Hebrew report may be waiting for this run
+            self.after_idle(lambda: self.app._advisor_finished(r, err))
         if err == "cancelled":
             self.state_lbl.configure(text="Analysis stopped - previous results kept.")
             return
@@ -1778,6 +1890,8 @@ class SensitivityTab(ttk.Frame):
             label += ": %s x %s" % (r["px"].split(".")[-1], r["py"].split(".")[-1])
         elif r["kind"] == "uncertainty":
             label += " (%s)" % ("MC" if r["method"] == "mc" else "RSS")
+        elif r["kind"] == "advisor":
+            label += ": " + r["rank_task"]
         self.history.append({"mode": mode, "result": r, "label": label})
         self.history = self.history[-30:]
         self.hist_cb.configure(values=[h["label"] for h in self.history[::-1]])
@@ -1791,7 +1905,7 @@ class SensitivityTab(ttk.Frame):
         if self.app.result:
             self.app._show_summary(self.app.result)
 
-    _KIND_MODE = {"limiting": "limiting", "sweep": "sweep", "sweep2d": "sweep", "uncertainty": "uncertainty",
+    _KIND_MODE = {"advisor": "advisor", "limiting": "limiting", "sweep": "sweep", "sweep2d": "sweep", "uncertainty": "uncertainty",
                   "scenarios": "scenarios"}
 
     def is_stale(self, r, p=None):
@@ -1863,6 +1977,60 @@ class SensitivityTab(ttk.Frame):
     @staticmethod
     def _f(v, spec="%.3f"):
         return "-" if v is None or (isinstance(v, float) and not np.isfinite(v)) else spec % v
+
+    # --- range improvement advisor
+    def _show_advisor(self, r, tasks):
+        t = r["rank_task"]
+        b = r["baseline"]
+        top = [ADV.action_by_id(r, a) for a in r["top"]]
+        cards = [("Baseline %s" % t, "%.3f km" % r["base"][t], "%s | %s" % (b["baseline_id"],
+                                                                          r["diagnosis"][t]["label"]), MUTED)]
+        for i, a in enumerate(top):
+            x = a["results"][t]
+            cards.append(("#%d %s" % (i + 1, a["label"].split(":")[0]), "%.3f km (%+.1f %%)" % (x["after"], x["gain_pct"]),
+                          "%s | %s" % (ADV.SUPPORT[a["support"]], a["tradeoffs"][0] if a["tradeoffs"] else ""),
+                          TASK_COLORS[i % len(TASK_COLORS)]))
+        if not top:
+            cards.append(("No ranked action", "measure first", "see Calculation details", WARN))
+        self._card_row(cards)
+        self.method_lbl.configure(text="Primary bottleneck candidate (%s): %s - %s. Advisory only: uncalibrated model "
+                                       "predictions." % (t, r["diagnosis"][t]["label"],
+                                                         "; ".join(r["diagnosis"][t]["reasons"])))
+        ax = self.plot.axes(1, 1)[0]
+        ok = [a for a in r["actions"] if a["ok"]]
+        ok.sort(key=lambda a: a["results"][t]["gain_pct"] or 0.0)
+        for i, a in enumerate(ok):
+            g = a["results"][t]["gain_pct"] or 0.0
+            col = ACCENT if a["rank"] else ("#c3c9d4" if a["kind"] != "environment" else "#e8d5b5")
+            ax.barh(i, g, color=col, hatch="//" if a["kind"] == "environment" or a.get("constraint") else None,
+                    edgecolor="white")
+            ax.annotate("%+.1f %%  (%.2f km)%s" % (g, a["results"][t]["after"],
+                                                   "  #%d" % a["rank"] if a["rank"] else ""),
+                        xy=(max(g, 0), i), xytext=(4, 0), textcoords="offset points", va="center", fontsize=7)
+        ax.set_yticks(np.arange(len(ok)))
+        ax.set_yticklabels([("[scenario] " if a["kind"] == "environment" else "") + a["label"][:60] for a in ok],
+                           fontsize=7)
+        ax.axvline(0, color="#555", lw=0.8)
+        ax.set_xlabel("%s range change vs baseline %.3f km [%%]" % (t, r["base"][t]))
+        ax.set_title("What-if actions through the range engine (blue: top 3; hatched: scenario / constraint)")
+        ax.grid(alpha=0.3, axis="x")
+        self.plot.draw()
+        cols = ["#", "Action", "Kind", "Evidence"] + ["%s km" % x for x in tasks] + ["d%s %%" % x[0] for x in tasks] + \
+            ["FOV deg", "Pareto", "Trade-offs / notes"]
+        rows = []
+        order = lambda a: (a["rank"] or 99, -(a["results"][t]["gain_pct"] or 0) if a["ok"] else 1e9)   # noqa: E731
+        for a in sorted(r["actions"], key=order):
+            if a["ok"]:
+                rows.append([a["rank"] or "", a["label"], ADV.KIND[a["kind"]], ADV.SUPPORT[a["support"]]] +
+                            ["%.3f" % a["results"][x]["after"] for x in tasks] +
+                            [self._f(a["results"][x]["gain_pct"], "%+.1f") for x in tasks] +
+                            ["%.3f" % a["geometry"].get("fov_h_deg", float("nan")), "yes" if a.get("pareto") else "",
+                             "; ".join(([a["constraint"]] if a.get("constraint") else []) + a["tradeoffs"] + a["notes"])])
+            else:
+                rows.append(["", a["label"], ADV.KIND[a["kind"]], "rejected"] + ["-"] * (2 * len(tasks)) +
+                            ["", "", a["reason"]])
+        self._fill_table(cols, rows, [30, 330, 120, 130] + [75] * len(tasks) + [55] * len(tasks) + [65, 55, 600])
+        self._details([("Range Improvement Advisor", ADV.format_text(r))])
 
     # --- limiting factors
     def _show_limiting(self, r, tasks):
@@ -2146,7 +2314,7 @@ class SensitivityTab(ttk.Frame):
             return
         import csv
         with open(fn, "w", newline="", encoding="utf-8") as fh:
-            csv.writer(fh).writerows(AN.to_csv_rows(r))
+            csv.writer(fh).writerows(ADV.to_csv_rows(r) if r["kind"] == "advisor" else AN.to_csv_rows(r))
         self.app.status.set("Analysis exported to %s" % fn)
 
 
@@ -2154,7 +2322,8 @@ SRC_STYLE = {"preset": ("preset", "#7b8494", "#eef1f5"), "assumption": ("assumed
              "user": ("user", ACCENT, ACCENT_SOFT), "manufacturer": ("datasheet", "#067647", "#e3f5ec"),
              "measurement": ("measured", "#0e7490", "#ddf3f8"), "import": ("import", "#6d28d9", "#efe8fd"),
              "profile": ("profile", "#475569", "#e9edf2")}
-NO_BADGE = re.compile(r"^(name|target\.tasks\.\d+\.name|measured\..*|mode\..*|optics\.mtf_meta)$")
+NO_BADGE = re.compile(r"^(name|target\.tasks\.\d+\.name|measured\..*|mode\..*|optics\.mtf_(meta|band|focus|temp|uncert)|"
+                      r"basic\.roi|detector\.op_mode)$")
 
 
 class DerivedPanel(tk.Frame):
@@ -2233,7 +2402,8 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
         self.after(max(0, int(1100 - (time.time() - t0) * 1000)), lambda: (splash.destroy(), self.deiconify(),
                                                                            self.lift(), self.focus_force(),
-                                                                           self.after(80, self._place_sash)))
+                                                                           self.after(80, self._place_sash),
+                                                                           self.after(2500, self.check_news)))
 
     def _place_sash(self):
         self.update_idletasks()
@@ -2387,6 +2557,7 @@ class App(tk.Tk):
         mf.add_command(label="Save as...", accelerator="Ctrl+Shift+S", command=self.save_project_as)
         mf.add_separator()
         mf.add_command(label="Export report...", accelerator="Ctrl+E", command=self.export_report)
+        mf.add_command(label="Export Hebrew DRI report (PDF)...", command=self.export_report_he)
         mf.add_command(label="Export scenario record (JSON)...", command=self.export_scenario)
         mf.add_command(label="Export current plot...", accelerator="Ctrl+P", command=self.export_plot)
         mf.add_separator()
@@ -2410,6 +2581,7 @@ class App(tk.Tk):
         mr = tk.Menu(m, tearoff=False)
         mr.add_command(label="Calculate", accelerator="F5", command=self.calculate)
         mr.add_separator()
+        mr.add_command(label="Improve performance (advisor)", command=lambda: self.sens.run("advisor"))
         mr.add_command(label="Limiting factors", command=lambda: self.sens.run("limiting"))
         for key, label in (("sweep", "Parameter sweep"), ("uncertainty", "Uncertainty study"),
                            ("scenarios", "Scenario comparison")):
@@ -2417,6 +2589,12 @@ class App(tk.Tk):
         mr.add_separator()
         mr.add_command(label="Detector lookup...", accelerator="Ctrl+D", command=self.detector_lookup)
         m.add_cascade(label="Run", menu=mr)
+
+        mn = tk.Menu(m, tearoff=False)
+        mn.add_command(label="Detector Atlas news...", command=lambda: self.open_news())
+        mn.add_command(label="Check for new detectors now", command=lambda: self.check_news(manual=True))
+        m.add_cascade(label="News", menu=mn)
+        self.menubar, self.news_menu_index = m, m.index("end")
 
         mh = tk.Menu(m, tearoff=False)
         mh.add_command(label="Model documentation (PDF)", accelerator="F1", command=self.open_docs)
@@ -3117,6 +3295,101 @@ class App(tk.Tk):
             self.settings["last_dir"] = os.path.dirname(fn)
             self.status.set("Report written to %s" % fn)
 
+    def export_report_he(self):
+        """Hebrew scholarly PDF: DRI results + Range Improvement Advisor recommendations.
+
+        Reuses the advisor result of the Sensitivity tab when it matches the current inputs; otherwise the advisor runs
+        there first (progress, elapsed time and Stop on that tab) and the PDF is written when it finishes."""
+        if getattr(self, "_report_he_pending", None) or getattr(self, "_report_he_busy", False):
+            messagebox.showinfo("Hebrew DRI report", "The Hebrew report is already being prepared - the progress is "
+                                                     "shown on the Sensitivity tab ('Stop' cancels it).", parent=self)
+            try:
+                self.right.select(self.sens)
+            except tk.TclError:
+                pass
+            return
+        if self.busy or self.sens.busy:
+            messagebox.showinfo("Hebrew DRI report", "A calculation or analysis is still running. Wait until it has "
+                                                     "finished (or press 'Stop' on the Sensitivity tab), then export "
+                                                     "the report again.", parent=self)
+            return
+        try:
+            p = self.collect(strict=True)
+        except ValueError as e:
+            messagebox.showerror("Invalid input", str(e), parent=self)
+            return
+        if p["mode"]["environment"] != "field":
+            messagebox.showinfo("Hebrew DRI report", "The DRI report needs 'Field performance' (General page).",
+                                parent=self)
+            return
+        adv = self.sens.results.get("advisor")
+        reuse = adv is not None and not self.sens.is_stale(adv, p)
+        if not reuse and not messagebox.askokcancel(
+                "Hebrew DRI report", "The report needs the Range Improvement Advisor for the current inputs. It will "
+                                     "run now on the Sensitivity tab (progress and 'Stop' there) and the PDF is written "
+                                     "when it has finished.\n\nThe advisor makes about 60 model runs in parallel - "
+                                     "from well under a minute up to several minutes for slow (e.g. turbulence) "
+                                     "configurations.", parent=self):
+            return
+        fn = filedialog.asksaveasfilename(parent=self, title="Export Hebrew DRI report", initialdir=self._start_dir(),
+                                          defaultextension=".pdf",
+                                          initialfile=(self.project.get("name") or "TRM") + " - DRI report (HE).pdf",
+                                          filetypes=[("PDF document", "*.pdf")])
+        if not fn:
+            return
+        self.settings["last_dir"] = os.path.dirname(fn)
+        if reuse:
+            self._write_report_he(fn, p, adv)
+            return
+        self._report_he_pending = (fn, p)
+        self.sens.run("advisor")
+        if not self.sens.busy:                         # the run was refused (message already shown)
+            self._report_he_pending = None
+
+    def _advisor_finished(self, r, err):
+        pending, self._report_he_pending = getattr(self, "_report_he_pending", None), None
+        if not pending:
+            return
+        if err or r is None:
+            self.status.set("Hebrew report not written - the advisor %s" % ("was stopped" if err == "cancelled"
+                                                                            else "failed"))
+            return
+        self._write_report_he(pending[0], pending[1], r)
+
+    def _write_report_he(self, fn, p, adv):
+        same = self.result is not None and json.dumps(getattr(self, "calc_project", None), sort_keys=True,
+                                                      default=str) == json.dumps(p, sort_keys=True, default=str)
+        res = self.result if same else None
+        self._report_he_busy = True
+        self.configure(cursor="watch")
+        self.status.set("Writing the Hebrew PDF report...")
+
+        def work():
+            try:
+                n = report_he.write_pdf(fn, p, res if res is not None else run_project(p)[1], adv)
+                self.after(0, lambda: self._report_he_done(fn, n, None))
+            except Exception as e:          # ModelError, file in use, and anything unexpected
+                err = str(e) if isinstance(e, (ModelError, ValueError, OSError)) else traceback.format_exc()
+                self.after(0, lambda: self._report_he_done(fn, 0, err))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _report_he_done(self, fn, n, err):
+        self._report_he_busy = False
+        self.configure(cursor="")
+        if err:
+            self.status.set("Hebrew report failed")
+            messagebox.showerror("Hebrew DRI report", "The PDF could not be written:\n%s\n\nIf the file is open in a "
+                                                      "PDF viewer, close it and export again." % err, parent=self)
+            return
+        self.status.set("Hebrew report written to %s (%d pages)" % (fn, n))
+        if messagebox.askyesno("Hebrew DRI report", "Report written (%d pages):\n%s\n\nOpen it now?" % (n, fn),
+                               parent=self):
+            try:
+                os.startfile(fn)
+            except OSError:
+                pass
+
     def export_scenario(self):
         """Unit-labelled scenario record with coverage and trace (field map Sec. 12.8)."""
         if not self.result:
@@ -3152,6 +3425,60 @@ class App(tk.Tk):
 
     def detector_lookup(self):
         DetectorDialog(self)
+
+    # ------------------------------------------------------------------ detector atlas news
+    def check_news(self, manual=False):
+        """Read the atlas feed in the background; new unread detectors open the news window.  Re-runs every
+        NEWS.CHECK_INTERVAL_MS while TRM is open."""
+        if not manual:
+            self._news_job = self.after(NEWS.CHECK_INTERVAL_MS, self.check_news)
+        if getattr(self, "_news_busy", False):
+            return
+        self._news_busy = True
+
+        def work():
+            res = NEWS.fetch()
+            self.after(0, lambda: self._news_done(*res, manual=manual))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _news_done(self, news, info, manual=False):
+        self._news_busy = False
+        self.news, self.news_info = news, info
+        unread = NEWS.unread(news, self.settings)
+        self._update_news_menu(len(unread))
+        dlg = getattr(self, "news_dlg", None)
+        if dlg is not None and dlg.winfo_exists():
+            dlg.refresh()
+        shown = self.__dict__.setdefault("_news_shown", set())
+        fresh = [it for it in unread if it["id"] not in shown]
+        if fresh or manual:
+            self.open_news()
+        if fresh:
+            self.status.set("Detector Atlas: %d new detector(s) - %s" % (
+                len(unread), ", ".join(NEWS.title(it) for it in unread[:3])))
+
+    def _update_news_menu(self, n):
+        try:
+            self.menubar.entryconfigure(self.news_menu_index, label="News (%d new)" % n if n else "News")
+        except (AttributeError, tk.TclError):
+            pass
+
+    def open_news(self):
+        dlg = getattr(self, "news_dlg", None)
+        if dlg is not None and dlg.winfo_exists():
+            dlg.refresh()
+            dlg.deiconify()
+            dlg.lift()
+            return
+        if not hasattr(self, "news"):
+            self.check_news(manual=True)
+            return
+        self.news_dlg = NewsDialog(self)
+
+    def set_news_read(self, ids, read=True):
+        NEWS.mark_read(self.settings, ids, read)
+        save_settings(self.settings)
+        self._update_news_menu(len(NEWS.unread(getattr(self, "news", []), self.settings)))
 
     # ------------------------------------------------------------------ recent files / settings
     def _add_recent(self, fn):
@@ -3466,6 +3793,8 @@ class App(tk.Tk):
         if "aliasing" in db:
             kpis.append((("Aliasing risk (presampled MTF)", db["aliasing"], ""),
                          {"color": WARN if db["aliasing"] == "high" else None}))
+        if "fld" in db:
+            kpis.append((("F·λ/d - %s" % db["fld"]["regime"], "%.2f" % db["fld"]["value"], ""), {}))
         add("Effective F-number", "Effective F-number")
         if res["category"] == "Thermal":
             add("NETD used", "NETD used")
@@ -3518,6 +3847,34 @@ class App(tk.Tk):
         if len(res.get("assumptions", [])) > 6:
             ttk.Label(fr, text="   ... %d more in the Messages tab" % (len(res["assumptions"]) - 6),
                       style="Muted.TLabel").pack(anchor="w", padx=(14, 0))
+
+        # exposure budget and the context every DRI range is reported with (research review Sec. 4.3 / 7.7)
+        ex, ctx = db.get("exposure"), db.get("context")
+        if ex or ctx:
+            self._section(fr, "Exposure budget and DRI context")
+        if ex:
+            lim = ", ".join("%s %s" % (n, "%.4g ms" % (t * 1e3) if t != float("inf") else "none")
+                            for n, t in ex["limits"])
+            lines = [("Status", ("feasible" if ex["feasible"] else "INFEASIBLE") +
+                      ("  -  %s" % "; ".join(ex["violations"]) if ex["violations"] else "")),
+                     ("Selected / longest admissible integration time", "%.4g ms / %s (limited by %s)" % (
+                         ex["t_sel"] * 1e3, "%.4g ms" % (ex["t_rec"] * 1e3) if ex["t_rec"] != float("inf") else
+                         "unbounded", ex["limiter"])),
+                     ("Limits", lim),
+                     ("Brightest credible pixel well fill", "%.1f %% of %.3g e- (%s)" % (
+                         ex["wellfill_bright"], ex["capacity"], ex["capacity_limit"]))]
+            for k_, v_ in lines:
+                autowrap(ttk.Label(fr, text="%s:  %s" % (k_, v_), justify="left",
+                                   foreground=WARN if k_ == "Status" and (ex["violations"] or not ex["feasible"])
+                                   else None)).pack(anchor="w", fill="x", pady=(2, 0))
+        if ctx:
+            for k_, lab in (("task", "Task"), ("target", "Target"), ("operating_point", "Operating point"),
+                            ("scene", "Scene"), ("mtf_source", "MTF source"), ("observer", "Observer"),
+                            ("uncertainty", "Uncertainty"), ("validation", "Validation status")):
+                autowrap(ttk.Label(fr, text="%s:  %s" % (lab, ctx.get(k_, "")), style="Muted.TLabel",
+                                   justify="left")).pack(anchor="w", fill="x", pady=(2, 0))
+            autowrap(ttk.Label(fr, text=ctx.get("statement", ""), justify="left")).pack(anchor="w", fill="x",
+                                                                                         pady=(4, 0))
 
         # diagnostics
         w = res["warnings"]
@@ -3819,6 +4176,95 @@ class App(tk.Tk):
         self.tab_spec.draw()
 
 
+class NewsDialog(tk.Toplevel):
+    """New detectors found by the Detector Atlas watcher.  Close keeps the news unread (shown again at the next
+    start); 'Mark as read' hides an item for good (kept in the settings)."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Detector Atlas news")
+        self.configure(bg=SURFACE)
+        self.transient(app)
+        k = dpi_scale(app)
+        self.geometry("%dx%d" % (int(760 * k), int(520 * k)))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.show_read = tk.BooleanVar(value=False)
+
+        top = ttk.Frame(self, padding=(18, 16, 18, 6))
+        top.pack(fill="x")
+        ttk.Label(top, text="New detectors in the Detector Atlas", style="PageTitle.TLabel").pack(anchor="w")
+        self.sub = ttk.Label(top, style="PageSub.TLabel")
+        self.sub.pack(anchor="w", pady=(2, 0))
+
+        bot = ttk.Frame(self, padding=(18, 8, 18, 14))
+        bot.pack(side="bottom", fill="x")
+        ttk.Checkbutton(bot, text="Show news already marked as read", variable=self.show_read,
+                        command=self.refresh).pack(side="left")
+        ttk.Button(bot, text="Close", command=self.destroy).pack(side="right")
+        self.all_btn = ttk.Button(bot, text="Mark all as read", style="Accent.TButton", command=self.mark_all)
+        self.all_btn.pack(side="right", padx=8)
+
+        self.body = ScrollFrame(self, padding=(18, 4, 18, 4))
+        self.body.pack(fill="both", expand=True)
+        self.refresh()
+        self.after(10, lambda: (self.update_idletasks(), self.geometry("+%d+%d" % (
+            app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2,
+            app.winfo_rooty() + (app.winfo_height() - self.winfo_height()) // 4))))
+
+    def refresh(self):
+        app = self.app
+        news = getattr(app, "news", [])
+        info = getattr(app, "news_info", {})
+        done = NEWS.read_ids(app.settings)
+        unread = [it for it in news if it["id"] not in done]
+        app.__dict__.setdefault("_news_shown", set()).update(it["id"] for it in unread)
+        shown = news if self.show_read.get() else unread
+        src = "GitHub" if info.get("online") else \
+            "local copy (GitHub not reachable)" if info.get("source") else "no feed reachable"
+        checked = (info.get("last_checked") or "").replace("T", " ").rstrip("Z")
+        self.sub.configure(text="%d unread of %d  ·  atlas scanned %s UTC  ·  source: %s\n"
+                                "A newly detected listing is not necessarily a newly launched product - "
+                                "verify the datasheet." % (len(unread), len(news), checked or "?", src))
+        self.all_btn.state(["!disabled"] if unread else ["disabled"])
+        for w in self.body.inner.winfo_children():
+            w.destroy()
+        if not shown:
+            msg = "No new detectors - you're up to date." if news or info.get("source") else \
+                "The atlas feed could not be read:\n%s" % (info.get("error") or "")
+            ttk.Label(self.body.inner, text=msg, style="Muted.TLabel", justify="left").pack(anchor="w", pady=20)
+        for it in shown:
+            self._card(it, it["id"] in done)
+
+    def _card(self, it, read):
+        import webbrowser
+        card = tk.Frame(self.body.inner, bg=SURFACE if read else ACCENT_SOFT, highlightthickness=1,
+                        highlightbackground=BORDER, padx=12, pady=10)
+        card.pack(fill="x", pady=5)
+        bg = card["bg"]
+        head = tk.Frame(card, bg=bg)
+        head.pack(fill="x")
+        if not read:
+            tk.Label(head, text="NEW", bg=ACCENT, fg="white", font=("Segoe UI Semibold", 8), padx=6).pack(
+                side="left", padx=(0, 8))
+        tk.Label(head, text=NEWS.title(it), bg=bg, fg=TEXT, font=("Segoe UI Semibold", 11)).pack(side="left")
+        ttk.Button(head, text="Mark as unread" if read else "Mark as read",
+                   command=lambda: (self.app.set_news_read([it["id"]], not read), self.refresh())).pack(side="right")
+        url = it.get("source_url") or it.get("listing_url")
+        if url:
+            ttk.Button(head, text="Open listing", command=lambda: webbrowser.open(url)).pack(side="right", padx=6)
+        tk.Label(card, text=NEWS.details(it), bg=bg, fg=MUTED, font=("Segoe UI", 9), anchor="w",
+                 justify="left").pack(fill="x", pady=(4, 0))
+        if it.get("review"):
+            autowrap(tk.Label(card, text=it["review"], bg=bg, fg=TEXT, font=("Segoe UI", 9), anchor="w",
+                              justify="left")).pack(fill="x", pady=(2, 0))
+
+    def mark_all(self):
+        done = NEWS.read_ids(self.app.settings)
+        self.app.set_news_read([it["id"] for it in getattr(self.app, "news", []) if it["id"] not in done])
+        self.refresh()
+
+
 class DetectorDialog(tk.Toplevel):
     """Pick a detector from the Detector Atlas website (local copy in detector_lookup_HTML/ or its online feed)
     or an atlas file, review/edit its values, apply them."""
@@ -4030,7 +4476,8 @@ class DetectorDialog(tk.Toplevel):
         if res["qe_custom"]:
             items.append(("detector.qe_custom", "Spectral QE (custom table)", "um %", res["qe_custom"], res["qe_note"]))
         for i, (path, label, unit, value, note) in enumerate(items, start=1):
-            on = tk.BooleanVar(value=path != "detector.qe_custom" or res.get("qe_on", True))
+            on = tk.BooleanVar(value=(path != "detector.qe_custom" or res.get("qe_on", True)) and
+                               path not in self.DA.NOT_TICKED)
             ttk.Checkbutton(fr, variable=on).grid(row=i, column=0, padx=4)
             ttk.Label(fr, text=label).grid(row=i, column=1, sticky="w", padx=4)
             try:

@@ -21,7 +21,7 @@ from . import zemax as Z
 from . import imports as IM
 from .amop import amop as amop_sim
 
-MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.2"
+MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.5"
 MODEL_REFERENCE = "Fraunhofer IOSB TR 2021/04 (TRM4.v3 parameter description and model documentation)"
 # version of the acceptance/regression suite (kept separate from the model version, field map App. D)
 VALIDATION_VERSION = "acceptance suite FM-1.1 (field map v1.1, 14.10.2026)"
@@ -152,6 +152,7 @@ class TRM4Model:
         self._turb_cache = {}
         self._jit_cache = {}
         self._psd_cache = {}
+        self.r_motion_zero = {}       # first zero of the signed motion MTF per direction (set in run)
         # internal "what-if" switches used by the sensitivity / limiting-factor analysis (analysis.py)
         self.wi = dict(self.p.get("_what_if") or {})
         self.imports = []             # traceability of imported files: (what, name, sha256, notes)
@@ -185,7 +186,7 @@ class TRM4Model:
             raise ModelError("Unknown imager category %r" % self.cat)
         self.uncooled = self.cat == "Thermal" and p["imager_type"] == "uncooled"
         self.lab = p["mode"]["environment"] == "lab"
-        self.still = p["mode"]["stream"] == "still" or bool(p["mode"]["niirs"])
+        self.still = p["mode"]["stream"] == "still"          # NIIRS forces Still only for itself (see _niirs)
 
         fh = float(o["f_mm"])
         fv = float(o["f_v_mm"]) if o["diff_focal"] else fh
@@ -233,13 +234,27 @@ class TRM4Model:
         pitch_eff = {z: pitch[z] * nb[z] for z in "hv"}
         area *= nb["h"] * nb["v"]
         n_stor = float(d["storage_e"]) * nb["h"] * nb["v"]
+        area_pix = pitch["h"] * pitch["v"] * nb["h"] * nb["v"]
+        # hardware (charge) binning reads the summed charge once; digital binning sums n read-outs
+        self.bin_kind = b.get("bin_kind", "charge")
+        self.n_reads = nb["h"] * nb["v"] if self.bin_kind == "digital" else 1
         # --- electronic pseudo interlace, Eqs. (3.6)-(3.8)
         self.interlace = b["interlace"]
         if self.interlace == "pseudo":
             area *= 2
+            area_pix *= 2
             a_eff["v"] = pitch_eff["v"] + a_eff["v"]
             n_stor *= 2
-        self.A_det = area * 1e-12                          # [m^2]
+        # QE convention (research review Sec. 3.5 / 7.2): TRM's QE refers to the active (sensitive) area; a
+        # total / EMVA 1288 QE refers to the full pixel area and already contains fill factor and microlenses.
+        # A_det is the QE-consistent reference area used for every photon -> carrier conversion.
+        self.qe_basis = d.get("qe_basis", "unspecified")
+        if self.qe_basis not in ("unspecified", "active_area", "pixel_area"):
+            raise ModelError("Unknown QE basis %r" % self.qe_basis)
+        self.A_active = area * 1e-12                       # [m^2]
+        self.A_pixel = area_pix * 1e-12
+        self.fill_factor = min(self.A_active / self.A_pixel, 1.0) if self.A_pixel > 0 else 1.0
+        self.A_det = self.A_pixel if self.qe_basis == "pixel_area" else self.A_active
         self.n_stor = n_stor
         self.a_eff, self.pitch_eff = a_eff, pitch_eff
         self.n_el = n_el
@@ -285,6 +300,21 @@ class TRM4Model:
             if self.t_readout > 1.0 / self.frame_rate * 1.0001:
                 self.warn("Rolling-shutter readout time %.3g ms is longer than the frame interval %.3g ms." %
                           (self.t_readout * 1e3, 1e3 / self.frame_rate))
+        # --- sensor timing architecture (research review Sec. 3.1 / 3.8): t_max = 1/FPS only holds when the
+        # exposure may overlap the readout of the previous frame; otherwise readout and guard time are subtracted.
+        self.exp_overlap = bool(b.get("exp_overlap", True))
+        guard = max(float(b.get("guard_ms", 0.0) or 0.0), 0.0) * 1e-3
+        t_timing = t_max - guard
+        if not self.exp_overlap:
+            t_timing -= max(float(b.get("readout_ms", 0.0) or 0.0), 0.0) * 1e-3
+        if t_timing <= 0:
+            raise ModelError("Frame timing leaves no exposure time: frame interval %.4g ms minus readout / guard time "
+                             "is <= 0" % (t_max * 1e3))
+        self.t_timing = t_timing
+        self.t_hw_min = max(float(b.get("exp_min_ms", 0.0) or 0.0), 0.0) * 1e-3
+        self.t_hw_max = max(float(b.get("exp_max_ms", 0.0) or 0.0), 0.0) * 1e-3 or float("inf")
+        if self.t_hw_max < self.t_hw_min:
+            raise ModelError("Hardware maximum exposure is shorter than the minimum exposure")
 
         # --- signal processing factors
         self.zoom = max(1, int(round(dsp["zoom"])))
@@ -322,6 +352,54 @@ class TRM4Model:
 
         self.snr_th = float(disp["snr_th"])
         self.t_eye = float(disp["t_eye_s"])
+        self._setup_operating_point()
+
+    def _setup_operating_point(self):
+        """Detector operating point: QE basis, saturation capacity node, dark current (research review Sec. 3.5-3.11).
+
+        The storage capacity of TRM refers to its accumulation node; operational saturation can occur earlier at
+        an input-referred camera saturation or at the ADC.  The usable capacity is the smallest of the stated
+        limits and is the one used for well fill and exposure selection (spec wording Sec. 7.1 / 7.3).
+        """
+        d = self.p["detector"]
+        nb = self.nbin["h"] * self.nbin["v"] * (2 if self.interlace == "pseudo" else 1)
+        self.op_mode = str(d.get("op_mode", "") or "").strip()
+        self.cap_node = d.get("cap_node", "unknown")
+        limits = [(self.n_stor, {"pixel": "physical pixel full well", "roic": "ROIC / storage node",
+                                 "camera": "camera saturation capacity (input-referred)"}.get(
+                                     self.cap_node, "storage capacity (node not stated)"))]
+        sat = float(d.get("sat_e", 0.0) or 0.0)
+        if sat > 0:
+            limits.append((sat * nb, "camera saturation capacity (input-referred)"))
+        bits = int(d.get("adc_bits", 0) or 0)
+        if bits > 0 and d["adc_mode"] == "carriers" and float(d["lsb_e"]) > 0:
+            limits.append(((2 ** bits) * float(d["lsb_e"]), "ADC full scale (%d bit)" % bits))
+        limits = [x for x in limits if x[0] > 0]
+        if limits:
+            self.n_use, self.cap_limit = min(limits, key=lambda x: x[0])
+        else:
+            self.n_use, self.cap_limit = 0.0, "not specified"
+        # only an input-referred camera saturation capacity verifies the well fill; a physical full well does not
+        self.cap_verified = sat > 0 or self.cap_node == "camera"
+        # dark current: single value or calibrated table I_dark(T_sensor) (log-linear interpolation, no generic
+        # temperature-doubling rule)
+        self.dark_A = float(d["dark_A"])
+        self.dark_label = "%.3g A (single value)" % self.dark_A
+        if d.get("dark_mode", "value") == "table":
+            pts = ph.parse_table(d.get("dark_table", ""))
+            if len(pts) < 2:
+                raise ModelError("Dark current table needs at least two 'T_sensor[K] I_dark[A]' rows")
+            pts = pts[np.argsort(pts[:, 0])]
+            if np.any(pts[:, 1] <= 0):
+                raise ModelError("Dark current table values must be > 0 A")
+            T = float(d.get("T_sensor_K", 0.0) or 0.0)
+            if T <= 0:
+                raise ModelError("Dark current table selected: the sensor operating temperature must be > 0 K")
+            if T < pts[0, 0] or T > pts[-1, 0]:
+                self.warn("Sensor temperature %.1f K is outside the dark current table (%.1f-%.1f K): the edge value "
+                          "is used, not extrapolated." % (T, pts[0, 0], pts[-1, 0]))
+            self.dark_A = float(np.exp(np.interp(T, pts[:, 0], np.log(pts[:, 1]))))
+            self.dark_label = "%.3g A at %.1f K (table, %d points)" % (self.dark_A, T, len(pts))
 
     # =========================================================================================
     # Spectral data (Sections 3.5, 3.6)
@@ -754,15 +832,19 @@ class TRM4Model:
     # =========================================================================================
     # Carrier flux densities, signal and noise (Sections 3.7, 3.8)
     # =========================================================================================
-    def flux(self, R_km, atm):
-        """Integrated carrier flux densities [carriers/(s m^2)] for target and background at range R."""
+    def flux(self, R_km, atm, qe=True):
+        """Integrated carrier flux densities [carriers/(s m^2)] for target and background at range R.
+
+        qe=False gives photon flux densities [photons/(s m^2)] instead (research review Sec. 4.1: photon
+        arrival rate and photoelectron generation rate are reported separately).
+        """
         lab = atm is None
         tau = 1.0 if lab else atm.tau(R_km)
         tau_l = 1.0 if lab else atm.tau_lam(R_km)            # spectral array for imported atmospheres
         av = self.los_angle(R_km)
         F_T, F_B = self.irr_factors(av)
         F2 = self.F_eff ** 2
-        k = self.pp * self.eta * self.tau_o
+        k = self.pp * (self.eta if qe else 1.0) * self.tau_o
         emis_T = math.pi / (4 * F2) * self.L_T * self.eps_T                    # (3.110)
         emis_B = math.pi / (4 * F2) * self.L_B * self.eps_B
         refl_T = self.I * F_T * self.rho_T / (4 * F2)                          # (3.111)
@@ -795,7 +877,7 @@ class TRM4Model:
     @property
     def j_dark(self):
         """Dark carrier flux density, Eq. (3.113)."""
-        return float(self.p["detector"]["dark_A"]) / ph.E_CHARGE / self.A_det
+        return self.dark_A / ph.E_CHARGE / self.A_det
 
     def t_int_for(self, jB):
         d = self.p["detector"]
@@ -807,16 +889,17 @@ class TRM4Model:
             return t
         if mode == "duty":
             return float(d["duty"]) * self.t_max
-        # well fill, Eq. (3.76)
+        # well fill, Eq. (3.76) - of the usable (mode-specific) capacity, not necessarily the physical full well
         pct = float(d["wellfill_pct"])
-        if self.n_stor <= 0:
+        if self.n_use <= 0:
             raise ModelError("Well-fill option needs a storage capacity > 0")
         gain = float(d["electron_gain"])
-        t = pct * self.n_stor / ((jB + self.j_dark) * self.A_det * gain * 100.0)
-        if t > self.t_max:
+        t = pct * self.n_use / ((jB + self.j_dark) * self.A_det * gain * 100.0)
+        t_lim = min(self.t_max, self.t_timing, self.t_hw_max)
+        if t > t_lim:
             self.warn("Integration time for the requested well fill exceeds the maximum possible integration "
                       "time; the maximum is used.")
-            t = self.t_max
+            t = t_lim
         return t
 
     def dN_dT(self, t_int):
@@ -839,21 +922,25 @@ class TRM4Model:
         """Temporal noise of an integrating detector [carriers], Eq. (3.130)."""
         d = self.p["detector"]
         NF, g = float(d["noise_figure"]), float(d["electron_gain"])
+        # digital binning: read and quantization noise of every summed read-out
         var = (NF ** 2 * 0.5 * (jT + jB) + self.j_dark) * self.A_det * g ** 2 * t_int + \
-            self.n_quant(t_int) ** 2 + float(d["noise_floor_e"]) ** 2
+            self.n_reads * (self.n_quant(t_int) ** 2 + float(d["noise_floor_e"]) ** 2)
         return math.sqrt(var)
 
     def well_fill(self, jB, t_int):
+        """Well fill [%] of the usable capacity, Eq. (3.138) (= storage capacity unless an earlier limit is given)."""
         g = float(self.p["detector"]["electron_gain"])
-        if self.n_stor <= 0:
+        if self.n_use <= 0:
             return float("nan")
-        return 100.0 * t_int * (jB + self.j_dark) * self.A_det * g / self.n_stor     # Eq. (3.138)
+        return 100.0 * t_int * (jB + self.j_dark) * self.A_det * g / self.n_use
 
     # -----------------------------------------------------------------------------------------
     def _setup_noise(self):
         """Temporal/spatial noise quantities that do not depend on range."""
         d = self.p["detector"]
         dsp = self.p["dsp"]
+        if float(d["electron_gain"]) <= 0:
+            raise ModelError("Electron gain must be > 0 (is %g)" % float(d["electron_gain"]))
         a = self.iir
         # frame integration factor, Eq. (3.141)
         self.fr_int = self.n_frames * (1 + a) / (1 - a)
@@ -901,6 +988,9 @@ class TRM4Model:
             else:
                 self.t_ref = self.t_int_for(lab_flux["jB"])
                 self.dndt = self.dN_dT(self.t_ref)
+                if not self.dndt > 0:
+                    raise ModelError("The detector receives no thermal signal (dN/dT = 0): optics and filter "
+                                     "transmission, quantum efficiency and integration time must all be > 0.")
                 self.sigma_B = self.noise(lab_flux["jB"], lab_flux["jB"], self.t_ref)
                 self.netd_calc = self.sigma_B / self.dndt
                 self.netd = float(d["netd_mK"]) * 1e-3 if d["noise_mode"] == "measured" else self.netd_calc
@@ -909,8 +999,8 @@ class TRM4Model:
                     self.warn("Storage gate overflow: well fill %.0f %% (calculation continues)." % self.wellfill_ref)
                 # integration time for 50 % / 100 % well fill
                 g = float(d["electron_gain"])
-                if self.n_stor > 0:
-                    self.t50 = 50 * self.n_stor / ((lab_flux["jB"] + self.j_dark) * self.A_det * g * 100)
+                if self.n_use > 0:
+                    self.t50 = 50 * self.n_use / ((lab_flux["jB"] + self.j_dark) * self.A_det * g * 100)
                     self.t100 = 2 * self.t50
             fpn = d["fpn_mode"]
             if fpn == "measured":
@@ -992,8 +1082,11 @@ class TRM4Model:
         else:
             self.noise_quality = "documented test conditions"
 
-    def signal_state(self, R_km, atm):
-        """Signal/noise state at range R for Visible/General (carriers) or Thermal (Kelvin)."""
+    def signal_state(self, R_km, atm, t=None):
+        """Signal/noise state at range R for Visible/General (carriers) or Thermal (Kelvin).
+
+        t: integration time [s] to evaluate instead of the one selected by the exposure mode (Visible/General).
+        """
         fl = self.flux(R_km, atm)
         ns, fs = float(self.wi.get("noise_scale", 1.0)), float(self.wi.get("fpn_scale", 1.0))
         if self.cat == "Thermal":
@@ -1001,7 +1094,8 @@ class TRM4Model:
             return {"flux": fl, "nes": self.netd * ns, "ies": self.ietd * fs,
                     "eds": abs(float(self.p["target"]["dT_K"])) * tau, "t_int": self.t_ref}
         d = self.p["detector"]
-        t = self.t_int_for(fl["jB"])
+        if t is None:
+            t = self.t_int_for(fl["jB"])
         g = float(d["electron_gain"])
         sigma = self.noise(fl["jT"], fl["jB"], t) * ns
         fpn = d["fpn_mode"]
@@ -1098,7 +1192,11 @@ class TRM4Model:
                 m = np.abs(ph.trapz(w[None, :] * dm(r[:, None], lam_s[None, :]), lam_s, axis=1))
             else:
                 lam0 = float(o["lambda_diff_um"])
-                if not self.band[0] <= lam0 <= self.band[1]:
+                if lam0 <= 0:
+                    lam0 = float(ph.trapz(lam * self.w, lam))     # signal-weighted mean wavelength of the band
+                    self.assume("Single-wavelength diffraction MTF at the signal-weighted mean wavelength %.3g um."
+                                % lam0)
+                elif not self.band[0] <= lam0 <= self.band[1]:
                     self.warn("Wavelength for the diffraction MTF (%.2f um) is outside the imager spectral band "
                               "(can be intended to approximate aberrations)." % lam0)
                 m = dm(r, lam0)
@@ -1331,7 +1429,7 @@ class TRM4Model:
             t = self.t_th
         else:
             t = self.t_ref if self.t_ref else self.t_max
-        key = (z, round(t, 12))
+        key = (z, round(t, 12), self.still)
         if key not in self._jit_cache:
             r_max = self.opt_tab[z][0][-1]
             rg = np.linspace(0.0, r_max, 300)
@@ -1453,11 +1551,14 @@ class TRM4Model:
         w = w / ph.trapz(w, lam_s)
         r_max = max(self.opt_tab["h"][0][-1], self.opt_tab["v"][0][-1])
         r = np.linspace(0.0, r_max, 1200)
-        m = np.zeros_like(r)
+        L0 = max(float(tb.get("L0_m", 0.0) or 0.0), 0.0)
+        if L0 > 0:
+            self.assume("Turbulence with a von Karman outer scale L0 = %.3g m (first-order correction of the phase "
+                        "structure function, valid for pupil separations << L0)." % L0)
         vals = []
         for lam_i in lam_s:
             r0 = r0_ref * lam_i ** 1.2
-            vals.append(M.mtf_turbulence(r, lam_i, r0, self.D_eff, tb["exposure"]))
+            vals.append(M.mtf_turbulence(r, lam_i, r0, self.D_eff, tb["exposure"], L0))
         m = np.abs(ph.trapz(w[None, :] * np.array(vals).T, lam_s, axis=1))
         self._turb_cache[key] = (r, m, r0_ref * self.lam_peak ** 1.2)
         return self._turb_cache[key]
@@ -1525,9 +1626,27 @@ class TRM4Model:
         return r[idx[0]] if idx.size else r[-1]
 
     def amop_direct(self, R_km, rp, z):
+        zc = self.r_motion_zero.get(z)
+        if zc is not None and rp >= zc:
+            return 0.0                      # contrast-reversed bars beyond the motion MTF zero are not credited
         margin = 4.0 / max(self._pre_cutoff_cached(z, R_km), 1e-6)
         return amop_sim(lambda fr: self.pre_system(fr, z, R_km), lambda fr: self.post_system(fr, z),
                         self.alpha_s[z], rp, psf_margin=margin)
+
+    def _motion_zero(self, z, r_max):
+        """First frequency below r_max at which the signed motion MTF changes sign (None if it does not).
+
+        Linear motion (sinc), sinusoidal vibration (J0) and frame integration have negative lobes; beyond the first
+        zero the bar image is contrast-reversed (spurious resolution) and would otherwise be credited by AMOP."""
+        if self.motion_active() is None:
+            return None
+        r = np.linspace(0.0, r_max, 4001)
+        m = self.mtf_stab(r, z)
+        idx = np.nonzero(m <= 0)[0]
+        if not idx.size or idx[0] == 0:
+            return None
+        i = idx[0]
+        return float(r[i - 1] + (r[i] - r[i - 1]) * m[i - 1] / (m[i - 1] - m[i]))
 
     def _pre_cutoff_cached(self, z, R_km):
         key = ("cut", z, round(R_km, 9) if self.turbulence_active() else 0.0)
@@ -1536,6 +1655,11 @@ class TRM4Model:
         return self._amop_cache[key]
 
     def amop_table(self, R_km, z, rp):
+        """AMOP on the frequency grid rp -> (rp, AMOP), refined at the resolution limit.
+
+        Where AMOP first falls to <= 0.1 % the bracket is narrowed by bisection and its ends are added to the table,
+        so the limiting bar frequency (and with it the range when the signal is ample) varies continuously with the
+        inputs instead of jumping by whole grid steps (~8 %)."""
         vals = []
         zeros = 0
         for x in rp:
@@ -1545,7 +1669,23 @@ class TRM4Model:
             a = self.amop_direct(R_km, x, z)
             vals.append(a)
             zeros = zeros + 1 if a <= 0.001 else 0
-        return np.array(vals)
+        rp, vals = np.asarray(rp, float), np.array(vals)
+        dead = np.nonzero(vals <= 0.001)[0]
+        if dead.size and dead[0] > 0:
+            k = dead[0]
+            lo, a_lo, hi, a_hi = rp[k - 1], vals[k - 1], rp[k], vals[k]
+            for _ in range(10):
+                mid = math.sqrt(lo * hi)
+                a = self.amop_direct(R_km, mid, z)
+                if a > 0.001:
+                    lo, a_lo = mid, a
+                else:
+                    hi, a_hi = mid, a
+            new = [(x, a) for x, a in ((lo, a_lo), (hi, a_hi)) if rp[k - 1] < x < rp[k]]
+            if new:
+                rp = np.concatenate([rp[:k], [x for x, _ in new], rp[k:]])
+                vals = np.concatenate([vals[:k], [a for _, a in new], vals[k:]])
+        return rp, vals
 
     def amop_at(self, R_km, rp, z):
         if not self.turbulence_active():
@@ -1559,7 +1699,9 @@ class TRM4Model:
                 # between last positive and first zero entry: interpolate linearly to zero
                 return float(max(0.0, np.interp(rp, rt, at)))
             return float(ph.loglog_interp(rp, rt[pos], at[pos]))
-        return self.amop_direct(R_km, rp, z)
+        # below the tabulated band the 4-bar pattern no longer fits the simulation window and AMOP is flat there:
+        # use the band's lowest frequency, as the tabulated path does
+        return self.amop_direct(R_km, max(rp, 0.02 * self.r_N[z]), z)
 
     def _eye_integrals(self):
         """Tabulate the eye/brain spatial integration factors versus bar pattern frequency."""
@@ -1610,8 +1752,38 @@ class TRM4Model:
     # =========================================================================================
     # Main entry
     # =========================================================================================
+    def _validate_inputs(self):
+        """Physical bounds of inputs that are otherwise only parsed as numbers (sensitivity study, report Ch. 6.4)."""
+        p = self.p
+        o, d, disp, tg, tb = p["optics"], p["detector"], p["display"], p["target"], p["turbulence"]
+        checks = [("Target width", tg["W_m"], "> 0", lambda v: v > 0),
+                  ("Target height", tg["H_m"], "> 0", lambda v: v > 0),
+                  ("Target depth", tg["D_m"], ">= 0", lambda v: v >= 0),
+                  ("Background temperature [K]", tg["T_bg_K"], "> 0", lambda v: v > 0),
+                  ("Threshold SNR", disp["snr_th"], "> 0", lambda v: v > 0),
+                  ("Eye integration time", disp["t_eye_s"], "> 0", lambda v: v > 0)]
+        if o["aberration"] == "q":
+            checks.append(("Aberration parameter q (MTF_diff^q)", o["q"], ">= 1", lambda v: v >= 1))
+        if d["cte_on"]:
+            checks += [("Charge transfer efficiency (%s)" % z, d["cte_" + z], "in (0, 1]", lambda v: 0 < v <= 1)
+                       for z in "hv"]
+        if d["tint_mode"] == "duty":
+            checks.append(("Integration duty cycle", d["duty"], "in (0, 1]", lambda v: 0 < v <= 1))
+        if d["tint_mode"] == "wellfill":
+            checks.append(("Well fill", d["wellfill_pct"], "in (0, 100] %", lambda v: 0 < v <= 100))
+        if tb["on"] and tb["cn2_mode"] != "r0":
+            checks.append(("Cn2", tb["cn2"], ">= 0", lambda v: v >= 0))
+        for i, at in enumerate(p["atmosphere"]["atm"]):
+            if at.get("on") and "F_PR" in at:
+                checks.append(("Atm %d path radiance factor" % (i + 1), at["F_PR"], ">= 0", lambda v: v >= 0))
+        for label, v, rule, ok in checks:
+            v = float(v)
+            if not (math.isfinite(v) and ok(v)):
+                raise ModelError("%s must be %s (is %g)" % (label, rule, v))
+
     def run(self):
         self.progress("Setting up imager geometry", 0.02)
+        self._validate_inputs()
         self._setup_geometry()
         self._setup_spectral()
         self._setup_atmospheres()
@@ -1637,6 +1809,8 @@ class TRM4Model:
         self._check_saturation(ref_state, "at the reference range")
         self._check_contrast(ref_state)
         self._motion_checks()
+        self._input_semantics_checks()
+        self.exposure = self._exposure_budget()
         self.coverage = self._coverage()
         self.nps = self._nps_check()
 
@@ -1646,10 +1820,20 @@ class TRM4Model:
         # AMOP tables
         self.progress("Simulating AMOP (4-bar pattern imaging)", 0.15)
         rp_max = {z: min(2.5 * self.r_s[z], self.opt_tab[z][0][-1]) for z in "hv"}
+        self.r_motion_zero = {}
+        for z in "hv":
+            zc = self._motion_zero(z, rp_max[z])
+            if zc is not None:
+                self.r_motion_zero[z] = zc
+                rp_max[z] = max(zc, 0.03 * self.r_N[z])
+        if self.r_motion_zero:
+            self.assume("Bar frequencies above the first zero of the motion MTF (%s) are not credited: beyond it the "
+                        "bar image is contrast-reversed (spurious resolution)." %
+                        ", ".join("%s %.3g 1/mrad" % (z, v) for z, v in sorted(self.r_motion_zero.items())))
         self.amop_tab = {}
         for z in "hv":
             rp = np.logspace(np.log10(0.02 * self.r_N[z]), np.log10(rp_max[z]), 70)
-            self.amop_tab[z] = (rp, self.amop_table(R_ref, z, rp))
+            self.amop_tab[z] = self.amop_table(R_ref, z, rp)
         res["amop"] = {z: {"rp": self.amop_tab[z][0], "amop": self.amop_tab[z][1]} for z in "hv"}
         self.progress("Eye/brain integrals", 0.35)
         self._eye_integrals()
@@ -1692,6 +1876,9 @@ class TRM4Model:
         val = self._validation(res)
         if val:
             res["validation"] = val
+            res["dashboard"]["context"]["validation"] = "compared with measured data (%s)%s" % (
+                ", ".join(it["what"] for it in val["items"]),
+                "; metadata incomplete" if val.get("missing_meta") else "")
         res["info"] = self._info(res)
         res["provenance"] = self._provenance()
         res["assumptions"] = self.assumptions
@@ -1738,6 +1925,225 @@ class TRM4Model:
                               "a geometric distortion that is not included in the MTF." % (
                                   "horizontal" if z == "h" else "vertical",
                                   "shears" if z == "h" else "stretches / compresses", px))
+
+    def _input_semantics_checks(self):
+        """Mandatory input-semantics checks before DRI estimates (research review Sec. 3.5, 3.6, 3.10, 3.12, 3.18,
+        3.21, 3.24 and Sec. 10): QE basis vs pixel area, saturation-capacity basis, MTF / atmosphere metadata,
+        noise measurement port and preset lifecycle records."""
+        d, o, am = self.p["detector"], self.p["optics"], self.p["atmosphere"]
+        photon = not self.uncooled
+        # (1) QE convention and pixel area - fill factor must not be counted twice
+        if photon:
+            ff = self.fill_factor
+            if self.qe_basis == "unspecified" and ff < 0.98:
+                msg = ("QE basis not stated: the TRM convention (QE per active area, fill factor %.2f applied to the "
+                       "signal) is used. If the QE is a total / EMVA 1288 QE referred to the full pixel area (incl. "
+                       "fill factor and microlenses), select 'pixel area' - otherwise the fill factor is counted "
+                       "twice." % ff)
+                if self.source("detector.qe_preset") in ("manufacturer", "measurement") or \
+                        self.source("detector.qe_custom") in ("manufacturer", "measurement", "import"):
+                    self.warn(msg)
+                else:
+                    self.assume(msg)
+            elif self.qe_basis == "pixel_area" and ff < 0.999:
+                self.assume("QE referred to the full pixel area: the fill factor %.2f is contained in the QE and is "
+                            "not applied to the signal again; the active size is used for the detector MTF only." % ff)
+        # (2) saturation capacity used for the well fill must be valid for the modelled node and gain state
+        if photon and (self.cat != "Thermal" or d["noise_mode"] != "measured"):
+            if not self.cap_verified:
+                msg = ("Well fill uses the %s %.3g e- (not a verified input-referred camera saturation capacity); "
+                       "the ROIC, analog chain or ADC may clip earlier." % (self.cap_limit, self.n_use))
+                if d["tint_mode"] == "wellfill":
+                    self.warn(msg + " The integration time is selected from this capacity.")
+                else:
+                    self.assume(msg)
+            if not self.op_mode:
+                self.assume("Detector operating mode (gain / conversion gain / readout / temperature) not stated: "
+                            "capacity, read noise and dark current are assumed to belong to the same mode.")
+        if self.uncooled:
+            self.assume("Microbolometer (thermal detector): no photoelectron full-well / well-fill model is applied; "
+                        "the thermal time constant %.3g ms is a response time, not an exposure time (it sets the "
+                        "motion low-pass)." % (float(d["t_th_ms"])))
+        if self.nbin["h"] * self.nbin["v"] > 1:
+            self.assume("%s binning %dx%d: read noise %s." % (
+                "Digital" if self.bin_kind == "digital" else "Charge (hardware)", self.nbin["h"], self.nbin["v"],
+                "added for each of the %d summed read-outs" % self.n_reads if self.bin_kind == "digital" else
+                "counted once per binned pixel"))
+        # (3) noise measurement port
+        cam_netd = self.cat == "Thermal" and (d["noise_mode"] == "measured" and not self.uncooled or
+                                              self.uncooled and d["noise_mode"] == "device")
+        if cam_netd and d.get("noise_port", "raw") == "processed":
+            self.warn("Camera NETD was measured at the processed video output (after denoising / temporal filtering): "
+                      "TRM adds its own frame integration and filters - the noise reduction may be counted twice. "
+                      "Use a RAW or post-NUC NETD.")
+        # (4) imported MTF: content, units and conditions documented (spec wording Sec. 7.4)
+        if self.mtf_mode != "A":
+            missing = [lab for key, lab in (("mtf_band", "wavelength band"), ("mtf_focus", "focus"),
+                                            ("mtf_temp", "temperature"), ("mtf_uncert", "uncertainty"))
+                       if not str(o.get(key, "") or "").strip()]
+            self.mtf_doc = "complete" if not missing else "partial (missing: %s)" % ", ".join(missing)
+            if missing:
+                self.assume("Imported MTF metadata incomplete (missing: %s)." % ", ".join(missing))
+        else:
+            self.mtf_doc = "computed (TRM optics model)"
+        # (5) spectral atmosphere / path radiance: versioned RT data (spec wording Sec. 7.6)
+        if not self.lab and (am["mode"] == "spectral" or self.cat != "Thermal" and am.get("path_mode") == "import"):
+            meta = am.get("meta") or {}
+            missing = [lab for key, lab in (("database", "spectroscopy database edition"),
+                                            ("rt_code", "RT code / version"), ("profile", "atmospheric profile"),
+                                            ("aerosol", "aerosol model"), ("resolution", "spectral resolution"))
+                       if not str(meta.get(key, "") or "").strip()]
+            if missing:
+                self.assume("Imported atmospheric data not fully versioned (missing: %s)." % ", ".join(missing))
+        # (6) preset lifecycle records
+        recs = []
+        if self.qe_label in P.DETECTOR_QE:
+            recs.append(P.preset_record("qe", self.qe_label))
+        tg = self.p["target"]
+        for m in ("t_refl", "b_refl", "t_emis", "b_emis"):
+            if (self.cat == "Visible" and "refl" in m or self.cat == "General" and "emis" in m) and \
+                    tg["%s_mode" % m] == "spectral":
+                recs.append(P.preset_record("material", tg["%s_preset" % m]))
+        irr = self.p["irradiance"]
+        if self.cat != "Thermal" and irr["mode"] == "single" and irr["type"] == "broadband" and \
+                irr["spectrum"] == "preset":
+            recs.append(P.preset_record("source", irr["preset"]))
+        tb = self.p["turbulence"]
+        if self.turbulence_active() and tb.get("cn2_preset", "custom") != "custom":
+            recs.append(P.preset_record("cn2", tb["cn2_preset"]))
+        if not self.lab and am["mode"] != "spectral" and am.get("preset", "custom") != "custom":
+            recs.append(P.preset_record("atmosphere", am["preset"]))
+        seen, self.preset_records = set(), []
+        for r in recs:
+            if (r["kind"], r["name"]) not in seen:
+                seen.add((r["kind"], r["name"]))
+                self.preset_records.append(r)
+        # (7) paraxial focal-plane irradiance
+        ri = float(o.get("rel_illum", 1.0) or 1.0)
+        if not 0 < ri <= 1:
+            raise ModelError("Relative illumination at the field edge must be in (0, 1]")
+        self.rel_illum = ri
+        if self.F_eff < 1.0:
+            self.assume("Fast optics (F/%.2f): the paraxial irradiance factor pi/(4F^2) is an approximation - use the "
+                        "measured throughput / etendue." % self.F_eff)
+        # (8) generic defaults that act on the ranges but sit in hidden (advanced) input groups
+        if photon and (self.cat != "Thermal" or d["noise_mode"] != "measured"):
+            gen = P.DEFAULT_PROJECT["detector"]
+            for key, what, unit in (("noise_floor_e", "Read noise", "e- rms"), ("lsb_e", "ADC step (LSB)", "e-")):
+                if key == "lsb_e" and d["adc_mode"] != "carriers":
+                    continue
+                v = float(d[key])
+                if v == float(gen[key]) and self.source("detector." + key) not in ("manufacturer", "measurement",
+                                                                                   "import"):
+                    extra = " (quantization noise %.3g e- rms)" % (v / math.sqrt(12)) if key == "lsb_e" else ""
+                    self.assume("%s %.4g %s%s is the generic default, not a value of this detector - it acts on "
+                                "the ranges; enter the datasheet value." % (what, v, unit, extra))
+
+    def _bright_flux(self, R_km, atm):
+        """Carrier flux density of the brightest credible scene pixel [carriers/(s m^2)] (research review Sec. 3.7).
+
+        Candidates: a hot blackbody (T_bg + bright dT, emissive categories) and a highly reflective Lambertian
+        surface under the best-lit irradiance factor (reflective categories); the larger one is returned.
+        """
+        d = self.p["detector"]
+        fl = self.flux(R_km, atm)
+        tau_l = 1.0 if atm is None else atm.tau_lam(R_km)
+        F_T, F_B = self.irr_factors(self.los_angle(R_km))
+        F2 = self.F_eff ** 2
+        k = self.pp * self.eta * self.tau_o
+        rb = min(max(float(d.get("bright_refl", 0.9)), 0.0), 1.0)
+        cands = [fl["jB_scene"], fl["jT_scene"]]
+        if self.cat != "Visible":
+            L_hot = ph.planck(self.lam, self.T_B + max(float(d.get("bright_dT_K", 30.0)), 0.0))
+            cands.append(float(ph.trapz(k * math.pi / (4 * F2) * L_hot * tau_l, self.lam)))
+        if self.cat != "Thermal":
+            L_refl = self.I * max(F_T, F_B) * rb / (4 * F2)
+            if self.cat == "General":
+                L_refl = L_refl + math.pi / (4 * F2) * (1 - rb) * self.L_B
+            cands.append(float(ph.trapz(k * L_refl * tau_l, self.lam)))
+        return max(cands) + fl["j_path"] + self.j_internal
+
+    def _exposure_budget(self):
+        """Joint exposure constraints (research review Sec. 4.3 / spec wording Sec. 7.3):
+
+        t_int <= min[t_sat,max, t_timing,max, t_motion,max, t_hardware,max] and SNR(t_int) >= SNR_required,
+        t_sat,max = fill x C_usable / (Phi_bright + Phi_dark),  t_motion,max = smear_allow x IFOV / |omega|.
+        Reported for photon-integrating detectors; infeasible combinations are flagged, the selected
+        integration time is not changed.
+        """
+        if self.uncooled:
+            return None
+        d, st = self.p["detector"], self.p["stab"]
+        g = float(d["electron_gain"])
+        fill = min(max(float(d.get("fill_limit_pct", 70.0)), 0.0), 100.0)
+        atm0 = None if (self.lab or not self.atms or self.R_ref <= 0) else self.atms[0]
+        jb = self._bright_flux(0.0, None)
+        if atm0 is not None:
+            jb = max(jb, self._bright_flux(self.R_ref, atm0))
+        rate_b = (jb + self.j_dark) * self.A_det * g                       # e-/s, brightest pixel
+        t_sel = self.ref_state["t_int"]
+        lim = [("saturation of the brightest pixel at %.0f %% fill" % fill,
+                fill / 100.0 * self.n_use / rate_b if self.n_use > 0 and rate_b > 0 else float("inf")),
+               ("frame timing", self.t_timing), ("hardware maximum exposure", self.t_hw_max)]
+        smear = {}
+        if self.motion_active() == "model" and st["lin_on"]:
+            allow = max(float(st.get("smear_allow_px", 0.5)), 0.0)
+            t_m = float("inf")
+            for z, key in (("h", "lin_h"), ("v", "lin_v")):
+                w = abs(float(st[key]))                                      # mrad/s
+                ifov = self.pitch_eff[z] / self.f[z]                         # pixel angular pitch [mrad]
+                smear[z] = w * t_sel / ifov
+                if w > 0:
+                    t_m = min(t_m, allow * ifov / w)
+            lim.append(("image motion (%.2g px allowed)" % allow, t_m))
+        t_rec, limiter = min(((t, n) for n, t in lim), key=lambda x: x[0])
+        out = {"t_sel": t_sel, "limits": lim, "t_rec": t_rec, "limiter": limiter, "fill_pct": fill,
+               "rate_bright": rate_b, "smear_px": smear, "t_hw_min": self.t_hw_min,
+               "wellfill_bright": 100.0 * t_sel * rate_b / self.n_use if self.n_use > 0 else float("nan"),
+               "capacity": self.n_use, "capacity_limit": self.cap_limit, "violations": []}
+        # SNR requirement (task-specific pixel SNR)
+        snr_req = float(d.get("snr_req", 0.0) or 0.0)
+
+        def snr_at(t):
+            if self.cat == "Thermal":
+                if d["noise_mode"] == "measured":
+                    return None
+                return abs(float(self.p["target"]["dT_K"])) * self.dN_dT(t) / \
+                    self.noise(self.lab_flux["jB"], self.lab_flux["jB"], t)
+            s = self.signal_state(self.R_ref if atm0 else 0.0, atm0, t=t)
+            n = math.hypot(s["nes"], s["ies"])
+            return s["eds"] / n if n > 0 else float("inf")
+        if snr_req > 0 and np.isfinite(t_rec):
+            out["snr_req"], out["snr_sel"], out["snr_rec"] = snr_req, snr_at(t_sel), snr_at(t_rec)
+        v = out["violations"]
+        if out["wellfill_bright"] > 100:
+            v.append("brightest pixel saturates (%.0f %% of the %s)" % (out["wellfill_bright"], self.cap_limit))
+        # (t_sel > t_max itself is already reported by the integration-time checks)
+        if t_sel > self.t_timing * 1.0001 and self.t_timing < self.t_max * 0.9999:
+            v.append("integration time %.4g ms exceeds the sensor timing limit %.4g ms" % (t_sel * 1e3,
+                                                                                          self.t_timing * 1e3))
+        if t_sel > self.t_hw_max * 1.0001:
+            v.append("integration time exceeds the hardware maximum %.4g ms" % (self.t_hw_max * 1e3))
+        if t_sel < self.t_hw_min * 0.9999:
+            v.append("integration time is below the hardware minimum %.4g ms" % (self.t_hw_min * 1e3))
+        allow = float(st.get("smear_allow_px", 0.5))
+        for z, px in smear.items():
+            if px > allow:
+                v.append("%s image smear %.2f px > %.2g px allowed" % (z, px, allow))
+        infeasible = []
+        if t_rec < self.t_hw_min:
+            infeasible.append("the shortest constraint (%s, %.4g ms) is below the hardware minimum exposure" %
+                              (limiter, t_rec * 1e3))
+        if out.get("snr_rec") is not None and out["snr_rec"] < snr_req:
+            infeasible.append("SNR %.3g at the longest admissible exposure %.4g ms is below the required %.3g" %
+                              (out["snr_rec"], t_rec * 1e3, snr_req))
+        out["feasible"] = not infeasible
+        for x in v:
+            self.warn("Exposure budget: %s." % x)
+        if infeasible:
+            self.warn("Exposure budget infeasible: %s - saturation, motion, timing and SNR constraints cannot be met "
+                      "together." % "; ".join(infeasible))
+        return out
 
     def _coverage(self):
         """Resolve which data source contributes each chain component (field map Sec. 15.4) and check overlaps."""
@@ -1901,7 +2307,8 @@ class TRM4Model:
             return None
         meta = ms.get("meta") or {}
         missing = [k for k in ("instrument", "date", "method", "focus", "temperature", "processing", "uncertainty",
-                               "config_id") if not str(meta.get(k, "")).strip()]
+                               "config_id", "firmware", "op_mode", "frame_rate", "roi", "exposure", "f_number",
+                               "raw_files", "calib_id") if not str(meta.get(k, "")).strip()]
         out["meta"] = meta
         out["missing_meta"] = missing
         if missing:
@@ -1933,6 +2340,20 @@ class TRM4Model:
             return "moderate"
         return "low"
 
+    @staticmethod
+    def fld_regime(q):
+        """Design regime from F lambda / d (Holst, Opt. Eng. 46(10) 103204, 2007; Driggers et al., Opt. Eng. 51(6)
+        063202, 2012): which hardware change can lengthen the range."""
+        if q < 1.0:
+            return {"regime": "detector-limited (undersampled)",
+                    "lever": "longer focal length or smaller pixels at the same F-number; a larger aperture alone "
+                             "gains little"}
+        if q < 2.0:
+            return {"regime": "balanced (detector / optics)",
+                    "lever": "focal length and aperture diameter together"}
+        return {"regime": "optics-limited (diffraction)",
+                "lever": "larger aperture diameter; smaller pixels gain nothing"}
+
     def _cnr_at(self, R_km, atm):
         """Contrast-to-noise ratio of the target at range R (difference signal / total noise per pixel)."""
         if self.cat == "Thermal":
@@ -1957,6 +2378,11 @@ class TRM4Model:
                            "aliasing": self.aliasing_level(mn, spur)}
         worst = max((d["mtf"][z]["aliasing"] for z in "hv"), key=["low", "moderate", "high"].index)
         d["aliasing"] = worst
+        # F lambda / d with the signal-weighted mean wavelength of the band (not the QE peak) and the effective pitch
+        lam_w = float(ph.trapz(self.lam * self.w, self.lam))
+        pitch = math.sqrt(self.pitch_eff["h"] * self.pitch_eff["v"])
+        q = self.F_eff * lam_w / pitch
+        d["fld"] = dict(value=q, lambda_um=lam_w, pitch_um=pitch, F=self.F_eff, **self.fld_regime(q))
         st = self.ref_state
         if self.cat == "Thermal":
             n = math.hypot(st["nes"], st["ies"])
@@ -2000,6 +2426,14 @@ class TRM4Model:
                     row["mtf_task"] = math.sqrt(max(float(np.interp(f_task, *sysm["h"], right=0.0)), 0.0) *
                                                 max(float(np.interp(f_task, *sysm["v"], right=0.0)), 0.0))
                     row["cnr_task"] = self._cnr_at(R0, atm0)
+                    # target occupancy (research review Sec. 3.9): angular target size vs the larger of the pixel
+                    # angular pitch and the diffraction blur (Airy FWHM ~ 1.03 lambda / D) at the peak wavelength
+                    blur = max(max(self.pitch_eff[z] / self.f[z] for z in "hv"), 1.03 * self.lam_peak / self.D_eff)
+                    row["occupancy"] = min(ah, av) / R0 / blur
+                    if row["occupancy"] < 1.0:
+                        self.warn("%s range %.3g km: the target (%.3g mrad) is smaller than one pixel / blur spot "
+                                  "(%.3g mrad) - the extended-source radiometry over-estimates its signal (sub-pixel "
+                                  "target, ensquared energy not modelled)." % (t["name"], R0, min(ah, av) / R0, blur))
                     if t["lp"] > row["cyc_nyq"]:
                         row["limiter"] = "sampling (beyond Nyquist)"
                     elif row["sampling_limited"]:
@@ -2021,7 +2455,43 @@ class TRM4Model:
             d["calibration"] = "Sensor figure of merit measured (%s); task criteria not calibrated" % fm["kind"]
         else:
             d["calibration"] = "Uncalibrated engineering estimate (not a validated detection probability)"
+        d["exposure"] = self.exposure
+        d["context"] = self._dri_context(res)
         return d
+
+    def _dri_context(self, res):
+        """Context every DRI range is reported with (research review Sec. 3.22 / spec wording Sec. 7.7)."""
+        p, tg, d = self.p, self.p["target"], self.p["detector"]
+        tasks = [t for t in tg["tasks"] if t.get("on")]
+        if self.uncooled:
+            op = "F/%.2f, microbolometer, NETD %.3g mK, time constant %.3g ms" % (
+                self.F_eff, self.netd * 1e3, float(d["t_th_ms"]))
+        else:
+            op = "F/%.2f, integration %.4g ms, gain %g, mode '%s', capacity %.3g e- (%s%s), QE basis %s" % (
+                self.F_eff, self.ref_state["t_int"] * 1e3, float(d["electron_gain"]), self.op_mode or "not stated",
+                self.n_use, self.cap_limit, "" if self.cap_verified else ", not verified",
+                {"unspecified": "not stated (active area assumed)", "active_area": "active area",
+                 "pixel_area": "full pixel area"}[self.qe_basis])
+        if self.cat == "Thermal":
+            scene = "thermal contrast dT %g K at %g K" % (float(tg["dT_K"]), self.T_B)
+        else:
+            irr = p["irradiance"]
+            scene = "illumination: %s" % ("none" if irr["mode"] == "none" else irr.get("preset") if
+                                          irr["spectrum"] == "preset" else irr["type"])
+        rg = res.get("range")
+        atm = rg["atm"][0]["label"] if rg and rg["atm"] else ("laboratory" if self.lab else "-")
+        return {
+            "task": "; ".join("%s %g lp" % (t["name"], float(t["lp"])) for t in tasks) +
+                    " (preset '%s')" % tg.get("task_preset", "legacy"),
+            "target": "%g x %g x %g m (W x H x D), %s aspect" % (float(tg["W_m"]), float(tg["H_m"]), float(tg["D_m"]),
+                                                               tg["aspect"]),
+            "operating_point": op,
+            "scene": "%s; atmosphere %s" % (scene, atm),
+            "mtf_source": "mode %s - %s" % (self.mtf_mode, getattr(self, "mtf_doc", "")),
+            "observer": self.observer + (" (algorithm '%s')" % p["display"].get("algo_id", "") if self.algo else ""),
+            "uncertainty": "nominal prediction - no uncertainty statement unless the Sensitivity analysis is run",
+            "validation": "not validated (no measured data)",
+            "statement": "A nominal range is not, by itself, an assured operational outcome."}
 
     def _provenance(self):
         import datetime
@@ -2071,7 +2541,11 @@ class TRM4Model:
                 "source_counts": counts, "category": self.cat, "imager_type": p["imager_type"],
                 "environment": "laboratory" if self.lab else "field", "stream": "still" if self.still else "video",
                 "coverage": cov, "task_preset": tg.get("task_preset", "legacy"), "observer": self.observer,
-                "noise_source": self.noise_source}
+                "noise_source": self.noise_source,
+                # operating-point semantics reported with every calculation (research review Sec. 6, P0)
+                "op_mode": self.op_mode, "qe_basis": self.qe_basis, "capacity_limit": self.cap_limit,
+                "capacity_verified": self.cap_verified, "mtf_doc": getattr(self, "mtf_doc", ""),
+                "presets": list(getattr(self, "preset_records", []))}
 
     # -----------------------------------------------------------------------------------------
     def _mtf_curves(self, R_ref):
@@ -2180,14 +2654,17 @@ class TRM4Model:
 
     @staticmethod
     def _crossing(R, need, have):
-        """First range at which the necessary signal exceeds the available one."""
+        """First range at which the necessary signal exceeds the available one.
+
+        None if it never does (caller decides), "below" if the task fails already at the first range - reported as
+        None like in the Thermal category ("< first range")."""
         diff = np.log(np.maximum(need, 1e-300)) - np.log(np.maximum(have, 1e-300))
         idx = np.nonzero(diff >= 0)[0]
         if idx.size == 0:
             return None
         i = idx[0]
         if i == 0:
-            return float(R[0])
+            return "below"
         t = -diff[i - 1] / (diff[i] - diff[i - 1])
         return float(math.exp(math.log(R[i - 1]) + t * (math.log(R[i]) - math.log(R[i - 1]))))
 
@@ -2286,6 +2763,8 @@ class TRM4Model:
                     # frequency exceeds the resolution limit (MNDS infinite) beyond the last averaged range
                     dead = not (np.all(np.isfinite(mn["h"])) and np.all(np.isfinite(mn["v"])))
                     R0 = float(Ra[-1]) if dead else float("inf")
+                elif R0 == "below":
+                    R0 = None
             res["tasks"].append({"name": t["name"], "lp": n_perc, "R0": R0, "R_avg": Ra, "mn_avg": Sa,
                                  "mn_h": mn["h"], "mn_v": mn["v"]})
         res["states"] = {"t_int": np.array([s["t_int"] for s in states]),
@@ -2311,6 +2790,16 @@ class TRM4Model:
             return out
         r_min = max(self.min_range() * 1.001, 0.05)
         R = np.logspace(np.log10(r_min), np.log10(max(r_min * 20, 30.0)), 40)
+        # NIIRS is evaluated for single images (TRM4 Sec. 2: Still is used with NIIRS); the DRI ranges keep the
+        # selected Video/Still option
+        video, self.still = self.still, True
+        try:
+            self._niirs_curves(out, R)
+        finally:
+            self.still = video
+        return out
+
+    def _niirs_curves(self, out, R):
         for atm in self.atms:
             vals, gsds, rers, dsnrs = [], [], [], []
             for x in R:
@@ -2338,7 +2827,6 @@ class TRM4Model:
                 vals.append(n); gsds.append(gsd_w); rers.append(rer); dsnrs.append(dsnr)
             out["atm"].append({"label": atm.label, "R": R, "niirs": np.array(vals), "gsd": np.array(gsds),
                                "rer": np.array(rers), "dsnr": np.array(dsnrs)})
-        return out
 
 
     def _info(self, res):
@@ -2360,6 +2848,8 @@ class TRM4Model:
         add(g, "Sensitive detector area", "%.3g" % (self.A_det * 1e12), "um^2")
         add(g, "Frame interval / maximum integration time", "%.4g / %.4g" % (1e3 / self.frame_rate, self.t_max * 1e3),
             "ms")
+        add(g, "Sensor timing limit (%s)" % ("exposure overlaps readout" if self.exp_overlap else
+                                             "readout after exposure"), "%.4g" % (self.t_timing * 1e3), "ms")
         ds_ = "Data sources"
         add(ds_, "Optics MTF route", {"A": "Mode A - computed (diffraction + aberration model)",
                                       "B": "Mode B - imported optics MTF (no extra diffraction)",
@@ -2378,7 +2868,9 @@ class TRM4Model:
             add(ds_, "Figure of merit for ranges", "measured %s" % res["fom_measured"]["kind"]
                 if res["fom_measured"]["use"] == "replace" else "modelled (measured %s for comparison)" %
                 res["fom_measured"]["kind"])
-        for (z, _t), (_rg, _m, js) in sorted(self._jit_cache.items()):
+        for (z, _t, still), (_rg, _m, js) in sorted(self._jit_cache.items()):
+            if still != self.still:
+                continue                    # the NIIRS (single-frame) entry; the DRI mode is reported
             add(ds_, "Jitter %s: rms / intra-frame / frame-to-frame" % z, "%.3g / %.3g / %.3g" % (
                 js["rms"] * 1e3, js["intra_rms"] * 1e3, js.get("sigma_frame", 0.0) * 1e3), "urad")
             add(ds_, "Jitter %s: offset / drift" % z, "%.3g / %.3g" % (js["offset"] * 1e3, js["drift"] * 1e3),
@@ -2406,6 +2898,11 @@ class TRM4Model:
         add(o, "Effective focal length", "%.2f" % self.f_eff, "mm")
         add(o, "Clear pupil area / effective diameter", "%.1f / %.2f" % (self.A_pup, self.D_eff), "mm^2 / mm")
         add(o, "Effective F-number", "%.3f" % self.F_eff)
+        fl = (res.get("dashboard") or {}).get("fld")
+        if fl:
+            add(o, "F lambda / d (mean wavelength %.2f um, pitch %.3g um)" % (fl["lambda_um"], fl["pitch_um"]),
+                "%.2f - %s" % (fl["value"], fl["regime"]))
+            add(o, "Hardware lever in this regime", fl["lever"])
         add(o, "Diffraction cut-off at %.2f um (h)" % self.lam_peak, "%.3f" % (self.diff["h"].d_max / self.lam_peak),
             "1/mrad")
         add(o, "Optics MTF", getattr(self, "zemax_mtf_label", None) or "TRM4 model (diffraction %s, aberration %s)" % (
@@ -2449,6 +2946,60 @@ class TRM4Model:
                 add(s, "Target contrast (N_T-N_B)/(N_T+N_B)", "%.4f" % ((st["N_T"] - st["N_B"]) / (st["N_T"] + st["N_B"])))
             if self.turbulence_active() and self.R_ref > 0:
                 add(s, "Fried parameter r0 at reference range", "%.4g" % (self._turb_table(self.R_ref)[2] * 100), "cm")
+        if not self.uncooled:
+            op = "Detector operating point"
+            add(op, "Operating mode (gain / readout / temperature)", self.op_mode or "not stated")
+            add(op, "QE basis", {"unspecified": "not stated - TRM active-area convention",
+                                 "active_area": "intrinsic, per active area",
+                                 "pixel_area": "total, per full pixel area"}[self.qe_basis])
+            add(op, "Active / pixel area, fill factor", "%.4g / %.4g, %.3f" % (
+                self.A_active * 1e12, self.A_pixel * 1e12, self.fill_factor), "um^2")
+            add(op, "QE reference area for photon -> carrier conversion", "%.4g" % (self.A_det * 1e12), "um^2")
+            add(op, "Storage capacity (stated node)", "%.4g (%s)" % (self.n_stor, {
+                "pixel": "physical pixel full well", "roic": "ROIC / storage node",
+                "camera": "camera saturation capacity"}.get(self.cap_node, "node not stated")), "e-")
+            add(op, "Usable capacity for well fill (limiting node)", "%.4g (%s)" % (self.n_use, self.cap_limit), "e-")
+            add(op, "Capacity verified (input-referred camera saturation)", "yes" if self.cap_verified else
+                "no - well fill is indicative")
+            add(op, "Dark current", self.dark_label)
+            if self.nbin["h"] * self.nbin["v"] > 1:
+                add(op, "Binning", "%s, %d read-out(s) per binned pixel" % (self.bin_kind, self.n_reads))
+            ex = getattr(self, "exposure", None)
+            if ex:
+                e = "Exposure budget (t_int <= min of the limits)"
+                for name, t in ex["limits"]:
+                    add(e, "Limit: %s" % name, "%.4g ms" % (t * 1e3) if np.isfinite(t) else "none")
+                add(e, "Longest admissible integration time", "%.4g ms (%s)" % (ex["t_rec"] * 1e3, ex["limiter"])
+                    if np.isfinite(ex["t_rec"]) else "unbounded")
+                add(e, "Selected integration time", "%.4g" % (ex["t_sel"] * 1e3), "ms")
+                if ex["t_hw_min"] > 0:
+                    add(e, "Hardware minimum exposure", "%.4g" % (ex["t_hw_min"] * 1e3), "ms")
+                add(e, "Brightest credible pixel: photoelectron rate", "%.4g" % ex["rate_bright"], "e-/s")
+                add(e, "Brightest credible pixel: well fill at selected time", "%.1f" % ex["wellfill_bright"], "%")
+                for z, px in sorted(ex["smear_px"].items()):
+                    add(e, "Image smear during the exposure (%s)" % z, "%.3g" % px, "pixels")
+                if "snr_req" in ex:
+                    add(e, "Pixel SNR required / at selected / at longest admissible time",
+                        " / ".join("%.3g" % x if x is not None else "-" for x in
+                                   (ex["snr_req"], ex["snr_sel"], ex["snr_rec"])))
+                add(e, "Status", ("feasible" if ex["feasible"] else "INFEASIBLE") +
+                    ("; %d violation(s) at the selected time" % len(ex["violations"]) if ex["violations"] else ""))
+            # photon arrival vs photoelectron generation rate per pixel (research review Sec. 4.1)
+            atm0 = None if (self.lab or not self.atms or not self.R_ref or self.cat == "Thermal") else self.atms[0]
+            Rr = self.R_ref if atm0 is not None else 0.0
+            fp, fe = self.flux(Rr, atm0, qe=False), self.flux(Rr, atm0)
+            r_ph = (fp["jB_scene"] + fp["j_path"]) * self.A_det
+            r_e = (fe["jB_scene"] + fe["j_path"]) * self.A_det
+            add("Radiometry", "Background photon arrival rate per pixel (%s)" % (
+                "%.3g km" % Rr if atm0 is not None else "zero range"), "%.4g" % r_ph, "photons/s")
+            add("Radiometry", "Background photoelectron generation rate per pixel", "%.4g" % r_e, "e-/s")
+            if self.rel_illum < 1:
+                add("Radiometry", "Photoelectron rate at the field edge (relative illumination %.2f)" % self.rel_illum,
+                    "%.4g" % (r_e * self.rel_illum), "e-/s")
+        for rec in getattr(self, "preset_records", []):
+            add("Preset data in use (lifecycle)", "%s '%s'" % (rec["kind"], rec["name"]),
+                "%s; %s; %s; uncertainty: %s; %s [%s]" % (rec["source"], rec["date"], rec["applicability"],
+                                                          rec["uncertainty"], rec["warning"], rec["version"]))
         n = "Noise / observer"
         add(n, "Independent frames integrated by the eye", "%.3g" % self.n_int_frames)
         add(n, "Frame integration factor FR_int", "%.3g" % self.fr_int)

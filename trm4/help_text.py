@@ -75,7 +75,9 @@ HELP = {
                               "motion (e.g. measured on the platform). The Stabilization inputs are then ignored.",
     "optics.diffraction": "Diffraction MTF weighted over the spectral band (accurate), or computed at a single "
                           "wavelength (quick estimate).",
-    "optics.lambda_diff_um": "Wavelength used for the diffraction MTF when 'single wavelength' is selected.",
+    "optics.lambda_diff_um": "Wavelength used for the diffraction MTF when 'single wavelength' is selected. "
+                             "0 = the signal-weighted mean wavelength of the band (a fixed value outside the band, "
+                             "e.g. 10 um for a VIS camera, is warned).",
     "optics.aberration": "How lens aberrations reduce the MTF: none (diffraction-limited), aberration "
                          "parameter q, or a Gaussian blur spot.",
     "optics.q": "Aberration parameter q (> 1). Ratio of real blur to diffraction blur; 1 means "

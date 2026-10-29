@@ -374,6 +374,12 @@ def source_urls(rec):
     return out
 
 
+ACTIVE_NOTE = "= pitch (100 % fill assumed - the atlas gives no active area; reduce it if the datasheet states a " \
+              "fill factor)"
+# offered but not ticked by default: the atlas value is a limit, not an operating point
+NOT_TICKED = {"basic.frame_rate"}
+
+
 def suggestions(rec):
     """[(key, project path, label, unit, value, note)] for the values the atlas record gives."""
     src = "Detector Atlas: %s" % (rec.get("source_level") or "catalog")
@@ -391,11 +397,16 @@ def suggestions(rec):
         ("n_v", "detector.n_v", "Number of vertical detectors", "", _num(rec.get("height")), src),
         ("pitch_h_um", "detector.pitch_h_um", "Horizontal detector pitch", "um", pitch, src),
         ("pitch_v_um", "detector.pitch_v_um", "Vertical detector pitch", "um", pitch, src),
-        ("frame_rate_hz", "basic.frame_rate", "Frame rate", "Hz", _num(rec.get("max_fps")), metric or "max frame rate"),
+        # the active size must follow the pitch, otherwise the old active area (and fill factor) is kept
+        ("active_h_um", "detector.a_h_um", "Horizontal dimension (active)", "um", pitch, ACTIVE_NOTE),
+        ("active_v_um", "detector.a_v_um", "Vertical dimension (active)", "um", pitch, ACTIVE_NOTE),
+        ("frame_rate_hz", "basic.frame_rate", "Frame rate", "Hz", _num(rec.get("max_fps")),
+         "maximum full-frame rate (%s) - not ticked: enter the operating frame rate" % (metric or src)),
         ("readout_noise_e", "detector.noise_floor_e", "Noise floor (additive)", "e-", _num(rec.get("read_noise_e")),
          metric or src),
         ("netd_mK", "detector.netd_mK", "NETD", "mK", _num(rec.get("netd_mk")), metric or src),
-        ("operating_temp_K", "detector.T_cs_K", "Cold shield temperature", "K",
+        # the FPA temperature is not the cold shield temperature (which sets the shield's own emission)
+        ("operating_temp_K", "detector.T_sensor_K", "Sensor operating temperature", "K",
          t_op if itype == "cooled" else None, "FPA operating temperature: %s" % (t_note or "%g K" % (t_op or 0))),
         ("cut_on_um", "detector.cuton_um", "Cut-on wavelength", "um", cut_on, spectral_note(rec)),
         ("cut_off_um", "detector.cutoff_um", "Cut-off wavelength", "um", cut_off, spectral_note(rec)),

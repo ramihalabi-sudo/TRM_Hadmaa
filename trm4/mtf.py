@@ -255,13 +255,19 @@ def fried_parameter(lam_um, R_km, cn2_of_z):
     return 0.185 * (integral / lam ** 2) ** (-3.0 / 5.0)
 
 
-def mtf_turbulence(r, lam_um, r0_m, D_opt_mm, exposure):
-    """Turbulence MTF, Eqs. (4.80)-(4.83)."""
+def mtf_turbulence(r, lam_um, r0_m, D_opt_mm, exposure, L0_m=0.0):
+    """Turbulence MTF, Eqs. (4.80)-(4.83).
+
+    L0_m > 0: von Karman outer scale, first-order correction of the phase structure function
+    D(s) = 6.88 (s/r0)^(5/3) [1 - 1.485 (s/L0)^(1/3)], valid for s << L0 (Tokovinin 2002).
+    """
     r = np.abs(np.asarray(r, float))
     if not np.isfinite(r0_m):
         return np.ones_like(r)
     sep = lam_um * r * 1e-3                      # pupil-plane separation [m]
     phi = 6.88 * (sep / r0_m) ** (5.0 / 3.0)
+    if L0_m > 0:
+        phi = phi * np.clip(1.0 - 1.485 * (sep / L0_m) ** (1.0 / 3.0), 0.0, None)
     if exposure == "short":
         D = D_opt_mm * 1e-3
         phi = phi * np.clip(1.0 - 0.5 * (sep / D) ** (1.0 / 3.0), 0.0, None)

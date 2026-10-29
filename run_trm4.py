@@ -3,7 +3,8 @@
     python run_trm4.py                         start the graphical user interface
     python run_trm4.py --list                  list the built-in templates
     python run_trm4.py --cli <template-number | project.json> [--out report.txt] [--save project.json]
-                       [--limiting] [--uncertainty] [--scenario scenario.json]
+                       [--limiting] [--uncertainty] [--advisor] [--min-fov DEG] [--scenario scenario.json]
+                       [--pdf-he report.pdf]
     python -m unittest discover -s tests       run the regression / acceptance test suite
 """
 import argparse
@@ -27,6 +28,12 @@ def main():
     ap.add_argument("--uncertainty", action="store_true",
                     help="add an uncertainty study (settings stored in the project, else typical defaults; RSS or "
                          "Monte Carlo as stored)")
+    ap.add_argument("--advisor", action="store_true",
+                    help="add the Range Improvement Advisor (bottleneck diagnosis, ranked what-if recommendations)")
+    ap.add_argument("--min-fov", type=float, default=0.0, metavar="DEG",
+                    help="advisor constraint: minimum horizontal FOV [deg] of a recommended configuration")
+    ap.add_argument("--pdf-he", metavar="PDF",
+                    help="write the Hebrew scholarly DRI report with the advisor recommendations (implies --advisor)")
     a = ap.parse_args()
     names = list(P.TEMPLATES)
     if a.list:
@@ -50,16 +57,24 @@ def main():
     log = lambda msg, f=None: print("..", msg, file=sys.stderr)     # noqa: E731
     _, res = run_project(project, log)
     analyses = {}
-    if a.limiting or a.uncertainty:
+    a.advisor = a.advisor or bool(a.pdf_he)
+    if a.limiting or a.uncertainty or a.advisor:
         from trm4 import analysis as AN
         if a.limiting:
             analyses["limiting"] = AN.limiting_factors(project, log)
         if a.uncertainty:
             analyses["uncertainty"] = AN.run_uncertainty(project, log)
+        if a.advisor:
+            from trm4 import advisor as ADV
+            analyses["advisor"] = ADV.advise(project, log, min_fov_deg=a.min_fov)
     if a.scenario:
         from trm4 import scenario as SC
         SC.write(a.scenario, project, res)
         print("Scenario record written to", a.scenario)
+    if a.pdf_he:
+        from trm4 import report_he
+        n = report_he.write_pdf(a.pdf_he, project, res, analyses["advisor"])
+        print("Hebrew DRI report written to %s (%d pages)" % (a.pdf_he, n))
     text = format_report(project, res, analyses)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as fh:

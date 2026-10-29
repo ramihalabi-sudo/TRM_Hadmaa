@@ -26,7 +26,8 @@ SENSOR_KEYS = ("category", "imager_type", "basic", "detector", "dsp")
 CONFIG_OPTICS = ("aperture", "D_mm", "D_obsc_mm", "W_trunc_h_mm", "W_trunc_v_mm", "F_general", "f_mm",
                  "diff_focal", "f_v_mm", "tau_mode", "tau_opt", "tau_filter", "zemax_tau", "tau_kind", "tau_scope",
                  "mtf_source", "zemax_mtf", "zemax_mtf_unit", "zemax_mtf_field", "zemax_mtf_h", "mtf_meta",
-                 "diffraction", "lambda_diff_um", "aberration", "q", "blur_um", "F_spec")
+                 "diffraction", "lambda_diff_um", "aberration", "q", "blur_um", "F_spec",
+                 "mtf_band", "mtf_focus", "mtf_temp", "mtf_uncert", "rel_illum")
 
 
 def leaf_paths(d, prefix=""):
