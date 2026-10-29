@@ -406,12 +406,13 @@ DEFAULT_PROJECT = {
                "b_emis_mode": "blackbody", "b_emis": 0.9, "b_emis_preset": "Green grassland",
                "b_refl_mode": "effective", "b_refl": 0.15, "b_refl_preset": "Green grassland",
                "T_bg_K": 288.0, "aspect": "front", "flight": "altitude", "altitude_m": 0.0, "angle_deg": 0.0,
-               "tasks": [{"name": "Detection", "on": True, "lp": 1.0, "pot": 60.0},
-                         {"name": "Recognition", "on": True, "lp": 3.0, "pot": 250.0},
-                         {"name": "Identification", "on": True, "lp": 6.0, "pot": 350.0}],
+               "tasks": [{"name": "Detection", "on": True, "lp": 1.0, "pot": 60.0, "v50": 2.7},
+                         {"name": "Recognition", "on": True, "lp": 3.0, "pot": 250.0, "v50": 14.5},
+                         {"name": "Identification", "on": True, "lp": 6.0, "pot": 350.0, "v50": 20.8}],
                "task_preset": "legacy", "clutter": "not_specified", "scene_id": "",
-               # extensions: P80 / P90 ranges (Johnson TTPF), clutter multiplier of the Detection criterion
-               "prob_levels": True, "clutter_model": False},
+               # extensions: P80 / P90 ranges (Johnson TTPF), clutter multiplier of the Detection criterion,
+               # TTP / V50 ranges, geometric (Nyquist / diffraction) reference range
+               "prob_levels": True, "clutter_model": False, "ttp": False, "geo_limit": True},
     "irradiance": {"mode": "none", "type": "broadband", "spectrum": "colour", "T_colour_K": 5800.0,
                    "E_peak": 1239.0, "E_eff": 100.0, "preset": "Direct sunlight", "lambda_um": 0.85,
                    "E_mono": 1.0, "T_bb_K": 6000.0, "geometry": "extended", "beta_h_deg": 0.0,

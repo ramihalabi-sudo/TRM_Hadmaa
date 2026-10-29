@@ -16,6 +16,9 @@ Sources (report reference numbers in brackets):
 * Pixels-on-target thresholds of an algorithm observer: Holst & Mahalanobis, Proc. SPIE 12533 (2023) [51].
 * Image compression as an equivalent per-pixel blur: O'Shea, Jacobs & Espinola, Opt. Eng. 47(1) 013202 (2008) [47].
 * Turbulence mitigation processing, reported recognition-range gains of +10 to +25 % [42], [43].
+* Targeting task performance (TTP) metric and its TTPF: Vollmerhausen, Jacobs & Driggers, "New metric for predicting
+  target acquisition performance", Opt. Eng. 43(11), 2806 (2004).
+* Aerosol MTF: Kopeika, "A System Engineering Approach to Imaging", SPIE Press (1998), Ch. 17.
 """
 import math
 
@@ -189,3 +192,98 @@ def mtf_compression(r, sigma_px, alpha_mrad):
 # residual LOS jitter commonly assumed in US Army NV-IPM calculations [49]; narrow fields of view are optimistic
 # without it (the Gaussian jitter MTF is reasonable below about 1/3 IFOV, NVTherm [16])
 TYPICAL_JITTER_MRAD = 0.070
+
+
+# ---------------------------------------------------------------------------------------------
+# Targeting task performance (TTP) metric with V50 criteria
+# ---------------------------------------------------------------------------------------------
+# V50 [cycles] per task for Detection / Recognition / Identification.  Identification ~ 20 is the order of the
+# NVESD tracked-vehicle set (Vollmerhausen, Jacobs & Driggers 2004); the Detection / Recognition values are typical
+# orders of magnitude only.  Every V50 has to be calibrated for the target set and the TRM4 threshold convention.
+TTP_V50_DEFAULTS = (2.7, 14.5, 20.8)
+
+
+def v50_default(index):
+    return TTP_V50_DEFAULTS[index] if index < len(TTP_V50_DEFAULTS) else TTP_V50_DEFAULTS[-1]
+
+
+def ttpf_ttp(x):
+    """P(V / V50) = x^E / (1 + x^E) with E = 1.51 + 0.24 x (Vollmerhausen, Jacobs & Driggers 2004)."""
+    x = max(float(x), 0.0)
+    if x == 0:
+        return 0.0
+    e = 1.51 + 0.24 * x
+    xe = x ** e
+    return xe / (1.0 + xe)
+
+
+def ttpf_ttp_ratio(prob):
+    """V / V50 needed for probability `prob` (inverse of ttpf_ttp; 1 for P = 0.5)."""
+    prob = float(prob)
+    if not 0.0 < prob < 1.0:
+        raise ValueError("Probability must be in (0, 1)")
+    lo, hi = 1e-6, 100.0
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if ttpf_ttp(mid) < prob:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def ttp_integral(rp, threshold, signal):
+    """TTP = integral of sqrt(signal / threshold(rp)) d rp over the frequencies where signal > threshold.
+
+    rp: bar frequencies [cycles/mrad]; threshold: TRM4 MTDP / MDSP at rp (inf = not resolved); signal: available ETD
+    or EDS at the same range.  The TRM4 threshold over the signal takes the place of CTF_sys / C_target."""
+    rp, thr = np.asarray(rp, float), np.asarray(threshold, float)
+    s = float(signal)
+    if not s > 0:
+        return 0.0
+    ok = np.isfinite(thr) & (thr > 0) & (thr < s)
+    if not ok.any():
+        return 0.0
+    g = np.where(ok, np.sqrt(s / np.where(ok, thr, 1.0)), 0.0)
+    return float(np.sum(0.5 * (g[1:] + g[:-1]) * np.diff(rp)))
+
+
+# ---------------------------------------------------------------------------------------------
+# Geometric quick estimate: Nyquist / diffraction range without noise, contrast or atmosphere
+# ---------------------------------------------------------------------------------------------
+def geometric_range(crit_m, n_lp, ifov_mrad, lam_um, D_mm):
+    """(range [km], limit) at which `n_lp` line pairs fit across the critical dimension.
+
+    One line pair needs the larger of two pixels (Nyquist) and the diffraction period lambda / D (the optics cutoff).
+    Noise, contrast, MTF roll-off below the cutoff and the atmosphere are ignored, and bars beyond Nyquist (which the
+    TRM4 AMOP still credits) are not, so this is a reference value, not a bound of the TRM4 range."""
+    p_samp = 2.0 * float(ifov_mrad)
+    p_diff = float(lam_um) / float(D_mm) if D_mm > 0 else 0.0
+    period, limit = (p_samp, "sampling (2 pixels per line pair)") if p_samp >= p_diff else \
+        (p_diff, "diffraction (lambda / D)")
+    if not (period > 0 and n_lp > 0):
+        return float("inf"), limit
+    return float(crit_m) / (float(n_lp) * period), limit
+
+
+# ---------------------------------------------------------------------------------------------
+# Aerosol MTF (Kopeika): low-frequency forward-scatter blur
+# ---------------------------------------------------------------------------------------------
+# typical particle radii: haze ~ 1 um, fog / mist ~ 10 um (Kopeika, "A System Engineering Approach to Imaging",
+# SPIE Press 1998, Ch. 17)
+AEROSOL_RADIUS_UM = {"haze": 1.0, "fog": 10.0}
+
+
+def aerosol_cutoff(lam_um, radius_um):
+    """Spatial frequency above which the aerosol MTF is flat, xi_c = a / lambda [cycles/rad] -> cycles/mrad."""
+    return float(radius_um) / float(lam_um) / 1000.0
+
+
+def aerosol_mtf(r, R_km, S_per_km, xi_c):
+    """Kopeika aerosol MTF exp[-S R (r / xi_c)^2] below xi_c, exp(-S R) above (S: aerosol scattering [1/km]).
+
+    Above xi_c the value equals the scattering part of the Beer-Lambert transmission: an image model that already
+    counts the aerosol extinction in the signal must not apply this plateau again."""
+    r = np.asarray(r, float)
+    sr = float(S_per_km) * float(R_km)
+    return np.where(r < xi_c, np.exp(-sr * (r / xi_c) ** 2), math.exp(-sr))

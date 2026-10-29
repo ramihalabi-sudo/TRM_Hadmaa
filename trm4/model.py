@@ -22,7 +22,7 @@ from . import imports as IM
 from . import extensions as X
 from .amop import amop as amop_sim
 
-MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.6"
+MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.7"
 MODEL_REFERENCE = "Fraunhofer IOSB TR 2021/04 (TRM4.v3 parameter description and model documentation)"
 # version of the acceptance/regression suite (kept separate from the model version, field map App. D)
 VALIDATION_VERSION = "acceptance suite FM-1.1 (field map v1.1, 14.10.2026)"
@@ -2533,7 +2533,7 @@ class TRM4Model:
                         row["limiter"] = "contrast / noise"
                     if "pot" in t:
                         row["limiter"] = "%s (algorithm criterion)" % t["limit"]
-                for key in ("pot", "levels", "lp_input", "clutter"):
+                for key in ("pot", "levels", "lp_input", "clutter", "ttp", "geo"):
                     if key in t:
                         row[key] = t[key]
                 d["tasks"].append(row)
@@ -2574,6 +2574,10 @@ class TRM4Model:
             out.append("lossy compression as %.3g px Gaussian blur" % self.compression_blur_px())
         if self.pot_mode:
             out.append("algorithm observer: pixels-on-target criterion")
+        if self.ttp_on:
+            out.append("TTP / V50 ranges (Vollmerhausen 2004, V50 to be calibrated)")
+        if self.geo_on:
+            out.append("geometric reference range (Nyquist / diffraction, no noise / contrast / atmosphere)")
         return out
 
     def _dri_context(self, res):
@@ -2799,6 +2803,13 @@ class TRM4Model:
                 out["atm"].append(self._ranges_signal(atm, tasks))
         if self.prob_levels:
             out["prob_levels"] = list(X.PROB_LEVELS)
+        if self.geo_on:
+            geo = {}
+            for a in out["atm"]:
+                for t in a["tasks"]:
+                    if t["lp"] not in geo:
+                        geo[t["lp"]] = self._geo_range(t["lp"])
+                    t["geo"] = {"R0": geo[t["lp"]][0], "limit": geo[t["lp"]][1]}
         return out
 
     # --- task criteria (TRM4 line pairs; clutter, probability and pixels-on-target are extensions) -------------
@@ -2829,6 +2840,19 @@ class TRM4Model:
                                                                                                   self.algo_cnr))
         # probability levels: Johnson / Lawson TTPF on the (N50) criterion; not for pixels-on-target criteria
         self.prob_levels = bool(tg.get("prob_levels", True)) and not self.pot_mode and not self.wi.get("no_prob")
+        extra = not self.lab and not self.wi.get("no_extra")
+        self.ttp_on = bool(tg.get("ttp", False)) and not self.pot_mode and extra
+        self.geo_on = bool(tg.get("geo_limit", True)) and extra
+        if self.ttp_on:
+            for i, t in enumerate(self._tasks()):
+                if not float(t.get("v50", X.v50_default(i))) > 0:
+                    raise ModelError("V50 of task '%s' must be > 0" % t["name"])
+            self.assume("TTP / V50 ranges (%s): targeting task performance TTP = integral of sqrt(signal / threshold) "
+                        "over the bar frequencies the TRM4 threshold (MTDP / MDSP) resolves, cycles on target V = "
+                        "TTP sqrt(a_h a_v) / R; the range is where V = V50 (P50), with P = x^E / (1 + x^E), E = 1.51 + "
+                        "0.24 x, x = V / V50 (Vollmerhausen, Jacobs & Driggers 2004). The TRM4 threshold replaces "
+                        "CTF_sys / C_target, so the V50 values are not interchangeable with NV-IPM values and have to "
+                        "be calibrated." % X.EXTENSION)
         if self.prob_levels and not self.lab:
             self.assume("P80 / P90 ranges (%s): the task criterion is the 50 %% value N50; the criterion for "
                         "probability P is N50 x %.3g (P80) and x %.3g (P90) from the Johnson / Lawson TTPF "
@@ -2854,7 +2878,46 @@ class TRM4Model:
             c.update(lp=n_c, clutter=n_c / n)
         if self.pot_mode:
             c["pot"] = float(t.get("pot", X.pot_default(i)))
+        if self.ttp_on:
+            c["v50"] = float(t.get("v50", X.v50_default(i)))
         return c
+
+    def _ttp_task(self, R, V, v50):
+        """TTP / V50 range of one task from the cycles-on-target curve V(R) (P50 and the P80 / P90 levels)."""
+        V = np.maximum(V, 1e-300)
+        out = {"v50": v50, "R0": X.last_range_at_or_above(R, V, v50)}
+        if self.prob_levels:
+            out["levels"] = [{"p": pr, "v": v50 * X.ttpf_ttp_ratio(pr),
+                              "R0": X.last_range_at_or_above(R, V, v50 * X.ttpf_ttp_ratio(pr))}
+                             for pr in X.PROB_LEVELS[1:]]
+        return out
+
+    def _ttp_cycles(self, R, ttp):
+        """Cycles on target V = sqrt(TTP_h a_h TTP_v a_v) / R [TTP in cycles/mrad, a in m, R in km]."""
+        dims = [self.target_dims(self.los_angle(x)) for x in R]
+        return np.array([math.sqrt(max(th * dm[0] * tv * dm[1], 0.0)) / x
+                         for x, th, tv, dm in zip(R, ttp["h"], ttp["v"], dims)])
+
+    def _geo_range(self, n_lp):
+        """Geometric resolution limit of a criterion (extension): (range km or None, limiting element).
+
+        Fixed-point iteration because the projected target size depends on the line-of-sight angle."""
+        lam = float(ph.trapz(self.lam * self.w, self.lam))
+        ifov = math.sqrt(self.alpha_s["h"] * self.alpha_s["v"])
+        R_min = self.min_range() * 1.0001
+        R, limit = max(1.0, R_min), ""
+        for _ in range(60):
+            ah, av, _A = self.target_dims(self.los_angle(R))
+            R_new, limit = X.geometric_range(math.sqrt(max(ah * av, 0.0)), n_lp, ifov, lam, self.D_opt)
+            if not np.isfinite(R_new):
+                return R_new, limit
+            R_new = max(R_new, R_min)
+            if abs(R_new - R) < 1e-9 * R:
+                break
+            R = R_new
+        if self.min_range() > 0 and R <= R_min * 1.0001:
+            return None, limit
+        return float(R), limit
 
     def _pot_range(self, R, dims, cnr, n_pot):
         """Range of a pixels-on-target criterion with the pixel-CNR condition -> (R0, limiting condition)."""
@@ -2943,6 +3006,12 @@ class TRM4Model:
         res["npix"] = nlp["h"] * nlp["v"]                                         # Eq. (3.214)
         st = self.ref_state
         cnr = etd / math.sqrt(st["nes"] ** 2 / self.n_int_frames + st["ies"] ** 2) if self.pot_mode else None
+        V = None
+        if self.ttp_on:
+            ttp = {z: np.array([X.ttp_integral(fom[z]["rp"], fom[z]["val"] if turb is None else turb[z][k], e)
+                                for k, e in enumerate(etd)]) for z in "hv"}
+            V = self._ttp_cycles(R, ttp)
+            res["ttp_R"], res["ttp_cycles"] = R, V
         for t in tasks:
             c = self._criterion(t)
             n_perc = c["lp"]
@@ -2969,8 +3038,38 @@ class TRM4Model:
                     v = np.array(v)
                 mn[z] = np.where(v >= 1e30, np.inf, v)
             Ra, Sa = self._avg_curve(R, mn["h"], mn["v"])
+            if V is not None:
+                c["ttp"] = self._ttp_task(R, V, c["v50"])
             res["tasks"].append(dict(c, name=t["name"], R0=R0, R_avg=Ra, mn_avg=Sa, mn_h=mn["h"], mn_v=mn["v"]))
         return res
+
+    def _ttp_signal(self, atm, R):
+        """Cycles on target of the TTP metric versus range (Visible / General), on 16 ranges of the grid.
+
+        The MDSP is evaluated on every second frequency of the AMOP grid up to the resolution limit.  With turbulence
+        the tabulated AMOP (reference range) is scaled by the ratio of the turbulence MTF at the bar frequency,
+        MTF_turb(rp, R) / MTF_turb(rp, R_ref) - an approximation used for this metric only (no AMOP simulation per
+        range)."""
+        Rk = np.logspace(math.log10(R[0]), math.log10(R[-1]), 16)
+        rp = {z: self.amop_tab[z][0][::2] for z in "hv"}
+        amop = None
+        if self.turbulence_active():
+            amop = {}
+            for z in "hv":
+                a0 = np.interp(rp[z], *self.amop_tab[z])
+                t0 = np.maximum(self.mtf_turb(rp[z], self.R_ref), 1e-12)
+                amop[z] = [a0 * self.mtf_turb(rp[z], x) / t0 for x in Rk]
+        ttp = {"h": [], "v": []}
+        for k, x in enumerate(Rk):
+            s = self.signal_state(x, atm)
+            for z in "hv":
+                thr = np.full(rp[z].shape, np.inf)
+                for j, f in enumerate(rp[z]):
+                    thr[j] = self.mdsp(x, f, z, s["nes"], s["ies"], None if amop is None else amop[z][k][j])
+                    if not np.isfinite(thr[j]):
+                        break
+                ttp[z].append(X.ttp_integral(rp[z], thr, s["eds"]))
+        return Rk, self._ttp_cycles(Rk, ttp)
 
     def _ranges_signal(self, atm, tasks):
         """Range performance for the Visible and General categories, Section 3.12.4."""
@@ -3020,6 +3119,12 @@ class TRM4Model:
                 c["levels"] = [{"p": pr, "lp": c["lp"] * X.ttpf_ratio(pr), "R0": solve(c["lp"] * X.ttpf_ratio(pr))[0]}
                                for pr in X.PROB_LEVELS[1:]]
             res["tasks"].append(dict(c, name=t["name"], R0=R0, R_avg=Ra, mn_avg=Sa, mn_h=mn["h"], mn_v=mn["v"]))
+        if self.ttp_on:
+            # after the TRM4 ranges, so that the extension cannot change them through the model caches
+            Rk, V = self._ttp_signal(atm, R)
+            res["ttp_R"], res["ttp_cycles"] = Rk, V
+            for c in res["tasks"]:
+                c["ttp"] = self._ttp_task(Rk, V, c["v50"])
         res["states"] = {"t_int": np.array([s["t_int"] for s in states]),
                          "nes": np.array([s["nes"] for s in states]),
                          "wellfill": np.array([s.get("wellfill", np.nan) for s in states])}
@@ -3127,12 +3232,53 @@ class TRM4Model:
         if self.compression_blur_px() > 0:
             add(e, "Compression equivalent blur", "%.3g" % self.compression_blur_px(), "pixels rms")
         rg = res.get("range")
+
+        def fmt(x):
+            return "-" if x is None else ("> grid" if not np.isfinite(x) else "%.3f" % x)
+        if rg and rg["atm"]:
+            for t in rg["atm"][0]["tasks"]:
+                if "ttp" in t:
+                    tt = t["ttp"]
+                    add(e, "%s TTP range, V50 = %g cycles%s" % (t["name"], tt["v50"], " (P50 / P80 / P90)" if
+                                                                tt.get("levels") else ""),
+                        " / ".join(fmt(x) for x in [tt["R0"]] + [lv["R0"] for lv in tt.get("levels", [])]), "km")
+                if "geo" in t:
+                    add(e, "%s geometric reference range (%s)" % (t["name"], t["geo"]["limit"]), fmt(t["geo"]["R0"]),
+                        "km")
+        self._aerosol_info(add, e, rg)
         if rg and rg["atm"] and self.prob_levels:
             for t in rg["atm"][0]["tasks"]:
                 lv = t.get("levels") or []
                 add(e, "%s P50 / P80 / P90 (Johnson TTPF)" % t["name"], " / ".join(
                     "-" if x is None else ("> grid" if not np.isfinite(x) else "%.3f" % x)
                     for x in [t["R0"]] + [l["R0"] for l in lv]), "km")
+
+    def _aerosol_info(self, add, e, rg):
+        """Aerosol MTF diagnostics (Kopeika) of the weather-derived atmospheres.
+
+        Above the cutoff xi_c = a / lambda the aerosol MTF is flat at the scattering transmission, which the Beer-Lambert
+        extinction already applies to the signal; it only adds blur below xi_c.  The rows show where xi_c lies relative
+        to the bar frequencies of the tasks; the ranges are not changed."""
+        wx_all = getattr(self, "weather", None) or []
+        if not wx_all or not (rg and rg["atm"]):
+            return
+        lw = float(ph.trapz(self.lam * self.w, self.lam))
+        xc = {k: X.aerosol_cutoff(lw, a) for k, a in X.AEROSOL_RADIUS_UM.items()}
+        add(e, "Aerosol MTF cutoff a / lambda at %.2f um: haze (1 um) / fog (10 um)" % lw,
+            "%.3g / %.3g" % (xc["haze"], xc["fog"]), "cycles/mrad")
+        f_low = []
+        for t in rg["atm"][0]["tasks"]:
+            R0 = t["R0"]
+            if R0 is not None and np.isfinite(R0) and R0 > 0:
+                ah, av, _A = self.target_dims(self.los_angle(R0))
+                f_low.append(t["lp"] * R0 / math.sqrt(ah * av))
+        if f_low:
+            f = min(f_low)
+            add(e, "Lowest task bar frequency / fog aerosol cutoff", "%.3g" % (f / xc["fog"]))
+            if f < 3.0 * xc["fog"] and any(wx["V_km"] < 1.0 for wx in wx_all):
+                self.warn("Fog (visual range < 1 km): the lowest task bar frequency (%.3g cycles/mrad) is within a "
+                          "factor 3 of the aerosol MTF cutoff of fog droplets (%.3g cycles/mrad); forward-scatter blur "
+                          "below the cutoff is not modelled (Kopeika aerosol MTF)." % (f, xc["fog"]))
 
     def _info(self, res):
         I = []
@@ -3357,6 +3503,31 @@ class TRM4Model:
                     txt = "< %.3f" % a["R"][0] if R0 is None else ("> %.0f" % a["R"][-1] if not np.isfinite(R0) else "%.3f" % R0)
                     add("Range performance", "%s (%g lp) - %s" % (t["name"], t["lp"], a["label"]), txt, "km")
         return I
+
+
+def quick_estimate(project):
+    """Geometric quick mode (extension): Nyquist / diffraction range of every active task without the AMOP
+    simulation, noise, contrast or atmosphere -> {"tasks": [{name, lp, R0, limit}], "lambda_um", "ifov_mrad", "D_mm",
+    "warnings"}.
+
+    A first sizing of focal length / pitch / aperture, not a bound of the TRM4 range: the 4-bar AMOP also credits
+    bars beyond Nyquist (longer ranges), while noise and contrast shorten them."""
+    m = TRM4Model(project)
+    m._validate_inputs()
+    m._setup_geometry()
+    m._setup_spectral()
+    m._setup_atmospheres()
+    m._setup_optics()
+    m._setup_criteria()
+    m._setup_weights(0.0)
+    out = {"lambda_um": float(ph.trapz(m.lam * m.w, m.lam)),
+           "ifov_mrad": math.sqrt(m.alpha_s["h"] * m.alpha_s["v"]), "D_mm": m.D_opt, "tasks": [],
+           "warnings": m.warnings}
+    for t in m._tasks():
+        c = m._criterion(t)
+        R0, limit = m._geo_range(c["lp"])
+        out["tasks"].append({"name": t["name"], "lp": c["lp"], "R0": R0, "limit": limit})
+    return out
 
 
 def run_project(project, progress=None):

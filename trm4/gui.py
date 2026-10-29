@@ -26,7 +26,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
 from . import presets as P
-from .model import run_project, ModelError, MODEL_VERSION, MODEL_REFERENCE, VALIDATION_VERSION
+from .model import run_project, quick_estimate, ModelError, MODEL_VERSION, MODEL_REFERENCE, VALIDATION_VERSION
 from . import report
 from . import report_he
 from . import scenario as SC
@@ -250,6 +250,7 @@ CAM_NETD = lambda p: THERMAL(p) and (p["detector"]["noise_mode"] == "measured" a
                                      UNCOOLED(p) and p["detector"]["noise_mode"] == "device")
 ALGO = lambda p: p["display"].get("observer", "legacy") == "algorithm"
 POT = lambda p: ALGO(p) and p["display"].get("algo_criterion", "lp") == "pot"
+TTP = lambda p: bool(p["target"].get("ttp")) and not POT(p)
 WEATHER = lambda p: p["atmosphere"]["mode"] == "weather"
 # turbulence acts outside the Thermal category (TRM4) and, as an extension, in it
 TURB_CAT = lambda p: NOT_THERMAL(p) or p["turbulence"].get("thermal", False)
@@ -723,9 +724,13 @@ TABS = [
     ] + [f for i in range(3) for f in (F("target.tasks.%d.on" % i, "Task %d active" % (i + 1), "bool"),
                                         F("target.tasks.%d.name" % i, "  name", "text"),
                                         F("target.tasks.%d.lp" % i, "  number of line pairs"),
-                                        F("target.tasks.%d.pot" % i, "  pixels on target (algorithm)", cond=POT))] + [
+                                        F("target.tasks.%d.pot" % i, "  pixels on target (algorithm)", cond=POT),
+                                        F("target.tasks.%d.v50" % i, "  V50 of the TTP metric", unit="cycles",
+                                          cond=TTP))] + [
         H("Probability and clutter (extensions - TRM4 gives the 50 % range of an uncluttered scene)"),
         F("target.prob_levels", "Also report P80 / P90 ranges (Johnson TTPF)", "bool", cond=lambda p: not POT(p)),
+        F("target.ttp", "Also report TTP / V50 ranges (Vollmerhausen 2004)", "bool", cond=lambda p: not POT(p)),
+        F("target.geo_limit", "Also report the geometric reference range (Nyquist / diffraction)", "bool"),
         F("target.clutter", "Background clutter", "choice", [("not_specified", "Not specified"), ("low", "Low"),
                                                              ("medium_low", "Medium-low"), ("medium", "Medium"),
                                                              ("high", "High")]),
@@ -2812,6 +2817,7 @@ class App(tk.Tk):
 
         mr = tk.Menu(m, tearoff=False)
         mr.add_command(label="Calculate", accelerator="F5", command=self.calculate)
+        mr.add_command(label="Quick geometric estimate", command=self.quick_estimate)
         mr.add_separator()
         mr.add_command(label="Improve performance (advisor)", command=lambda: self.sens.run("advisor"))
         mr.add_command(label="Limiting factors", command=lambda: self.sens.run("limiting"))
@@ -3859,6 +3865,22 @@ class App(tk.Tk):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def quick_estimate(self):
+        """Geometric quick mode: Nyquist / diffraction ranges in a dialog, without running the model."""
+        try:
+            p = self.collect(strict=True)
+            q = quick_estimate(p)
+        except (ValueError, ModelError) as e:
+            messagebox.showerror("Quick geometric estimate", str(e), parent=self)
+            return
+        lines = ["%-16s %5g lp   %s   (%s)" % (t["name"], t["lp"], "-" if t["R0"] is None else (
+            "> 1000 km" if not np.isfinite(t["R0"]) else "%.3f km" % t["R0"]), t["limit"]) for t in q["tasks"]]
+        messagebox.showinfo("Quick geometric estimate", "\n".join(lines) + (
+            "\n\nIFOV %.4g mrad, aperture %.4g mm, mean wavelength %.3g um.\nOne line pair = the larger of 2 pixels "
+            "and lambda / D; noise, contrast, MTF roll-off and the atmosphere are ignored, and TRM4 also credits bars "
+            "beyond Nyquist - a first sizing, not a TRM4 range (extension)." % (q["ifov_mrad"], q["D_mm"],
+                                                                                q["lambda_um"])), parent=self)
+
     def _done(self, model, res, err):
         self.busy = False
         self.calc_btn.set_enabled(True)
@@ -3996,6 +4018,19 @@ class App(tk.Tk):
                                  (110, 95, 95, 95, 200))
                 tv.column("c0", stretch=False)
                 tv.column("c4", stretch=True)
+            ex = [(t["name"], "%s km" % self._range_txt(t["R0"], a0),
+                   " / ".join("%s" % self._range_txt(x, a0) for x in [t["ttp"]["R0"]] +
+                              [l["R0"] for l in t["ttp"].get("levels", [])]) + " km  (V50 %g)" % t["ttp"]["v50"]
+                   if "ttp" in t else "-",
+                   ("%s km  (%s)" % (self._range_txt(t["geo"]["R0"], a0), t["geo"]["limit"])) if "geo" in t else "-")
+                  for t in a0["tasks"] if "ttp" in t or "geo" in t]
+            if ex:
+                ttk.Label(fr, text="Other range metrics (extensions, not TRM4)  ·  TTP / V50 (P50 / P80 / P90, V50 "
+                                   "uncalibrated)  ·  geometric reference: Nyquist / diffraction only",
+                          style="Muted.TLabel").pack(anchor="w", pady=(8, 0))
+                tv = self._table(fr, ("Task", "TRM4", "TTP / V50", "Geometric reference"), ex, (110, 95, 260, 260))
+                tv.column("c0", stretch=False)
+                tv.column("c3", stretch=True)
             rows = []
             for t in db.get("tasks", []):
                 if "mtf_task" in t:

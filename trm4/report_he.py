@@ -1265,6 +1265,19 @@ def build(project, res, adv):
             doc.table(["משימה", "P50 – TRM4 [km]", "P80 [km]", "P90 [km]"], lv_rows, [0.4, 0.2, 0.2, 0.2],
                       caption="טווחים ברמות הסתברות לפי פונקציית ההעברה של Johnson ‏(TTPF) – הרחבה של TRM_HADMAA, "
                               "לא פלט של TRM4.", aligns=["right", "center", "center", "center"], bold_first=True)
+        ex_rows = [["%s (%s)" % (tn(t["name"]), t["name"]), _range_text(t["R0"], a0),
+                    " / ".join(_range_text(x, a0) for x in [t["ttp"]["R0"]] +
+                               [lv["R0"] for lv in t["ttp"].get("levels", [])]) + " (V50 = %g)" % t["ttp"]["v50"]
+                    if "ttp" in t else "-",
+                    _range_text(t["geo"]["R0"], a0) if "geo" in t else "-"]
+                   for t in db.get("tasks", []) if "ttp" in t or "geo" in t]
+        if ex_rows:
+            doc.table(["משימה", "TRM4 [km]", "TTP / V50 – P50 / P80 / P90 [km]", "טווח גאומטרי [km]"], ex_rows,
+                      [0.3, 0.15, 0.35, 0.2],
+                      caption="מדדי טווח נוספים – הרחבות של TRM_HADMAA: מדד TTP ‏(Vollmerhausen 2004) על ספי TRM4 "
+                              "עם ערכי V50 שאינם מכוילים, וטווח ייחוס גאומטרי (נייקוויסט / עקיפה, ללא רעש, ניגודיות "
+                              "ואטמוספרה) – אינו גבול לטווח TRM4.", aligns=["right", "center", "center", "center"],
+                      bold_first=True)
         if db.get("extensions"):
             doc.para("**הרחבות פעילות (אינן חלק מ־TRM4):** %s." % "; ".join(db["extensions"]), size=9.8)
         doc.figure(_fig_range(res), 215, "האות הזמין במטרה לעומת סף כל משימה כפונקציה של הטווח; נקודת החיתוך היא "

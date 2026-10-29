@@ -175,9 +175,10 @@ def atm_path(project, key):
 
 
 def fast(project):
-    """Shallow copy that skips outputs the analyses do not use (P80 / P90 ranges): same TRM4 ranges, less run time."""
+    """Shallow copy that skips outputs the analyses do not use (P80 / P90, TTP and geometric ranges): same TRM4 ranges,
+    less run time."""
     p = dict(project)
-    p["_what_if"] = dict(project.get("_what_if") or {}, no_prob=True)
+    p["_what_if"] = dict(project.get("_what_if") or {}, no_prob=True, no_extra=True)
     return p
 
 
@@ -757,12 +758,13 @@ def _normalize_items(items):
 
 
 def uncertainty(project, items, progress=None, method="rss", correlations=None, mc_n=200, seed=1,
-                coverage=0.95, k=2.0, stop=None, evaluate=None, deriv_step=0.05):
+                coverage=0.95, k=2.0, stop=None, evaluate=None, deriv_step=0.05, runner=None):
     """Uncertainty study.
 
     items: [(path, label, pct)] or [{"path", "label", "pct", "meaning", "dist"}]
     Always computed: OAT variation (each input at -/+ its stated value) and RSS propagation with local
-    sensitivities; method="mc" adds a Monte Carlo propagation with `mc_n` samples and a fixed seed.
+    sensitivities; method="mc" adds a Monte Carlo propagation with `mc_n` samples and a fixed seed (with the model as
+    evaluator the samples run in a process pool, Runner; the result does not depend on the number of processes).
     """
     progress, stop = progress or _noop, stop or (lambda: False)
     ev = _evaluator(evaluate)
@@ -851,20 +853,38 @@ def uncertainty(project, items, progress=None, method="rss", correlations=None, 
         rng = np.random.default_rng(int(seed))
         L = np.linalg.cholesky(C) if len(paths) else np.zeros((0, 0))
         samples = {t: [] for t in tasks}
-        failed = 0
-        for i in range(int(mc_n)):
-            progress("Monte Carlo sample %d / %d" % (i + 1, mc_n), done[0] / max(n_runs, 1))
+        # draw every sample first (same order as one-by-one), then run them - in the process pool for the model
+        changes = []
+        for _i in range(int(mc_n)):
             z = L @ rng.standard_normal(len(paths)) if len(paths) else []
-            case = copy.deepcopy(project)
-            for r, zi in zip(rows, z):
-                _set_input(case, r["path"], _clip(r["path"], r["x0"] * _sample(r["dist"], r["u_rel"], float(zi))))
+            changes.append([(r["path"], _clip(r["path"], r["x0"] * _sample(r["dist"], r["u_rel"], float(zi))))
+                            for r, zi in zip(rows, z)])
+        if evaluate is None:
+            own = runner is None
+            runner = runner or Runner()
+            f0 = done[0] / max(n_runs, 1)
             try:
-                rr = run(case)
-            except ModelError:
-                failed += 1
-                continue
-            for t in tasks:
-                samples[t].append(rr[t])
+                results = runner.map([(_case_ranges, (project, ch)) for ch in changes], progress, stop,
+                                     "Monte Carlo samples", f0, 1.0)
+            finally:
+                if own:
+                    runner.close()
+        else:
+            results = []
+            for i, ch in enumerate(changes):
+                progress("Monte Carlo sample %d / %d" % (i + 1, mc_n), done[0] / max(n_runs, 1))
+                case = copy.deepcopy(project)
+                for path, v in ch:
+                    _set_input(case, path, v)
+                try:
+                    results.append(run(case))
+                except ModelError:
+                    results.append(None)
+        failed = sum(1 for rr in results if rr is None)
+        for rr in results:
+            if rr is not None:
+                for t in tasks:
+                    samples[t].append(rr[t])
         a = (1 - coverage) / 2
         mc = {"n_ok": int(mc_n) - failed, "n_fail": failed, "seed": int(seed), "coverage": coverage}
         for t in tasks:

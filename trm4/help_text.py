@@ -473,6 +473,20 @@ HELP = {
     "target.tasks.N.pot": "Algorithm observer with the pixels-on-target criterion: pixels needed on the projected "
                           "target area for this task (Holst & Mahalanobis 2023: about 60 detection, 250 recognition, "
                           "350 identification).",
+    "target.ttp": "Extension: targeting task performance (TTP) metric, Vollmerhausen, Jacobs & Driggers 2004. TTP = "
+                  "integral of sqrt(signal / threshold) over the bar frequencies the TRM4 MTDP / MDSP resolves; "
+                  "cycles on target V = TTP sqrt(a_h a_v) / R; the P50 range is where V = V50, the P80 / P90 ranges "
+                  "use P = x^E / (1 + x^E), E = 1.51 + 0.24 x. Unlike the line-pair criterion it credits the "
+                  "contrast margin at every resolved frequency. The TRM4 threshold replaces CTF_sys / C, so the V50 "
+                  "values must be calibrated - they are not interchangeable with NV-IPM values.",
+    "target.tasks.N.v50": "V50 of the TTP metric for this task [cycles on target] (defaults 2.7 / 14.5 / 20.8; "
+                          "identification ~ 20 is the order of the NVESD tracked-vehicle set, the others are typical "
+                          "orders of magnitude). Calibrate for the target set.",
+    "target.geo_limit": "Extension: range at which the task line pairs fit across the critical dimension "
+                        "sqrt(a_h a_v) with one line pair = the larger of 2 pixels (Nyquist) and lambda / D "
+                        "(diffraction). No noise, contrast or atmosphere - a sizing reference, not a bound: TRM4 also "
+                        "credits bars beyond Nyquist. Run > Quick geometric estimate gives it without running the "
+                        "model.",
     "target.scene_id": "Identifier of the scene or clutter measurement (traceability).",
     "atmosphere.meta.geometry": "Path of the imported atmospheric data: horizontal or slant, altitudes, range.",
     "atmosphere.meta.source": "Model or source that produced the data, e.g. MODTRAN version and settings.",

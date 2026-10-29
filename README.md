@@ -50,6 +50,21 @@ the local copy in `detector_lookup_HTML/`) a few seconds after start-up and ever
 good (ids stored under `atlas_news` in `%APPDATA%\TRM4\settings.json`). *News > Detector Atlas news...* reopens the
 window, including already-read items.
 
+## Version 2.7 - other range metrics: TTP / V50, geometric quick mode, aerosol MTF, parallel Monte Carlo
+
+The items left open in 2.6 (and the Monte Carlo run time). Engine version 2.7; the TRM4 ranges are bit-identical,
+every metric is an extra output next to them and is skipped by the analyses (`analysis.fast`).
+
+| Item | Implementation | Source / limits |
+|---|---|---|
+| TTP / V50 ranges | *Also report TTP / V50 ranges* (Target & scenario, off by default) and a V50 per task (defaults 2.7 / 14.5 / 20.8 cycles). TTP = integral of sqrt(signal / threshold) over the bar frequencies the TRM4 MTDP / MDSP resolves; cycles on target V = TTP sqrt(a_h a_v) / R; P50 where V = V50, P80 / P90 from P = x^E / (1 + x^E), E = 1.51 + 0.24 x. Summary table, System data, both reports. Thermal: on the 300-point range grid, no extra run time. Visible / General: 16 ranges, MDSP on every second AMOP frequency; with turbulence the tabulated AMOP is scaled by MTF_turb(R) / MTF_turb(R_ref) (daylight template 3.2 -> 4.0 s, within 1 % of a per-range AMOP simulation). Computed after the TRM4 ranges so it cannot change them through the model caches. | Vollmerhausen, Jacobs & Driggers, Opt. Eng. 43(11) 2806 (2004). The TRM4 threshold replaces CTF_sys / C, so V50 values are not interchangeable with NV-IPM values and must be calibrated. Template ratios TTP / TRM4 (P50) range 0.6 - 2.4, mostly at Identification. |
+| Geometric reference range and quick mode | *Also report the geometric reference range* (on by default): the range at which the task line pairs fit across sqrt(a_h a_v) with one line pair = max(2 IFOV, lambda / D), fixed-point iteration on slant paths. *Run > Quick geometric estimate* gives the same values without the AMOP simulation, noise, contrast or atmosphere (`model.quick_estimate`). | A sizing reference, **not** a bound: the TRM4 4-bar AMOP also credits bars beyond Nyquist, so the TRM4 range can be longer (LWIR Detection 9.1 km vs 7.7 km geometric). |
+| Aerosol MTF | Kopeika aerosol MTF exp[-S R (r / xi_c)^2] below xi_c = a / lambda, exp(-S R) above (`extensions.aerosol_mtf`). For weather-derived atmospheres System data shows xi_c for haze (1 um) and fog (10 um) and the ratio of the lowest task bar frequency to the fog cutoff; a warning when it is below 3 in fog (visual range < 1 km). The ranges are not changed. | Kopeika (SPIE Press 1998, Ch. 17). For all templates xi_c is 2 - 4 orders of magnitude below the task frequencies, where the aerosol MTF is the flat scattering transmission that Beer-Lambert already applies to the signal; applying it again would double-count. |
+| Monte Carlo in the process pool | The uncertainty method *Monte Carlo* draws all samples first (same seed, same order) and runs them through `analysis.Runner`; the result does not depend on the number of processes (`test_pool_equals_serial`). | - |
+
+`tests/test_metrics.py` covers these items. Still not done: gas-line absorption in the weather mode (needs
+HITRAN / MODTRAN data) and the laboratory frame / video tools.
+
 ## Version 2.6 - roadmap phase 3: extensions beyond TRM4 (reports/)
 
 TRM4 is line-pair deterministic: one range per task criterion, no probability, no clutter, no meteorological

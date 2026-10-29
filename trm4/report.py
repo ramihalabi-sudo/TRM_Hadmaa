@@ -168,6 +168,12 @@ def format_report(project, res, analyses=None):
                                          for l in t["levels"])
             if t.get("clutter", 1.0) != 1.0:
                 line += "  (criterion %g lp x%.3g clutter)" % (t["lp_input"], t["clutter"])
+            if "ttp" in t:
+                tt = t["ttp"]
+                line += "  TTP (V50 %g) %s" % (tt["v50"], " / ".join(_fmt_range(x, rg["atm"][0]) for x in [tt["R0"]] +
+                                                                    [lv["R0"] for lv in tt.get("levels", [])]))
+            if "geo" in t:
+                line += "  geometric %s (%s)" % (_fmt_range(t["geo"]["R0"], rg["atm"][0]), t["geo"]["limit"])
             if "pix_h" in t:
                 line += "  target pixels %.1f x %.1f, Nyquist-limited cycles %.1f%s" % (
                     t["pix_h"], t["pix_v"], t["cyc_nyq"], "  (sampling limited)" if t["sampling_limited"] else "")
@@ -180,6 +186,12 @@ def format_report(project, res, analyses=None):
         L.append("  Extensions (not TRM4): %s" % ("; ".join(db.get("extensions") or []) or "none"))
         if db.get("extensions") and any(t.get("levels") for t in db["tasks"]):
             L.append("  R is the TRM4 range (P50 criterion); P80 / P90 from the Johnson TTPF are an extension.")
+        if any("ttp" in t for t in db["tasks"]):
+            L.append("  TTP: targeting task performance metric (Vollmerhausen 2004) on the TRM4 thresholds, P50 / P80 / "
+                     "P90; the V50 values are uncalibrated (extension).")
+        if any("geo" in t for t in db["tasks"]):
+            L.append("  Geometric: Nyquist / diffraction reference range without noise, contrast or atmosphere - not a "
+                     "TRM4 range and not a bound (extension).")
         L.append("  Calibration status: %s" % db.get("calibration", ""))
         L.append("  Confidence / uncertainty method: %s" % ("nominal (input uncertainties not specified)" if not (
             analyses or {}).get("uncertainty") else "with stated input uncertainties (see below)"))
