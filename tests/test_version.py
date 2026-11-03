@@ -47,6 +47,22 @@ class VersionConsistency(unittest.TestCase):
         self.assertIn('dir="rtl"', page)
         self.assertIn('id="v%s"' % VERSION, page)
 
+    def test_compare_between_versions(self):
+        refs = VR.version_commits()
+        if len(refs) < 2:
+            self.skipTest("no git history")
+        changelog = {e["version"] for e in VR.parse_changelog()}
+        self.assertTrue(set(refs) <= changelog, "a tagged version without a CHANGELOG entry")
+        vs = sorted(refs, key=VR._vkey)
+        info = VR.git_versions()[vs[-1]]
+        self.assertEqual(info[3], vs[-2])                           # compared with the previous version
+        self.assertTrue(info[2]["files"])
+        text = VR.diff_text(vs[-2], vs[-1])
+        self.assertIn("git diff", text)
+        self.assertIn(VR.parse_changelog()[0]["title"] if vs[-1] == VERSION else vs[-1], text)
+        page = VR.html_report(VR.parse_changelog(), VR.git_versions())
+        self.assertIn("/compare/", page)
+
 
 if __name__ == "__main__":
     unittest.main()

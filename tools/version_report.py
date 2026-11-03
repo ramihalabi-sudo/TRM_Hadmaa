@@ -1,10 +1,13 @@
 """Version history report: CHANGELOG.md -> reports/version_history.html (Hebrew, right-to-left) and a console summary.
 
-    python tools/version_report.py            write the HTML report and print the summary
-    python tools/version_report.py --text     print the summary only
+    python tools/version_report.py                   write the HTML report and print the summary
+    python tools/version_report.py --text            print the summary only
+    python tools/version_report.py --diff 2.13 2.14  what changed between two versions (changelog, commits, files)
 
-Each entry of CHANGELOG.md is what changed against the previous version.  Where a git commit "Engine X.Y: ..."
-exists, the report adds its id and the size of the change against the previous version's commit.
+Each entry of CHANGELOG.md is what changed against the previous version.  Every version has a git tag vX.Y (on its
+"Engine X.Y: ..." commit; 2.0 - 2.4 are in the initial commit, tagged v2.4).  Against the previous tagged version the
+report adds the commits in between, the changed files, the size of the change, the compare command (git diff vA vB)
+and the GitHub compare link.  A version without a tag falls back to its "Engine X.Y:" commit.
 """
 import argparse
 import html
@@ -15,6 +18,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHANGELOG = os.path.join(ROOT, "CHANGELOG.md")
+REPO_URL = "https://github.com/ramihalabi-sudo/TRM_Hadmaa"
 OUT = os.path.join(ROOT, "reports", "version_history.html")
 IMPACT = "השפעה על טווחים:"
 
@@ -44,19 +48,62 @@ def _git(*args):
         return ""
 
 
-def git_versions():
-    """{version: (commit, shortstat against the previous version commit)} from the "Engine X.Y:" commits."""
-    log = _git("log", "--reverse", "--format=%h %s")
-    found, prev = {}, None
-    for line in log.splitlines():
+def _vkey(v):
+    return tuple(int(x) for x in v.split("."))
+
+
+def version_commits():
+    """{version: (ref, commit)}: the vX.Y tags, else the "Engine X.Y:" commits."""
+    out = {}
+    for line in _git("log", "--reverse", "--format=%h %s").splitlines():
         commit, _, subject = line.partition(" ")
         m = re.match(r"Engine (\d+\.\d+(?:\.\d+)?):", subject)
-        if not m:
-            continue
-        stat = _git("diff", "--shortstat", prev, commit) if prev else ""
-        found[m.group(1)] = (commit, stat)
-        prev = commit
+        if m:
+            out[m.group(1)] = (commit, commit)
+    for tag in _git("tag", "-l", "v*").split():
+        m = re.match(r"v(\d+\.\d+(?:\.\d+)?)$", tag)
+        if m:
+            out[m.group(1)] = (tag, _git("rev-list", "-n", "1", "--abbrev-commit", tag))
+    return out
+
+
+def compare(a_ref, b_ref):
+    """{"stat", "commits": [hash subject], "files": [(status, path)]} of the change a_ref..b_ref."""
+    commits = _git("log", "--reverse", "--format=%h %s", "%s..%s" % (a_ref, b_ref)).splitlines()
+    files = [tuple(ln.split("\t", 1)) for ln in _git("diff", "--name-status", a_ref, b_ref).splitlines() if "\t" in ln]
+    return {"stat": _git("diff", "--shortstat", a_ref, b_ref), "commits": commits, "files": files}
+
+
+def git_versions():
+    """{version: (commit, shortstat, compare, previous version, ref, previous ref)} against the previous version."""
+    refs = version_commits()
+    found, prev = {}, None
+    for v in sorted(refs, key=_vkey):
+        ref, commit = refs[v]
+        cmp = compare(refs[prev][0], ref) if prev else None
+        found[v] = (commit, cmp["stat"] if cmp else "", cmp, prev, ref, refs[prev][0] if prev else None)
+        prev = v
     return found
+
+
+def diff_text(a, b, entries=None, refs=None):
+    """Console text of what changed from version a to version b: changelog entries, commits and files."""
+    entries = entries if entries is not None else parse_changelog()
+    refs = refs if refs is not None else version_commits()
+    for v in (a, b):
+        if v not in refs:
+            return "Version %s has no tag / commit. Tagged versions: %s" % (v, ", ".join(sorted(refs, key=_vkey)))
+    lo, hi = sorted((a, b), key=_vkey)
+    c = compare(refs[lo][0], refs[hi][0])
+    lines = ["TRM_HADMAAv1 %s -> %s   (git diff %s %s)" % (lo, hi, refs[lo][0], refs[hi][0]), c["stat"], ""]
+    for e in reversed(entries):
+        if _vkey(lo) < _vkey(e["version"]) <= _vkey(hi):
+            lines.append("%s  %s  %s" % (e["version"], e["date"], e["title"]))
+            lines.append("    ranges: " + e["impact"])
+            lines += ["    - " + x for x in e["changes"]]
+    lines += ["", "Commits:"] + ["    " + x for x in c["commits"]]
+    lines += ["", "Files:"] + ["    %-3s %s" % f for f in c["files"]]
+    return "\n".join(lines)
 
 
 def impact_kind(text):
@@ -71,7 +118,7 @@ def text_summary(entries, gitinfo):
     lines = ["TRM_HADMAAv1 - version history (%d versions, current %s)" % (len(entries), entries[0]["version"]), ""]
     for i, e in enumerate(entries):
         prev = entries[i + 1]["version"] if i + 1 < len(entries) else "-"
-        commit, stat = gitinfo.get(e["version"], ("", ""))
+        commit, stat = gitinfo.get(e["version"], ("", ""))[:2]
         lines.append("%-6s %s  (from %s)  %s" % (e["version"], e["date"], prev, e["title"]))
         lines.append("       ranges: %s" % e["impact"])
         if commit:
@@ -99,6 +146,8 @@ a{color:var(--acc);text-decoration:none}.ver{font-weight:700;white-space:nowrap}
 .yes{color:var(--yes);background:var(--yes-bg)}.no{color:var(--no);background:var(--no-bg)}
 .base{color:var(--base);background:var(--base-bg)}ul{margin:6px 0 0;padding-inline-start:20px}
 code{font-family:Consolas,monospace;font-size:13px}.cur{border-color:var(--acc)}
+details{margin-top:10px}summary{cursor:pointer;color:var(--acc)}details table{margin:6px 0 0}
+details code{direction:ltr;unicode-bidi:embed}
 """
 
 
@@ -108,7 +157,9 @@ def html_report(entries, gitinfo):
     for i, e in enumerate(entries):
         v, kind = html.escape(e["version"]), impact_kind(e["impact"])
         prev = entries[i + 1]["version"] if i + 1 < len(entries) else ""
-        commit, stat = gitinfo.get(e["version"], ("", ""))
+        info = gitinfo.get(e["version"], ("", ""))
+        commit, stat = info[:2]
+        cmp, gprev, ref, pref = info[2:6] if len(info) >= 6 else (None, None, None, None)
         badge = '<span class="badge %s">%s</span>' % (kind, {"yes": "משנה טווחים", "no": "ללא שינוי בטווחים",
                                                              "base": "בסיס"}[kind])
         rows.append('<tr><td class="ver"><a href="#v%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td></tr>'
@@ -118,10 +169,23 @@ def html_report(entries, gitinfo):
             meta.append("שינוי לעומת %s" % html.escape(prev))
         if commit:
             meta.append("commit <code>%s</code>" % html.escape(commit) + (" · %s" % html.escape(stat) if stat else ""))
+        git_html = ""
+        if cmp:
+            git_html = ('<details><summary>מה השתנה בקוד מול %s: %d commits, %d קבצים</summary>'
+                        '<p class="meta">השוואה: <code>git diff %s %s</code> · '
+                        '<code>py tools/version_report.py --diff %s %s</code> · '
+                        '<a href="%s/compare/%s...%s">GitHub</a></p><ul>%s</ul><table><tbody>%s</tbody></table>'
+                        '</details>'
+                        % (html.escape(gprev), len(cmp["commits"]), len(cmp["files"]), html.escape(pref),
+                           html.escape(ref), html.escape(gprev), v, REPO_URL, html.escape(pref), html.escape(ref),
+                           "".join("<li><code>%s</code></li>" % html.escape(c) for c in cmp["commits"]),
+                           "".join('<tr><td class="ver">%s</td><td><code>%s</code></td></tr>'
+                                   % (html.escape(s), html.escape(p)) for s, p in cmp["files"])))
         cards.append('<section class="card%s" id="v%s"><h2>גרסה %s - %s</h2><div class="meta">%s</div>'
-                     '<div>%s %s</div><ul>%s</ul></section>'
+                     '<div>%s %s</div><ul>%s</ul>%s</section>'
                      % (" cur" if i == 0 else "", v, v, html.escape(e["title"]), " · ".join(meta), badge,
-                        html.escape(e["impact"]), "".join("<li>%s</li>" % html.escape(c) for c in e["changes"])))
+                        html.escape(e["impact"]), "".join("<li>%s</li>" % html.escape(c) for c in e["changes"]),
+                        git_html))
     return ('<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1"><title>היסטוריית גרסאות</title>'
             '<style>%s</style></head><body><main><h1>TRM_HADMAAv1 - היסטוריית גרסאות</h1>'
@@ -134,10 +198,14 @@ def html_report(entries, gitinfo):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--text", action="store_true", help="print the summary only, do not write the HTML report")
+    ap.add_argument("--diff", nargs=2, metavar=("FROM", "TO"), help="what changed between two versions, e.g. 2.13 2.14")
     args = ap.parse_args(argv)
-    entries, gitinfo = parse_changelog(), git_versions()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    if args.diff:
+        print(diff_text(*args.diff))
+        return
+    entries, gitinfo = parse_changelog(), git_versions()
     print(text_summary(entries, gitinfo))
     if not args.text:
         os.makedirs(os.path.dirname(OUT), exist_ok=True)

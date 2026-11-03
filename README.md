@@ -86,6 +86,7 @@ one MTF); template ranges are unchanged, the run IDs change with the version num
 | Field cards | `SYSTEM[path]`: size / weight and image bullets and the live estimate lines of the field. |
 | Review | `notes(p)`: athermalization, very fast lens, wide field, heavy lens, large front element with a cold stop, aperture above 3 r0, high stabilization need, rolling shutter with motion. |
 | Background | `research_notes/system_considerations_he.md`: rules, constants and sources. |
+| Version tracking | Every version has an annotated git tag `vX.Y` (`v2.4` = the initial commit with 2.0 - 2.4). `tools/version_report.py` compares each version with the previous tag: commits, changed files, `git diff vA vB` and the GitHub compare link; `--diff A B` prints the changelog entries, commits and files between any two versions. |
 
 ## Version 2.13 - guide: feedback on every value and its effect on the range
 
