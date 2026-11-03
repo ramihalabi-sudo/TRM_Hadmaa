@@ -66,6 +66,14 @@ the local copy in `detector_lookup_HTML/`) a few seconds after start-up and ever
 good (ids stored under `atlas_news` in `%APPDATA%\TRM4\settings.json`). *News > Detector Atlas news...* reopens the
 window, including already-read items.
 
+## Versions
+
+Every substantial change gets a new version. The version is set once in `trm4/version.py` (package, model version /
+run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the previous one, and
+`python tools/version_report.py` writes the report `reports/version_history.html`. `tests/test_version.py` checks that
+`trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
+below agree.
+
 ## Version 2.11 - scintillation diagnostic for point targets and active illumination
 
 Roadmap item 4 of Table 6 of `reports/מחקר טורבולנציה - שלב ב.pdf` (Sec. 4.8, Appendix B). Engine version 2.11; the

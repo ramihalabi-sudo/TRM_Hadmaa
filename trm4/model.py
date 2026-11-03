@@ -21,8 +21,9 @@ from . import zemax as Z
 from . import imports as IM
 from . import extensions as X
 from .amop import amop as amop_sim
+from .version import VERSION
 
-MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine 2.11"
+MODEL_VERSION = "TRM4.v3 model / TRM_HADMAAv1 engine %s" % VERSION
 MODEL_REFERENCE = "Fraunhofer IOSB TR 2021/04 (TRM4.v3 parameter description and model documentation)"
 # version of the acceptance/regression suite (kept separate from the model version, field map App. D)
 VALIDATION_VERSION = "acceptance suite FM-1.1 (field map v1.1, 14.10.2026)"
