@@ -6,11 +6,18 @@ The impact ratings come from the parameter-sensitivity study (reports/השפעת
 Table 2 and Table 5: elasticities over four representative systems).
 
 LESSONS are the guided tours shown by the guide panel of the GUI (gui.GuidePanel).  A step names the page and
-the parameter to highlight; its field card is taken from PARAMS.
+the parameter to highlight; its field card is taken from PARAMS.  The "tour" lesson is built from the form itself
+(tour_steps): one step per group of fields of every page, so that it covers every field the project shows.
+review() checks every shown field of a project at once.
+
+The cards of all other fields of the form are in guide_kb_he.MORE.
 """
 import re
 
-IMPACT_TEXT = {3: "השפעה גבוהה על הטווח", 2: "השפעה בינונית", 1: "השפעה נמוכה"}
+from .guide_kb_he import MORE, _check_jitter_preset, _check_tint, _n, _range
+
+IMPACT_TEXT = {3: "השפעה גבוהה על הטווח", 2: "השפעה בינונית", 1: "השפעה נמוכה", 0: "לא משפיע על הטווח"}
+IMPACT_STYLE = {3: "high", 2: "mid", 1: "low", 0: "info"}
 
 
 def _cat(p):
@@ -33,28 +40,6 @@ def _refl_mode(p, who):
     return p.get("target", {}).get(who + "_refl_mode", "effective")
 
 
-def _range(lo, hi, unit, typical=None):
-    """Plausibility check: warn outside [lo, hi]."""
-    def check(v, p):
-        if not isinstance(v, (int, float)):
-            return None
-        if v < lo or v > hi:
-            return ("warn", "הערך %s %s חריג. הטווח הסביר הוא %s-%s %s. כדאי לבדוק יחידות ומקור." %
-                    (_n(v), unit, _n(lo), _n(hi), unit))
-        return ("ok", "הערך %s %s בתחום הסביר%s." % (_n(v), unit, (" (" + typical + ")") if typical else ""))
-    return check
-
-
-def _n(v):
-    if isinstance(v, float):
-        if v == int(v) and abs(v) < 1e6:
-            return str(int(v))
-        if abs(v) < 1e-3 or abs(v) >= 1e5:
-            return "%.2g" % v
-        return ("%.3f" % v).rstrip("0").rstrip(".")
-    return str(v)
-
-
 def _check_materials(p):
     t = p.get("target", {})
     if t.get("t_refl_mode") == "spectral" and t.get("b_refl_mode") == "spectral":
@@ -70,14 +55,17 @@ def _check_f(v, p):
     if v <= 0:
         return ("warn", "אורך מוקד חייב להיות חיובי.")
     if v < 3:
-        return ("warn", "פחות מ-3 mm - ייתכן שהוזן בס\"מ במקום מ\"מ.")
+        return ("warn", "פחות מ-3 mm - ייתכן שהוזן בס\"מ במקום מ\"מ. מוקד קצר פי 10 נותן IFOV גדול פי 10, והטווחים "
+                        "יוצאים קצרים פי 5-10.", round(v * 10, 3))
     if v > 3000:
-        return ("warn", "יותר מ-3000 mm - חריג מאוד. ייתכן שהוזן במיקרון או שיש טעות הקלדה.")
+        return ("warn", "יותר מ-3000 mm - חריג מאוד. ייתכן שהוזן במיקרון או שיש טעות הקלדה. מוקד ארוך מדי מנפח את "
+                        "הטווח במערכת מוגבלת-דגימה.")
     D = p.get("optics", {}).get("D_mm") or 0
     if p.get("optics", {}).get("aperture") == "circular" and D > 0:
         F = v / D
         if F < 0.7 or F > 12:
-            return ("warn", "היחס f/D יוצא F/%.1f - לא סביר. בדקו את הקוטר D." % F)
+            return ("warn", "היחס f/D יוצא F/%.1f - לא סביר (עדשות אמיתיות: F/0.8-F/8). קוטר שגוי משנה את העקיפה "
+                            "ואת כמות האור. בדקו את הקוטר D." % F)
         return ("ok", "f = %s mm עם D = %s mm נותן F/%.2g." % (_n(v), _n(D), F))
     return ("ok", "f = %s mm." % _n(v))
 
@@ -91,13 +79,20 @@ def _check_D(v, p):
         return ("ok", "0 = מפתח מלבני לפי רוחב וגובה (מתקדם).")
     f = p.get("optics", {}).get("f_mm") or 0
     if f and f / v < 0.7:
-        return ("warn", "הקוטר גדול מדי ביחס למוקד (F/%.2g). ייתכן שהוזן הרדיוס או F-number." % (f / v))
+        return ("warn", "הקוטר גדול מדי ביחס למוקד (F/%.2g) - עדשה כזו לא קיימת, והיא מנפחת את האות ומקטינה את "
+                        "העקיפה. ייתכן שהוזן ה-F-number או ערך שגוי." % (f / v))
+    if f and f / v > 12:
+        return ("warn", "הקוטר קטן מאוד ביחס למוקד (F/%.2g): עקיפה חזקה ומעט אור. ייתכן שהוזן הרדיוס או ה-F-number "
+                        "במקום הקוטר." % (f / v))
     return _range(2, 600, "mm")(v, p)
 
 
 def _check_netd(v, p):
     if not isinstance(v, (int, float)):
         return None
+    if 0 < v < 1:
+        return ("warn", "נראה שה-NETD הוזן ב-K במקום ב-mK: %s K = %s mK. NETD קטן פי 1000 מנפח את הרגישות." %
+                (_n(v), _n(v * 1000)), v * 1000)
     if p.get("imager_type") == "uncooled":
         return _range(15, 150, "mK", "לא-מקורר טיפוסי: 30-80 mK")(v, p)
     return _range(5, 100, "mK", "מקורר טיפוסי: 15-40 mK")(v, p)
@@ -125,9 +120,11 @@ def _check_dT(v, p):
     if not isinstance(v, (int, float)):
         return None
     if v == 0:
-        return ("warn", "ΔT = 0: אין ניגוד ולכן אין טווח. זה מתאים רק למעבר תרמי (שחר / דמדומים).")
+        return ("warn", "ΔT = 0: אין ניגוד ולכן אין טווח. זה מתאים רק למעבר תרמי (שחר / דמדומים). לדרישה "
+                        "מקובל ΔT = 2 K.", 2.0)
     if abs(v) > 20:
-        return ("warn", "ΔT מעל 20 K - נדיר למטרה טיפוסית (מנוע חם, אש?). בדקו שזה ניגוד ולא טמפרטורה.")
+        return ("warn", "ΔT מעל 20 K - נדיר למטרה טיפוסית (מנוע חם, אש?). ניגוד גבוה מדי מנפח בעיקר את טווח הגילוי. "
+                        "בדקו שזה ניגוד ולא טמפרטורה.")
     if abs(v) < 0.5:
         return ("ok", "ניגוד נמוך מאוד - תרחיש קשה. כאן NETD ועיבוד אות מתחילים להשפיע.")
     return ("ok", "ΔT = %s K, בתחום המקובל (תקן: 2 K)." % _n(v))
@@ -137,16 +134,28 @@ def _check_Tbg(v, p):
     if not isinstance(v, (int, float)):
         return None
     if v < 200 or v > 340:
-        return ("warn", "טמפרטורת רקע של %s K (%.0f °C) חריגה. שימו לב: הערך בקלווין, לא בצלזיוס." %
-                (_n(v), v - 273.15))
+        msg = ("טמפרטורת רקע של %s K (%.0f °C) חריגה. שימו לב: הערך בקלווין, לא בצלזיוס. רקע קר מאוד מוריד את "
+               "קרינת הרקע ואת הרגישות, ומקצר את הטווח." % (_n(v), v - 273.15))
+        if -60 <= v <= 80:
+            return ("warn", msg + " %s °C = %s K." % (_n(v), _n(round(v + 273.15, 2))), round(v + 273.15, 2))
+        return ("warn", msg)
     return ("ok", "%s K = %.0f °C." % (_n(v), v - 273.15))
 
 
 def _check_refl(v, p):
     if not isinstance(v, (int, float)):
         return None
+    if 1 < v <= 100:
+        return ("warn", "החזרות היא שבר בין 0 ל-1, לא אחוזים: %s נראה כמו %s%%. ההחזרות קובעת את הניגוד, ולכן "
+                        "ערך שגוי משנה את כל הטווחים." % (_n(v), _n(v)), round(v / 100.0, 4))
     if v < 0 or v > 1:
         return ("warn", "החזרות היא שבר בין 0 ל-1, לא אחוזים.")
+    t = p.get("target", {})
+    other = t.get("b_refl") if v == t.get("t_refl") else t.get("t_refl")
+    if p.get("category") != "Thermal" and isinstance(other, (int, float)) and abs(v - other) < 0.02 and \
+            t.get("t_refl_mode") == t.get("b_refl_mode") == "effective":
+        return ("warn", "ההחזרות של המטרה (%s) ושל הרקע (%s) כמעט שוות: כמעט אין ניגוד, והטווחים יהיו קצרים מאוד. "
+                        "בדקו את שני הערכים." % (_n(t.get("t_refl")), _n(t.get("b_refl"))))
     return ("ok", "החזרות %s." % _n(v))
 
 
@@ -155,6 +164,9 @@ def _check_sigma(v, p):
         return None
     if v < 0:
         return ("warn", "מקדם הנחתה לא יכול להיות שלילי.")
+    if 0 < v < 0.005:
+        return ("warn", "σ = %s 1/km - אוויר כמעט ריק. ייתכן שהוזן ב-1/m: %s 1/m = %s 1/km. הנחתה נמוכה מדי מנפחת "
+                        "את טווח הגילוי." % (_n(v), _n(v), _n(v * 1000)), round(v * 1000, 4))
     if v > 5:
         return ("warn", "σ מעל 5 1/km - ערפל כבד; הטווחים יהיו קצרים מאוד.")
     T = 2.718281828 ** (-v * 5)
@@ -182,11 +194,16 @@ def _check_jitter(v, p):
     ifov = pitch / f                                       # mrad (um / mm)
     ratio = v / ifov if ifov else 0
     if v < 0:
-        return ("warn", "ריצוד לא יכול להיות שלילי.")
+        return ("warn", "ריצוד לא יכול להיות שלילי.", 0.0)
+    if v >= 1 and ratio > 5:
+        return ("warn", "%s mrad זה ריצוד עצום (פי %.0f מהפיקסל) - נראה שהוזן ב-µrad בשדה של mrad." % (_n(v), ratio),
+                round(v / 1000.0, 4))
     if ratio > 1:
-        return ("warn", "הריצוד (%s mrad) גדול מה-IFOV (%.3g mrad): הוא יגביל את הזיהוי מאוד." % (_n(v), ifov))
+        return ("warn", "הריצוד (%s mrad) גדול מה-IFOV (%.3g mrad): התמונה נמרחת על יותר מפיקסל בכל חשיפה, והוא "
+                        "יגביל את ההכרה והזיהוי מאוד." % (_n(v), ifov))
     if v == 0 and ifov < 0.21:
-        return ("warn", "IFOV של %.3g mrad (שדה צר) בלי ריצוד - התחזית אופטימית. שקלו 0.07 mrad (נוהג NV-IPM)." % ifov)
+        return ("warn", "IFOV של %.3g mrad (שדה צר) בלי ריצוד - התחזית אופטימית: כל מערכת אמיתית רועדת. שקלו "
+                        "0.07 mrad (נוהג NV-IPM), או הזינו מדידת ייצוב." % ifov, 0.07)
     return ("ok", "ריצוד / IFOV = %.2f." % ratio)
 
 
@@ -194,8 +211,11 @@ def _check_snr(v, p):
     if not isinstance(v, (int, float)):
         return None
     if v <= 0:
-        return ("warn", "סף SNR חייב להיות חיובי.")
-    return _range(1.5, 6, "", "מקובל: 2.5-3")(v, p)
+        return ("warn", "סף SNR חייב להיות חיובי.", 2.5)
+    if v < 1.5 or v > 6:
+        return ("warn", "סף SNR של %s מחוץ לתחום המקובל (2.5-3). זה קבוע כיול של הצופה: סף נמוך מנפח את הטווח, סף "
+                        "גבוה מקצר אותו. השאירו 2.5 אלא אם יש כיול." % _n(v), 2.5)
+    return ("ok", "הערך %s בתחום הסביר (מקובל: 2.5-3)." % _n(v))
 
 
 def _check_size(v, p):
@@ -204,7 +224,8 @@ def _check_size(v, p):
     if v <= 0:
         return ("warn", "ממד המטרה חייב להיות חיובי (0 נותן מטרה בגודל אפס).")
     if v > 60:
-        return ("warn", "יותר מ-60 מ' - חריג. ייתכן שהוזן בס\"מ.")
+        return ("warn", "יותר מ-60 מ' - חריג. ייתכן שהוזן בס\"מ. מטרה גדולה פי 100 נותנת טווח ארוך בהרבה.",
+                round(v / 100.0, 3))
     return ("ok", "%s מ'." % _n(v))
 
 
@@ -213,8 +234,11 @@ def _check_cn2(v, p):
         return None
     if v < 0:
         return ("warn", "Cn² לא יכול להיות שלילי.")
+    if v >= 1:
+        return ("warn", "Cn² של %s - נראה שהוזן המעריך במקום הערך: 1e-%s m^-2/3." % (_n(v), _n(v)), 10.0 ** -v)
     if v > 1e-11:
-        return ("warn", "Cn² מעל 1e-11 - חריג מאוד (חום קיצוני מעל אספלט).")
+        return ("warn", "Cn² מעל 1e-11 - חריג מאוד (חום קיצוני מעל אספלט). טורבולנציה כזו מטשטשת כמעט כל פרט "
+                        "בנתיב של קילומטרים.")
     lvl = "חלשה" if v < 1e-15 else ("בינונית" if v < 1e-13 else "חזקה")
     return ("ok", "טורבולנציה %s (%s m^-2/3)." % (lvl, "%.1e" % v))
 
@@ -312,7 +336,7 @@ PARAMS = {
         "impact": 2, "impact_note": "חשוב בלילה ובמערכות חלשות-אות",
         "typical": ["עדשה תרמית טובה: 0.8-0.9.", "זום מורכב או עם חלון: 0.6-0.75."],
         "source": "דף הנתונים או מדידה.", "mistakes": ["להזין באחוזים (85) במקום שבר (0.85)."],
-        "check": _range(0.2, 1.0, "", "טיפוסי 0.7-0.9"),
+        "check": _range(0.2, 1.0, "", "טיפוסי 0.7-0.9", suggest=lambda v: round(v / 100.0, 4) if 1 < v <= 100 else None),
     },
     "detector.n_h": {
         "title": "מספר פיקסלים אופקי",
@@ -362,7 +386,7 @@ PARAMS = {
         "impact": 2, "impact_note": "חשוב במערכות מורעבות-אור",
         "typical": ["MWIR / LWIR מקורר: 0.1-10 ms.", "SWIR לילה: 10-33 ms.", "יום: 0.01-5 ms."],
         "source": "הגדרות המצלמה בתרחיש.", "mistakes": ["זמן אינטגרציה ארוך מזמן הפריים (1/קצב)."],
-        "check": _range(0.001, 200, "ms", None),
+        "check": _check_tint,
     },
     "detector.noise_floor_e": {
         "title": "רעש קריאה",
@@ -414,6 +438,7 @@ PARAMS = {
         "impact": 3, "impact_note": "חשוב בשדה צר",
         "typical": ["אין מדידה של המייצב: 70 µrad (NV-IPM).", "יש מדידה: הזינו אותה."],
         "source": "מדידת ייצוב / דף נתונים של הגימבל.", "mistakes": [],
+        "check": _check_jitter_preset,
     },
     "stab.rand_h_mrad": {
         "title": "ריצוד אקראי (rms)",
@@ -607,13 +632,27 @@ PARAMS = {
 }
 
 
+for _k, _e in MORE.items():
+    PARAMS.setdefault(_k, _e)
+
+_ADDITIONAL = re.compile(r"additional\.(pre|post)_[hv]_(type|par)$")
+
+
 def param(path):
     """Knowledge-base entry of a parameter path, or None."""
-    return PARAMS.get(path) or PARAMS.get(re.sub(r"\.\d+\.", ".N.", path))
+    m = _ADDITIONAL.match(path or "")
+    if m:
+        return PARAMS.get("additional." + m.group(2))
+    return PARAMS.get(path) or PARAMS.get(re.sub(r"\.\d+\.", ".N.", path or ""))
+
+
+def suggestion(res):
+    """Suggested value of a check result, or None."""
+    return res[2] if res and len(res) > 2 else None
 
 
 def check(path, value, project):
-    """('ok' | 'warn', message) for the entered value, or None."""
+    """('ok' | 'warn', message[, suggested value]) for the entered value, or None."""
     e = param(path)
     fn = e.get("check") if e else None
     if not fn:
@@ -798,6 +837,130 @@ LESSONS = [
 ]
 
 
+LESSONS.append(
+    {"id": "tour", "title": "סיור מלא באפליקציה", "minutes": 30, "dynamic": True,
+     "summary": "כל העמודים וכל השדות שהפרויקט שלכם מציג, קבוצה אחר קבוצה: מה כל שדה אומר, בדיקה של הערך שלכם "
+                "וההשפעה שלו על הטווח.",
+     "steps": []})
+
+# Hebrew name and purpose of every page of the form (the tour)
+PAGE_HE = {
+    "General": ("כללי", "ההחלטות הראשונות: קטגוריית החיישן, שדה או מעבדה, וידאו או תמונה בודדת."),
+    "Basic imager": ("המצלמה הבסיסית", "קצב פריימים, בדיקת FOV, מיקרו-סריקה, איחוד פיקסלים ותזמון החשיפה."),
+    "Optics": ("אופטיקה", "המפתח, אורך המוקד, ה-MTF של העדשה וההעברה. כאן נקבעים ה-IFOV, העקיפה וכמות האור - "
+                          "מהמנופים החזקים של הטווח."),
+    "Detector geometry": ("גאומטריית הגלאי", "מספר הפיקסלים, הפסיעה והגודל הפעיל. הפסיעה יחד עם המוקד קובעת את "
+                                             "ה-IFOV."),
+    "Detector sensitivity": ("רגישות הגלאי", "התחום הספקטרלי, הרעש (NETD או מודל פיזיקלי), זמן האינטגרציה, הבאר "
+                                             "והמגן הקר. חשוב בעיקר במערכות מוגבלות-רעש: לילה, ניגוד נמוך."),
+    "Signal processing": ("עיבוד אות", "מיצוע פריימים, מסננים, זום, דחיסה ועקומת טון. רוב השדות כאן כבויים "
+                                       "בברירת המחדל."),
+    "Display & observer": ("תצוגה וצופה", "איך הצופה רואה את התמונה: מסך או עינית, מרחק, בהירות וקבועי הכיול של "
+                                          "הצופה."),
+    "Stabilization & MTFs": ("ייצוב ו-MTF נוספים", "תנועת קו הראייה: ריצוד, תנועה ליניארית ורטט. בשדה צר זה מנוף "
+                                                   "חשוב."),
+    "Target & scenario": ("מטרה ותרחיש", "המטרה, הניגוד, הגאומטריה וקריטריוני המשימה - המנופים החזקים ביותר על "
+                                         "הטווח."),
+    "Irradiance": ("הארה", "מקור האור בחיישן מחזיר (נראה / SWIR / General). בתרמי העמוד לא בשימוש."),
+    "Atmosphere & turbulence": ("אטמוספרה וטורבולנציה", "ההנחתה שולטת בגילוי; הטורבולנציה מטשטשת בעיקר בנראה "
+                                                        "ובנתיב קרקעי ארוך ביום."),
+    "Metadata": ("מטא-דאטה", "תיעוד של נתונים מיובאים ומצבי עבודה. לא משתתף בחישוב, אבל נכנס לדוח."),
+    "Validation data": ("נתוני אימות", "מדידות מעבדה (MTDP / MRTD, MTF, NETD) להשוואה עם התחזית."),
+}
+
+
+def _visible_fields(fields, project, visible):
+    """[(header, [field])] of one page with the fields the form shows for the project (each path once)."""
+    groups, cur, seen = [], None, set()
+    for f in fields:
+        if f.get("kind") == "header":
+            cur = [f, []]
+            groups.append(cur)
+            continue
+        path = f.get("path")
+        if not path or f.get("kind") in ("derived", "profile", "profile_manager") or path in seen:
+            continue
+        if cur is None:
+            cur = [None, []]
+            groups.append(cur)
+        try:
+            show = visible(f, cur[0], project)
+        except Exception:
+            show = True
+        if show:
+            seen.add(path)
+            cur[1].append(f)
+    return [(h, fl) for h, fl in groups if fl]
+
+
+def tour_steps(pages, project, visible):
+    """Steps of the full tour: an introduction, then one step per shown group of fields of every page.
+    pages: [(page name, fields, workflow)]; visible(field, header, project) is the form's own rule."""
+    out = [_s("איך עובד הסיור",
+              P_("נעבור על כל עמודי הטופס במצב Engineering, קבוצה אחר קבוצה. בכל שלב מופיעים השדות של הקבוצה: הערך "
+                 "שלכם, בדיקה שלו, וכמה הוא משפיע על הטווח."),
+              LI("לחיצה על שדה ברשימה פותחת את הכרטיס המלא שלו, עם חישוב חי של ההשפעה על טווחי הגילוי, ההכרה "
+                 "והזיהוי."),
+              LI("שדה שמסומן ⚠ דורש בדיקה. ⓘ = שדה שלא משפיע על הטווח (תיעוד או בדיקה צולבת)."),
+              LI("מוצגים רק השדות שהפרויקט שלכם משתמש בהם. 'Show advanced parameters' מוסיף את השדות המתקדמים."),
+              ("box", "tip", ["טיפ", "לא צריך לשנות כל שדה. שדה עם ★ אחד או בלי כוכב אפשר להשאיר בברירת המחדל אם "
+                              "אין נתון טוב יותר."], True),
+              workflow="engineering", page="General")]
+    for name, fields, wf in pages:
+        groups = _visible_fields(fields, project, visible)
+        he, desc = PAGE_HE.get(name, (name, ""))
+        for gi, (hdr, fl) in enumerate(groups):
+            blocks = []
+            if gi == 0:
+                blocks.append(("box", "info", ["עמוד %s (%s)" % (he, name), desc], True))
+            if hdr is not None:
+                blocks.append(("muted", "קבוצה: " + hdr["label"]))
+            out.append(_s("%s · %d/%d" % (he, gi + 1, len(groups)), *blocks, workflow=wf, page=name,
+                          path=fl[0]["path"], fields=[f["path"] for f in fl], group=True))
+    out.append(_s("בדיקת כל הערכים",
+                  P_("סיימתם את הסיור. כאן מופיעות כל ההערות על הערכים שלכם, מסודרות לפי ההשפעה על הטווח. לחיצה על "
+                     "שורה פותחת את השדה."),
+                  workflow="engineering", page="General", review=True, action="calculate"))
+    return out
+
+
+def field_summary(path, value, project):
+    """(state 'warn' | 'ok' | 'info', title, text, meta) of a field for the lists of the tour and the review."""
+    e = param(path)
+    if not e:
+        return None
+    res = check(path, value, project)
+    imp = e.get("impact", 1)
+    state = "warn" if res and res[0] == "warn" else ("info" if imp == 0 else "ok")
+    mark = {"warn": "⚠ ", "info": "ⓘ ", "ok": ""}[state]
+    text = res[1] if res else e["why"].split(". ")[0].rstrip(".") + "."
+    meta = "ערך: %s · %s" % (_value_text(value), ("★" * imp + " " if imp else "") + IMPACT_TEXT[imp])
+    return state, mark + e["title"], text, meta
+
+
+def review(pages, project, visible, value):
+    """Check every shown field of a project -> {"warn": [(impact, path, page, check)], "ok": n, "n": n}.
+    value(path) returns the entered value."""
+    warns, n, ok, seen = [], 0, 0, set()
+    for name, fields, _wf in pages:
+        for _h, fl in _visible_fields(fields, project, visible):
+            for f in fl:
+                path = f["path"]
+                if path in seen or not param(path):
+                    continue
+                seen.add(path)
+                res = check(path, value(path), project)
+                if not res:
+                    continue
+                n += 1
+                if res[0] == "warn":
+                    warns.append((param(path).get("impact", 1), path, name, res))
+                else:
+                    ok += 1
+    warns.sort(key=lambda w: -w[0])
+    return {"warn": warns, "ok": ok, "n": n}
+
+
 def lesson(lesson_id):
     for les in LESSONS:
         if les["id"] == lesson_id:
@@ -805,9 +968,11 @@ def lesson(lesson_id):
     return None
 
 
-def steps(lesson_id, project):
-    """Steps of a lesson that apply to the project (cond)."""
+def steps(lesson_id, project, pages=None, visible=None):
+    """Steps of a lesson that apply to the project (cond).  The tour needs the form (pages, visible)."""
     les = lesson(lesson_id)
+    if les and les.get("dynamic"):
+        return tour_steps(pages, project, visible) if pages is not None and visible is not None else []
     out = []
     for st in (les["steps"] if les else []):
         try:
@@ -819,20 +984,37 @@ def steps(lesson_id, project):
     return out
 
 
-def field_blocks(path, value=None, project=None):
-    """RtlCanvas blocks of the field card of a parameter."""
+def _value_text(v):
+    if isinstance(v, bool):
+        return "מופעל" if v else "כבוי"
+    if isinstance(v, dict):                         # imported file
+        return v.get("name") or "לא יובא קובץ"
+    if isinstance(v, list):
+        return ", ".join(_n(x) for x in v)
+    if v is None or v == "":
+        return "ריק"
+    return _n(v)
+
+
+def field_blocks(path, value=None, project=None, extra=()):
+    """RtlCanvas blocks of the field card of a parameter.  `extra` (the live effect on the ranges) is placed right
+    after the check of the value."""
     e = param(path)
     if not e:
         return []
     imp = e.get("impact", 1)
-    chips = [("★" * imp + "  " + IMPACT_TEXT[imp], {3: "high", 2: "mid", 1: "low"}[imp])]
+    chips = [(("★" * imp + "  " if imp else "") + IMPACT_TEXT[imp], IMPACT_STYLE[imp])]
     if e.get("impact_note"):
         chips.append((e["impact_note"], "info"))
     out = [("chips", chips)]
     res = check(path, value, project) if project is not None else None
     if res:                                         # the live check first, where it is seen
-        out.append(("box", "ok" if res[0] == "ok" else "warn",
-                    ["הערך שלכם" if res[0] == "ok" else "כדאי לבדוק", res[1]], True))
+        lines = ["הערך שלכם" if res[0] == "ok" else "כדאי לבדוק", res[1]]
+        s = suggestion(res)
+        if s is not None:
+            lines.append("מה לעשות: נסו %s - הכפתור 'החל את הערך המוצע' מזין אותו, ו'בטל' מחזיר." % _value_text(s))
+        out.append(("box", "ok" if res[0] == "ok" else "warn", lines, True))
+    out += list(extra)
     out += [("p", e["what"]), ("h", "למה זה חשוב"), ("p", e["why"])]
     if e.get("typical"):
         out.append(("h", "ערכים טיפוסיים"))

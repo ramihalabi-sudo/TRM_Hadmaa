@@ -1,11 +1,14 @@
-"""Interactive Hebrew guide: the knowledge base and lessons match the parameter form, value checks catch the
-common input mistakes, the right-to-left layout orders mixed Hebrew / Latin text, and the panel walks every lesson
-in the real window (skipped without a display)."""
+"""Interactive Hebrew guide: the knowledge base covers every field of the parameter form, value checks catch the
+common input mistakes and suggest the corrected value, the live impact runs the model with the alternatives, the
+full tour and the review cover every shown field, the right-to-left layout orders mixed Hebrew / Latin text, and the
+panel walks every lesson in the real window (skipped without a display)."""
 import os
+import time
 import unittest
 
-from _common import LWIR, VIS, template
+from _common import LWIR, UNCOOLED, VIS, template
 from trm4 import guide_he as GH
+from trm4 import guide_impact as GI
 from trm4 import presets as P
 from trm4 import rtl_tk as R
 
@@ -27,13 +30,41 @@ def value(p, path):
     return p
 
 
+def value_of(p, path):
+    try:
+        return value(p, path)
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def form_visible(f, header, p):
+    """Visibility of a form row without the window: its condition (the advanced level counted as shown)."""
+    return bool(f["cond"](p))
+
+
+def tour_pages():
+    eng = G.WORKFLOWS["engineering"][1]
+    return [(n, fl, "engineering") for n, fl in G.ALL_PAGES if n in eng and n != "Camera profile"] + \
+        [(n, fl, "lab") for n, fl in G.ALL_PAGES if n == "Validation data"]
+
+
 class KnowledgeBase(unittest.TestCase):
     def test_entries_complete(self):
         for path, e in GH.PARAMS.items():
             with self.subTest(path=path):
-                for key in ("title", "what", "why", "impact", "source"):
+                for key in ("title", "what", "why", "source"):
                     self.assertTrue(e.get(key), key)
-                self.assertIn(e["impact"], (1, 2, 3))
+                self.assertIn(e["impact"], (0, 1, 2, 3))
+
+    @unittest.skipIf(G is None, "GUI not importable")
+    def test_every_form_field_has_a_card(self):
+        missing = sorted({f["path"] for _n, fields in G.ALL_PAGES for f in fields
+                          if f.get("path") and not GH.param(f["path"])})
+        self.assertEqual(missing, [])
+
+    def test_documentation_fields_do_not_claim_a_range_effect(self):
+        for path in ("name", "measured.meta.date", "atmosphere.meta.source", "basic.fov_h_deg", "turbulence.scint"):
+            self.assertEqual(GH.param(path)["impact"], 0, path)
 
     def test_ranking_follows_the_sensitivity_study(self):
         # Table 5: task criterion, target size, focal length, aperture and atmosphere lead; NETD is minor
@@ -45,6 +76,7 @@ class KnowledgeBase(unittest.TestCase):
     def test_indexed_paths(self):
         self.assertIs(GH.param("target.tasks.2.lp"), GH.PARAMS["target.tasks.N.lp"])
         self.assertIs(GH.param("atmosphere.atm.0.sigma"), GH.PARAMS["atmosphere.atm.N.sigma"])
+        self.assertIs(GH.param("additional.post_v_par"), GH.PARAMS["additional.par"])
         self.assertIsNone(GH.param("no.such.path"))
 
 
@@ -60,6 +92,28 @@ class ValueChecks(unittest.TestCase):
         self.assertEqual(self.check("target.W_m", 0.0)[0], "warn")
         self.assertEqual(self.check("target.dT_K", 0.0)[0], "warn")
         self.assertEqual(self.check("turbulence.cn2", -1e-14)[0], "warn")
+
+    def test_unit_mistakes_suggest_the_corrected_value(self):
+        p = merged(LWIR)
+        self.assertEqual(GH.suggestion(GH.check("optics.f_mm", 0.5, p)), 5.0)           # cm -> mm
+        self.assertAlmostEqual(GH.suggestion(GH.check("target.T_bg_K", 15.0, p)), 288.15)
+        self.assertAlmostEqual(GH.suggestion(GH.check("optics.tau_opt", 85.0, p)), 0.85)
+        self.assertEqual(GH.suggestion(GH.check("detector.netd_mK", 0.05, p)), 50.0)     # K -> mK
+        self.assertAlmostEqual(GH.suggestion(GH.check("stab.rand_h_mrad", 70.0, p)), 0.07)  # urad -> mrad
+        self.assertAlmostEqual(GH.suggestion(GH.check("turbulence.cn2", 14.0, p)), 1e-14)
+        self.assertAlmostEqual(GH.suggestion(GH.check("atmosphere.atm.0.sigma", 0.0002, p)), 0.2)  # 1/m -> 1/km
+        self.assertIsNone(GH.suggestion(GH.check("optics.f_mm", 100.0, p)))
+
+    def test_cross_field_checks(self):
+        p = merged(LWIR, basic__frame_rate=50.0)
+        self.assertEqual(GH.check("detector.tint_ms", 30.0, p)[0], "warn")             # longer than the frame
+        p = merged(LWIR, detector__pitch_h_um=15.0)
+        self.assertEqual(GH.check("detector.a_h_um", 17.0, p)[0], "warn")              # active > pitch
+        self.assertEqual(GH.check("detector.netd_frames", 4, p)[0], "warn")            # averaged NETD
+        self.assertEqual(GH.check("display.t_eye_s", 100.0, p)[2], 0.1)                # ms instead of s
+        p = merged(VIS, target__t_refl=0.2, target__b_refl=0.2, target__t_refl_mode="effective",
+                   target__b_refl_mode="effective")
+        self.assertEqual(GH.check("target.t_refl", 0.2, p)[0], "warn")                 # no contrast
 
     def test_f_number_from_focal_length_and_diameter(self):
         p = merged(LWIR, optics__f_mm=100.0, optics__D_mm=500.0)
@@ -86,7 +140,7 @@ class ValueChecks(unittest.TestCase):
                 r = GH.check(pth, v, p)
                 if r and r[0] == "warn":
                     with self.subTest(template=name, path=pth):
-                        self.assertEqual(pth, "stab.rand_h_mrad")
+                        self.assertIn(pth, ("stab.rand_h_mrad", "stab.jitter_preset"))
 
     def test_field_card_puts_the_check_first(self):
         blocks = GH.field_blocks("optics.f_mm", 0.5, merged(LWIR))
@@ -94,17 +148,76 @@ class ValueChecks(unittest.TestCase):
         self.assertEqual(blocks[1][:2], ("box", "warn"))
 
 
+class Impact(unittest.TestCase):
+    """Live effect of a value on the ranges (model runs)."""
+
+    def test_alternatives(self):
+        p = merged(LWIR)
+        f = {"kind": "float", "unit": "mm"}
+        e = GH.param("optics.f_mm")
+        self.assertEqual(GI.alternatives("optics.f_mm", 50.0, f, e, p, None), [("+20%", 60.0)])
+        bad = GH.check("optics.f_mm", 0.5, p)
+        self.assertEqual(GI.alternatives("optics.f_mm", 0.5, f, e, p, bad), [("הערך המוצע", 5.0)])
+        self.assertEqual(GI.alternatives("name", "x", {"kind": "text"}, GH.param("name"), p, None), [])
+        tb = {"kind": "float", "unit": "K"}
+        self.assertEqual(GI.alternatives("target.T_bg_K", 288.0, tb, GH.param("target.T_bg_K"), p, None)[0][1],
+                         298.0)                                                    # absolute step for kelvin
+
+    def test_longer_focal_length_gives_longer_identification_range(self):
+        p = merged(UNCOOLED)
+        res = GI.evaluate(GI.ImpactCache(), p, "optics.f_mm", [("+20%", p["optics"]["f_mm"] * 1.2)])
+        self.assertIsNone(res["error"])
+        _label, _v, r, _err, changes = res["alts"][0]
+        self.assertGreater(r["Identification"], res["base"]["Identification"])
+        self.assertIn("IFOV", [c[0] for c in changes])
+        self.assertTrue(any("%" in ln for ln in GI.blocks(res, "mm")[0][2]))
+
+    def test_presets_are_applied_like_the_form(self):
+        p = merged(LWIR)
+        c = GI.apply_value(P.deep_merge(p, {}), "target.task_preset", "johnson1958")
+        self.assertEqual([t["lp"] for t in c["target"]["tasks"]], list(P.task_preset_values(c)))
+        c = GI.apply_value(P.deep_merge(p, {}), "detector.pitch_h_um", 12.0)
+        self.assertEqual(c["detector"]["pitch_v_um"], 12.0)
+
+
 class Lessons(unittest.TestCase):
     def test_lessons_have_steps_for_every_category(self):
         for name in P.TEMPLATES:
             p = P.make_template(name)
             for les in GH.LESSONS:
+                if les.get("dynamic"):                                      # the tour: test_tour_covers_...
+                    continue
                 with self.subTest(template=name, lesson=les["id"]):
                     st = GH.steps(les["id"], p)
                     self.assertGreater(len(st), 3)
                     for s in st:
                         if s.get("path"):
                             self.assertIsNotNone(GH.param(s["path"]), s["path"])
+
+    @unittest.skipIf(G is None, "GUI not importable")
+    def test_tour_covers_every_shown_field_once(self):
+        for name in (LWIR, VIS):
+            p = merged(name)
+            st = GH.steps("tour", p, tour_pages(), form_visible)
+            listed = [x for s in st for x in s.get("fields", [])]
+            self.assertEqual(len(listed), len(set(listed)))
+            shown = {f["path"] for _n, fl, _w in tour_pages() for f in fl if f.get("path") and
+                     f.get("kind") not in ("header", "derived") and form_visible(f, None, p)}
+            self.assertEqual(set(listed), shown)
+            self.assertTrue(st[-1].get("review"))
+            for s in st[1:-1]:
+                self.assertEqual(s["path"], s["fields"][0])
+
+    @unittest.skipIf(G is None, "GUI not importable")
+    def test_review_sorts_the_warnings_by_impact(self):
+        p = merged(LWIR, optics__f_mm=0.5, display__t_eye_s=100.0)
+        r = GH.review(tour_pages(), p, form_visible, lambda path: value_of(p, path))
+        paths = [w[1] for w in r["warn"]]
+        self.assertIn("optics.f_mm", paths)
+        self.assertLess(paths.index("optics.f_mm"), paths.index("display.t_eye_s"))
+        self.assertEqual([w[0] for w in r["warn"]], sorted((w[0] for w in r["warn"]), reverse=True))
+        q = merged(UNCOOLED)                                        # wide IFOV: not even the jitter advice
+        self.assertEqual(GH.review(tour_pages(), q, form_visible, lambda path: value_of(q, path))["warn"], [])
 
     def test_reflective_steps_follow_the_reflectivity_mode(self):
         eff = [s.get("path") for s in GH.steps("first", merged(VIS, target__t_refl_mode="effective"))]
@@ -177,6 +290,7 @@ class Panel(unittest.TestCase):
         except tk.TclError:
             raise unittest.SkipTest("no display")
         cls.app.settings = dict(cls.app.settings, guide={}, guide_open=False)
+        cls.app.confirm_discard = lambda: True          # edits made by a test must not open the save dialog
 
     @classmethod
     def tearDownClass(cls):
@@ -220,6 +334,61 @@ class Panel(unittest.TestCase):
             self.assertEqual(app.guide.field_path, "optics.f_mm")
         finally:
             app._set_value("optics.f_mm", 100.0)
+            app.toggle_guide(False)
+
+    def wait_for(self, cond, timeout=60.0):
+        t0 = time.time()
+        while not cond() and time.time() - t0 < timeout:
+            self.app.update()
+            time.sleep(0.05)
+        return cond()
+
+    def test_live_impact_suggestion_and_undo(self):
+        app = self.app
+        app.load_template(UNCOOLED)
+        app.toggle_guide(True)
+        g = app.guide
+        try:
+            f0 = app.project["optics"]["f_mm"]
+            app._set_value("optics.f_mm", 2.5)                              # 25 mm entered in cm
+            app.refresh()
+            app._guide_focus("optics.f_mm")
+            self.assertEqual(g.mode, "field")
+            self.assertTrue(self.wait_for(lambda: g._imp_res is not None), "impact did not arrive")
+            self.assertIsNotNone(g._imp_res["base"])
+            label, v, r, _e, _c = g._imp_res["alts"][0]
+            self.assertEqual(label, "הערך המוצע")
+            self.assertGreater(r["Recognition"], g._imp_res["base"]["Recognition"])
+            self.assertEqual(v, 25.0)
+            g.apply_value("optics.f_mm", v)
+            self.assertAlmostEqual(app.project["optics"]["f_mm"], 25.0)
+            g.undo()
+            self.assertAlmostEqual(app.project["optics"]["f_mm"], 2.5)
+        finally:
+            app._set_value("optics.f_mm", f0)
+            app.refresh()
+            app.toggle_guide(False)
+
+    def test_review_view(self):
+        app = self.app
+        app.load_template(LWIR)
+        app.toggle_guide(True)
+        g = app.guide
+        try:
+            g.show_review()
+            self.assertEqual(g.mode, "review")
+            self.assertTrue(self.wait_for(lambda: g._review_ranges is not None), "ranges did not arrive")
+            cards = [b for b in g.doc.blocks if b[0] == "card"]
+            self.assertIn("⚠", cards[0][1])                                # narrow IFOV without jitter
+            self.assertIn(GH.param("stab.jitter_preset")["title"], cards[0][1])
+            cards[0][4]()                                                    # open the field from the list
+            self.assertEqual(g.mode, "field")
+            self.assertEqual(g.back, "review")
+            self.assertEqual(app.current_page, "Stabilization & MTFs")
+            g.apply_value("stab.jitter_preset", "nvipm70")                  # the form fills the preset
+            self.assertTrue(app.project["stab"]["random_on"])
+            self.assertAlmostEqual(app.project["stab"]["rand_h_mrad"], 0.07)
+        finally:
             app.toggle_guide(False)
 
 

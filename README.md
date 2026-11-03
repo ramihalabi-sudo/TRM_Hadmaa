@@ -74,6 +74,20 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.13 - guide: feedback on every value and its effect on the range
+
+The interactive guide now covers the whole form. The model is not touched: template ranges are unchanged; the run IDs
+change with the version number.
+
+| Item | Implementation |
+|---|---|
+| All fields | `trm4/guide_kb_he.py` `MORE`: a card for every field of the form beyond the 40 of `guide_he.PARAMS` (about 300 paths), merged into `PARAMS`. Impact 0 = not used in the range calculation (documentation, cross-check, diagnostic). |
+| Checks | A check returns `(state, message[, suggested value])`. New cross-field checks: integration time vs frame time, active size vs pitch, NETD test F-number / integration time / averaged frames / processed port, cold-shield F vs the lens, smear per exposure, AGC rounding vs NETD, no target-background contrast, narrow IFOV without jitter (also on `stab.jitter_preset` / `stab.jitter_mode`, shown when random jitter is off). Unit mistakes offer the corrected value. |
+| Live impact | `trm4/guide_impact.py`: the field card runs `analysis.model_ranges` for the project and for alternatives (suggested value, +-20 % or +-10 K / % / deg, the other state of a switch, up to 5 other options of a choice) in one worker thread (newest request only, results passed to Tk through a queue), cached by the project state; it shows the DRI ranges, the change in % and the changed image-quality values of `derived.compute` (IFOV, FOV, Q, F-number, magnification ...). `apply_value` mirrors the form (pitch / focal-length policy, presets, square pixels). |
+| Apply / undo | The panel applies a suggested value through the form (choices through `_choice_selected`, so presets fill their values) and can undo it. |
+| Full tour | Lesson `tour` (`guide_he.tour_steps`): one step per shown group of every Engineering page and the validation page, listing each field with its value, check and impact; a click opens its card. |
+| Review | `guide_he.review`: every shown field checked at once, warnings sorted by impact, with the current ranges; reachable from the home view and as the last step of the tour. |
+
 ## Version 2.12 - interactive guide in Hebrew (optional)
 
 An optional guide panel for new users, in Hebrew: *Help > Interactive guide*, the *Guide* toolbar button or Ctrl+G

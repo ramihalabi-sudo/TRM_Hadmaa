@@ -154,14 +154,17 @@ class RtlCanvas(tk.Canvas):
                 self.coords(item, p, top, xr, y)
                 self.coords(bar, xr - int(4 * k), top, xr, y)
                 y += int(10 * k)
-            elif kind == "card":                         # ("card", title, text, meta, callback, done)
+            elif kind == "card":                         # ("card", title, text, meta, callback, done[, style])
                 _k, title, text, meta, cb = b[:5]
                 done = len(b) > 5 and b[5]
+                style = b[6] if len(b) > 6 else None     # "warn": orange title / edge
                 ip, tag = int(14 * k), "card%d" % id(b)
+                edge, fill = ("#f5c27a", "#fffaf2") if style == "warn" else ("#d7dde5", "#f7f9fc")
                 top = y
-                frame = self._round(p, top, xr, top + 10, int(8 * k), "#f7f9fc", tags=(tag,), outline="#d7dde5")
+                frame = self._round(p, top, xr, top + 10, int(8 * k), fill, tags=(tag,), outline=edge)
                 y += ip
-                y = self._text(title, xr - ip, y, width - 2 * ip, self.fonts["h"], self.fg, tags=(tag,))
+                y = self._text(title, xr - ip, y, width - 2 * ip, self.fonts["h"],
+                               "#b54708" if style == "warn" else self.fg, tags=(tag,))
                 y = self._text(text, xr - ip, y + int(2 * k), width - 2 * ip, self.fonts["p"], self.muted,
                                tags=(tag,))
                 if meta:
@@ -170,12 +173,12 @@ class RtlCanvas(tk.Canvas):
                     y += f.metrics("linespace") + int(4 * k)
                 y += ip
                 self.delete(frame)
-                frame = self._round(p, top, xr, y, int(8 * k), "#f7f9fc", tags=(tag,), outline="#d7dde5")
+                frame = self._round(p, top, xr, y, int(8 * k), fill, tags=(tag,), outline=edge)
                 self.tag_lower(frame)
                 self.tag_bind(tag, "<Enter>", lambda e, fr=frame: (self.itemconfigure(fr, outline=self.accent),
                                                                    self.configure(cursor="hand2")))
-                self.tag_bind(tag, "<Leave>", lambda e, fr=frame: (self.itemconfigure(fr, outline="#d7dde5"),
-                                                                   self.configure(cursor="")))
+                self.tag_bind(tag, "<Leave>", lambda e, fr=frame, ed=edge: (self.itemconfigure(fr, outline=ed),
+                                                                            self.configure(cursor="")))
                 self.tag_bind(tag, "<ButtonRelease-1>", lambda e, cb=cb: cb())
                 y += int(10 * k)
             elif kind == "chips":
