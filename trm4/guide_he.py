@@ -14,6 +14,7 @@ The cards of all other fields of the form are in guide_kb_he.MORE.
 """
 import re
 
+from . import guide_design_he as DS
 from .guide_kb_he import MORE, _check_jitter_preset, _check_tint, _n, _range
 
 IMPACT_TEXT = {3: "השפעה גבוהה על הטווח", 2: "השפעה בינונית", 1: "השפעה נמוכה", 0: "לא משפיע על הטווח"}
@@ -1021,6 +1022,11 @@ def field_blocks(path, value=None, project=None, extra=()):
         out += [("li", t) for t in e["typical"]]
     if e.get("source"):
         out += [("h", "מאיפה לוקחים את הערך"), ("p", e["source"])]
+    if project is not None:
+        try:
+            out += DS.blocks(path, project)             # size, weight and image defects
+        except Exception:
+            pass
     if e.get("mistakes"):
         out.append(("box", "tip", ["טעויות נפוצות"] + list(e["mistakes"]), True))
     return out

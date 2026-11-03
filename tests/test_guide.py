@@ -7,6 +7,7 @@ import time
 import unittest
 
 from _common import LWIR, UNCOOLED, VIS, template
+from trm4 import guide_design_he as DS
 from trm4 import guide_he as GH
 from trm4 import guide_impact as GI
 from trm4 import presets as P
@@ -178,6 +179,41 @@ class Impact(unittest.TestCase):
         self.assertEqual([t["lp"] for t in c["target"]["tasks"]], list(P.task_preset_values(c)))
         c = GI.apply_value(P.deep_merge(p, {}), "detector.pitch_h_um", 12.0)
         self.assertEqual(c["detector"]["pitch_v_um"], 12.0)
+
+
+class SystemConsiderations(unittest.TestCase):
+    """Size / weight and image-defect estimates of the field cards (first-order rules, not in the ranges)."""
+
+    def test_depth_of_focus_and_germanium_defocus(self):
+        p = merged(UNCOOLED, optics__f_mm=100.0, optics__D_mm=100.0)      # LWIR F/1
+        e = DS.estimates(p)
+        self.assertAlmostEqual(e["F"], 1.0)
+        self.assertAlmostEqual(e["dof_um"], 2 * e["lam"])                    # +-2 lambda F^2
+        # Ge (126e-6) in aluminium (23e-6) over +-40 K: 100 mm x 149e-6 x 40 = 596 um
+        self.assertAlmostEqual(e["defocus_um"], 100e3 * 149e-6 * 40, delta=1.0)
+        self.assertIn("optics.f_mm", [n[0] for n in DS.notes(p)])
+
+    def test_aberration_indicators_follow_the_seidel_scaling(self):
+        slow, fast = DS.estimates(merged(LWIR, optics__D_mm=25.0)), DS.estimates(merged(LWIR, optics__D_mm=50.0))
+        self.assertAlmostEqual(fast["spherical"] / slow["spherical"], 8.0, places=6)     # 1/F^3
+        self.assertAlmostEqual(fast["coma"] / slow["coma"], 4.0, places=6)               # theta / F^2
+        wide = DS.estimates(merged(LWIR, optics__f_mm=50.0, optics__D_mm=25.0))         # same F, double field
+        self.assertGreater(wide["distortion"][1], slow["distortion"][1] - 1e-9)
+        self.assertGreater(wide["astig"], 3.5 * slow["astig"])                          # ~ theta^2
+
+    def test_lens_mass_grows_with_aperture(self):
+        small = DS.estimates(merged(LWIR, optics__D_mm=25.0))["lens_g"][0]
+        big = DS.estimates(merged(LWIR, optics__D_mm=100.0))["lens_g"][0]
+        self.assertGreater(big / small, 16)                                 # at least ~D^2
+
+    def test_cards_show_the_section(self):
+        p = merged(LWIR)
+        for path in ("optics.f_mm", "optics.D_mm", "detector.pitch_h_um", "imager_type", "stab.jitter_preset"):
+            heads = [b[1] for b in GH.field_blocks(path, value_of(p, path), p) if b[0] == "h"]
+            self.assertIn("שיקולי מערכת: גודל, משקל ואיכות תמונה", heads, path)
+        self.assertEqual(DS.blocks("name", p), [])
+        for path in DS.SYSTEM:
+            self.assertIsNotNone(GH.param(path), path)
 
 
 class Lessons(unittest.TestCase):
@@ -409,6 +445,9 @@ class Panel(unittest.TestCase):
             g.apply_value("stab.jitter_preset", "nvipm70")                  # the form fills the preset
             self.assertTrue(app.project["stab"]["random_on"])
             self.assertAlmostEqual(app.project["stab"]["rand_h_mrad"], 0.07)
+            g.show_review()
+            heads = [b[1] for b in g.doc.blocks if b[0] == "h"]
+            self.assertIn("שיקולי תכנון: גודל, משקל ועיוותים", heads)
         finally:
             app.toggle_guide(False)
 

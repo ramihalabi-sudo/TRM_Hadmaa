@@ -74,6 +74,19 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.14 - guide: size, weight and image defects
+
+`trm4/guide_design_he.py` adds a "system considerations" section to the field cards of the fields that drive the
+optics and the platform, and design notes to the review. Nothing of it enters the TRM4 ranges (computed on axis with
+one MTF); template ranges are unchanged, the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Estimates | `estimates(p)`: band and lens material (Ge / Si / glass), track length (prime / telephoto / folded), front element (x1.1 D, or D + 2 L tan(theta) with a cold stop), lens mass (elements x density x 1.6-2.5 for the housing), depth of focus +-2 lambda F^2, thermal focus shift f (gamma + alpha_Al) dT over +-40 K (Ge gamma 126e-6), Seidel difficulty indicators against an F/2, 2.5 deg lens (spherical 1/F^3, coma theta/F^2, astigmatism theta^2/F), typical corner distortion by half field and its pixel shift, cos^4 corner illumination, Airy vs pitch, chromatic band width, cooled vs uncooled core, stabilization need 0.3 IFOV, plane-wave r0 and D/r0. |
+| Field cards | `SYSTEM[path]`: size / weight and image bullets and the live estimate lines of the field. |
+| Review | `notes(p)`: athermalization, very fast lens, wide field, heavy lens, large front element with a cold stop, aperture above 3 r0, high stabilization need, rolling shutter with motion. |
+| Background | `research_notes/system_considerations_he.md`: rules, constants and sources. |
+
 ## Version 2.13 - guide: feedback on every value and its effect on the range
 
 The interactive guide now covers the whole form. The model is not touched: template ranges are unchanged; the run IDs

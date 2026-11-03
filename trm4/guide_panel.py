@@ -15,6 +15,7 @@ import json
 import tkinter as tk
 from tkinter import ttk
 
+from . import guide_design_he as DS
 from . import guide_he as G
 from . import guide_impact as GI
 from .rtl_tk import RtlCanvas, RtlButton, draw_line
@@ -422,6 +423,17 @@ class GuidePanel(tk.Frame):
                 text = res[1] + (" מוצע: %s." % G._value_text(res[2]) if G.suggestion(res) is not None else "")
                 out.append(("card", "⚠ " + e["title"], text, meta,
                             lambda p=path: self.open_field(p, back="review"), False, "warn"))
+        try:
+            design = DS.notes(app.project)
+        except Exception:
+            design = []
+        if design:
+            out += [("h", "שיקולי תכנון: גודל, משקל ועיוותים"),
+                    ("p", "אלה לא שגיאות בערכים ולא משנים את הטווח במודל - הם מה שהערכים מחייבים מהמערכת. לחיצה "
+                          "פותחת את השדה עם ההערכות המספריות.")]
+            for path, title, text in design:
+                out.append(("card", "ⓘ " + title, text, "שדה: " + G.param(path)["title"],
+                            lambda p=path: self.open_field(p, back="review"), False))
         return out
 
     # ------------------------------------------------------------------ app hooks
