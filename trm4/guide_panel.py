@@ -53,6 +53,8 @@ class GuidePanel(tk.Frame):
         self._imp_res = None
         self._undo = None                               # (path, previous value) after "apply the suggested value"
         self._review_ranges = None
+        self._typing_job = None
+        self._live = None                               # project with the value being typed (before refresh)
 
         self.head = tk.Canvas(self, height=int(78 * self.k), bg=HEAD_BG, highlightthickness=0)
         self.head.pack(fill="x")
@@ -284,9 +286,12 @@ class GuidePanel(tk.Frame):
         return None
 
     # ------------------------------------------------------------------ field card with the live effect
+    def _project(self):
+        return self._live if self._live is not None else self.app.project
+
     def _card(self, path):
         value = self._value(path)
-        project = self.app.project
+        project = self._project()
         res = G.check(path, value, project)
         e = G.param(path)
         f = self._field_spec(path)
@@ -324,7 +329,7 @@ class GuidePanel(tk.Frame):
         if not path:
             return []
         out = []
-        s = G.suggestion(G.check(path, self._value(path), self.app.project))
+        s = G.suggestion(G.check(path, self._value(path), self._project()))
         if s is not None and self._field_spec(path) is not None:
             out.append(("החל את הערך המוצע", lambda: self.apply_value(path, s), False))
         if self._undo and self._undo[0] == path:
@@ -431,6 +436,26 @@ class GuidePanel(tk.Frame):
             self._render_field(keep_scroll=True)
             self._field_buttons()
 
+    TYPING_MS = 300
+
+    def on_field_typing(self, path):
+        """A key was typed in an entry: re-check the card once typing pauses, without waiting for the field to lose
+        focus (App.refresh)."""
+        if self._typing_job:
+            self.after_cancel(self._typing_job)
+        self._typing_job = self.after(self.TYPING_MS, lambda: self._typed(path))
+
+    def _typed(self, path):
+        self._typing_job = None
+        self._live = self.app.collect()                 # the typed text, as the form will read it
+        try:
+            if path != self.field_path and path != self._step_path():
+                self.show_field(path)                   # the card of the field being edited
+            else:
+                self.on_project_change()
+        finally:
+            self._live = None
+
     def on_field_focus(self, path):
         if G.param(path) and not (self.mode == "step" and self._step_path() == path) and path != self.field_path:
             self.show_field(path)
@@ -443,7 +468,7 @@ class GuidePanel(tk.Frame):
 
     def _value(self, path):
         try:
-            return _get(self.app.project, path)
+            return _get(self._project(), path)
         except (KeyError, IndexError, TypeError, ValueError):
             return None
 
@@ -498,6 +523,9 @@ class GuidePanel(tk.Frame):
 
     def close(self):
         self.impact.cancel()
+        if self._typing_job:
+            self.after_cancel(self._typing_job)
+            self._typing_job = None
         self._unhilite()
         self._save()
 

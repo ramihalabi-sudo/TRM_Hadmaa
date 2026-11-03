@@ -3245,7 +3245,8 @@ class App(tk.Tk):
             w = ttk.Entry(fr, textvariable=var, width=10)
             w.bind("<FocusOut>", lambda e: self.refresh())
             w.bind("<Return>", lambda e: self.refresh())
-            w.bind("<KeyRelease>", lambda e, var=var: (self._user_edit(path, idx, check=var), self._schedule_dirty_check()))
+            w.bind("<KeyRelease>", lambda e, var=var: (self._user_edit(path, idx, check=var), self._schedule_dirty_check(),
+                                                       self._guide_typing(path)))
         w.grid(row=row, column=1, sticky="we", padx=4, pady=3)
         widgets.append(w)
         for gw in (w, lab):                             # field card of the guide (when it is open)
@@ -3995,6 +3996,10 @@ class App(tk.Tk):
     def _guide_focus(self, path):
         if self.guide is not None:
             self.guide.on_field_focus(path)
+
+    def _guide_typing(self, path):
+        if self.guide is not None:
+            self.guide.on_field_typing(path)
 
     # ------------------------------------------------------------------ help
     def open_docs(self):

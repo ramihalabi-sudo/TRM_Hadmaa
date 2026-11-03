@@ -369,6 +369,27 @@ class Panel(unittest.TestCase):
             app.refresh()
             app.toggle_guide(False)
 
+    def test_warning_while_typing(self):
+        app = self.app
+        app.load_template(UNCOOLED)
+        app.toggle_guide(True)
+        g = app.guide
+        f0 = app.project["optics"]["f_mm"]
+        try:
+            app._guide_focus("optics.f_mm")
+            self.assertFalse(any(b[:2] == ("box", "warn") for b in g.doc.blocks))
+            app._set_value("optics.f_mm", 2.5)                              # typed, the field keeps the focus
+            app._guide_typing("optics.f_mm")
+            self.assertTrue(self.wait_for(lambda: g._typing_job is None, 5.0))
+            self.assertEqual(app.project["optics"]["f_mm"], f0)              # not refreshed yet
+            warn = [b for b in g.doc.blocks if b[:2] == ("box", "warn")]
+            self.assertTrue(warn, "no warning while typing")
+            self.assertIn("25", warn[0][2][-1])                             # the suggested value
+        finally:
+            app._set_value("optics.f_mm", f0)
+            app.refresh()
+            app.toggle_guide(False)
+
     def test_review_view(self):
         app = self.app
         app.load_template(LWIR)
