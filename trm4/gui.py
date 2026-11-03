@@ -39,6 +39,7 @@ from . import advisor as ADV
 from . import extensions as X
 from . import labtools as LT
 from . import atlas_news as NEWS
+from .guide_panel import GuidePanel, configure_styles as guide_styles
 from .help_text import help_for
 from . import __version__
 
@@ -193,6 +194,7 @@ def apply_theme(root):
     s.configure("TPanedwindow", background=BG)
     s.configure("Sash", sashthickness=6, gripcount=0, background=BG, lightcolor=BG, bordercolor=BG)
     s.configure("TSeparator", background=BORDER)
+    guide_styles(s, FONT_SEMI)
     root.configure(background=BG)
 
 
@@ -2774,6 +2776,7 @@ class App(tk.Tk):
         self.model = None
         self.analyses = {}
         self.busy = False
+        self.guide = None
         self.file_path = None
         self.saved_state = None
         self.dirty = False
@@ -2793,6 +2796,7 @@ class App(tk.Tk):
         self.after(max(0, int(1100 - (time.time() - t0) * 1000)), lambda: (splash.destroy(), self.deiconify(),
                                                                            self.lift(), self.focus_force(),
                                                                            self.after(80, self._place_sash),
+                                                                           self.after(200, self._start_guide),
                                                                            self.after(2500, self.check_news)))
 
     def _place_sash(self):
@@ -2992,6 +2996,8 @@ class App(tk.Tk):
         self.menubar, self.news_menu_index = m, m.index("end")
 
         mh = tk.Menu(m, tearoff=False)
+        mh.add_command(label="Interactive guide (Hebrew)", accelerator="Ctrl+G", command=self.toggle_guide)
+        mh.add_separator()
         mh.add_command(label="Model documentation (PDF)", accelerator="F1", command=self.open_docs)
         mh.add_command(label="Keyboard shortcuts", command=self.show_shortcuts)
         mh.add_separator()
@@ -3002,7 +3008,8 @@ class App(tk.Tk):
 
         keys = {"<Control-n>": self.new_project, "<Control-o>": self.open_project, "<Control-s>": self.save_project,
                 "<Control-S>": self.save_project_as, "<Control-e>": self.export_report, "<Control-p>": self.export_plot,
-                "<Control-d>": self.detector_lookup, "<F5>": self.calculate, "<F1>": self.open_docs}
+                "<Control-d>": self.detector_lookup, "<F5>": self.calculate, "<F1>": self.open_docs,
+                "<Control-g>": self.toggle_guide}
         for k, fn in keys.items():
             self.bind_all(k, lambda e, fn=fn: (fn(), "break")[1])
         for i in range(9):
@@ -3033,6 +3040,8 @@ class App(tk.Tk):
         ToolButton(inner, GLYPH["search"], "Detector lookup", self.detector_lookup,
                    tip="Pick a detector from the Detector Atlas and fill its parameters  (Ctrl+D)").pack(side="left")
         ToolButton(inner, GLYPH["help"], "Docs", self.open_docs, tip="Open model documentation  (F1)").pack(side="left")
+        ToolButton(inner, "", "Guide", self.toggle_guide,
+                   tip="Interactive guide in Hebrew: lessons, field cards and value checks  (Ctrl+G)").pack(side="left")
         self.calc_btn = ToolButton(inner, GLYPH["run"], "Calculate", self.calculate, accent=True,
                                    tip="Run the model  (F5)")
         self.calc_btn.pack(side="right", padx=(0, 4))
@@ -3239,6 +3248,9 @@ class App(tk.Tk):
             w.bind("<KeyRelease>", lambda e, var=var: (self._user_edit(path, idx, check=var), self._schedule_dirty_check()))
         w.grid(row=row, column=1, sticky="we", padx=4, pady=3)
         widgets.append(w)
+        for gw in (w, lab):                             # field card of the guide (when it is open)
+            gw.bind("<FocusIn>" if gw is w else "<ButtonRelease-1>", lambda e, path=path: self._guide_focus(path),
+                    add="+")
         if f["unit"]:
             u = ttk.Label(fr, text=f["unit"], style="Unit.TLabel")
             u.grid(row=row, column=2, sticky="w", padx=(2, 6))
@@ -3600,6 +3612,8 @@ class App(tk.Tk):
             self.sens.check_stale(p)
         if self.saved_state is not None:
             self._set_dirty(self._state_of(p) != self.saved_state)
+        if self.guide is not None:
+            self.guide.on_project_change()
 
     # ------------------------------------------------------------------ camera profiles
     def apply_profile(self, prof, config):
@@ -3939,8 +3953,48 @@ class App(tk.Tk):
             self.settings["geometry"] = self.geometry()
         self.settings["workflow"] = self.workflow
         self.settings["show_adv"] = bool(self.show_adv.get())
+        self.settings["guide_open"] = self.guide is not None
+        if self.guide is not None:
+            self.guide.close()
         save_settings(self.settings)
         self.destroy()
+
+    # ------------------------------------------------------------------ interactive guide (optional)
+    def _start_guide(self):
+        if self.settings.get("guide_open"):
+            self.toggle_guide(True)
+        elif not self.settings.get("guide_hint"):
+            self.settings["guide_hint"] = True
+            self.status.set("New: interactive guide in Hebrew - Help > Interactive guide or Ctrl+G")
+
+    def toggle_guide(self, on=None):
+        if on is None:
+            on = self.guide is None
+        if on and self.guide is None:
+            self.guide = GuidePanel(self.paned, self)
+            self.paned.add(self.guide, weight=1)
+            self.update_idletasks()
+            try:
+                W = self.paned.winfo_width()
+                gw = int(400 * self.k)
+                # parameters | results | guide: the form keeps its width, the results give way
+                self.paned.sashpos(0, max(int((W - gw) * 0.5), min(int(620 * self.k), int((W - gw) * 0.6))))
+                self.paned.sashpos(1, W - gw)
+            except tk.TclError:
+                pass
+            self.status.set("Interactive guide opened")
+        elif not on and self.guide is not None:
+            self.guide.close()
+            self.paned.forget(self.guide)
+            self.guide.destroy()
+            self.guide = None
+            self.update_idletasks()
+            self._place_sash()
+            self.status.set("Interactive guide closed")
+
+    def _guide_focus(self, path):
+        if self.guide is not None:
+            self.guide.on_field_focus(path)
 
     # ------------------------------------------------------------------ help
     def open_docs(self):

@@ -74,6 +74,24 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.12 - interactive guide in Hebrew (optional)
+
+An optional guide panel for new users, in Hebrew: *Help > Interactive guide*, the *Guide* toolbar button or Ctrl+G
+open it at the right of the window; it is off by default and its state (lesson, step, completed lessons, open at exit)
+is kept under `guide` in `%APPDATA%\TRM4\settings.json`. The model is not touched: template ranges are unchanged; the
+run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Lessons | `trm4/guide_he.py` `LESSONS`: *first calculation* (Quick Prediction), *entering a real system* in the order of influence (Engineering Analysis) and *reading the results and improving*. A step switches workflow, page and result tab, highlights the parameter's label (flash, scrolled into view) and shows its field card. Steps that do not apply to the project (category, reflectivity mode, aperture input, noise source, atmosphere mode) are skipped. |
+| Knowledge base | `PARAMS`: about 40 parameters that decide the ranges - meaning, why it matters, impact rating (1-3) from the parameter-sensitivity study (`reports/השפעת פרמטרים על טווחי תצפית TRM.md`, Tables 2 and 5), typical values, where to take the value from, common mistakes. |
+| Value checks | Live plausibility check of the entered value at the top of the card: unit mistakes (cm / mm, Celsius / Kelvin, percent / fraction, mrad / urad), F-number from f and D, LOS jitter relative to the IFOV (warns on a narrow field without jitter, NV-IPM 70 urad), same target and background material, zero contrast or size. |
+| Field cards | While the guide is open, clicking or focusing a field shows its card. |
+| Right-to-left text | Tk 8.6 on Windows does not lay out right-to-left paragraphs. `trm4/rtl_tk.py` uses the bidi pass of `report_he` and draws Latin / digit runs as one canvas item and Hebrew one character at a time from right to left (`RtlCanvas`, `RtlButton`). |
+
+`tests/test_guide.py` checks the knowledge base and lessons against the parameter pages, the value checks, the
+right-to-left ordering and walks every step of every lesson in the real window (Thermal and Visible templates).
+
 ## Version 2.11 - scintillation diagnostic for point targets and active illumination
 
 Roadmap item 4 of Table 6 of `reports/מחקר טורבולנציה - שלב ב.pdf` (Sec. 4.8, Appendix B). Engine version 2.11; the
