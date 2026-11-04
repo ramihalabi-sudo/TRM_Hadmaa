@@ -410,6 +410,8 @@ class Panel(unittest.TestCase):
         app.load_template(UNCOOLED)
         app.toggle_guide(True)
         g = app.guide
+        app.focus_set()                                 # earlier tests left the cursor in a field: release it
+        app.update()
         f0 = app.project["optics"]["f_mm"]
         try:
             app._guide_focus("optics.f_mm")

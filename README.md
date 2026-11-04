@@ -74,6 +74,17 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.16 - spoken guide: walk through the fields, follow the cursor
+
+`guide_voice.walk_script` walks a group of fields: before each field an action segment (`{"do": fn}`, run by the
+`Narrator` when it is reached) highlights the field in the form, puts the cursor in it and shows its card
+(`GuidePanel._walk_field`), then the field gets a brief spoken lesson (`field_script(brief=True)`). *Explain page* in
+the narrator strip walks every tour group of the current page (`walk_page`); a tour group step walks its fields, and
+with auto-play the walk continues to the next group. A lesson step puts the cursor in its field (`_focus_field`), and
+play explains the field that has the keyboard focus when the user moved to another one (`_focused_path`). Focus moves
+made by the guide itself are not treated as the user's choice (`_own_focus`); views opened by the narration do not
+stop it (`_quiet`). Template ranges are unchanged; the run IDs change with the version number.
+
 ## Version 2.15 - guide: spoken narration in Hebrew and English
 
 The interactive guide can be listened to. `trm4/guide_voice.py` builds the narration of the current view and says it

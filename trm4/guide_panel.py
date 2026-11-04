@@ -118,6 +118,7 @@ class NarratorBar(tk.Canvas):
         x = self._button(x, cy, "▶" if self.state in ("idle", "paused") else "❚❚", "play", accent=True)
         if self.state != "idle":
             x = self._button(x, cy, "■", "stop")
+        x = self._chip(x, cy, "הסבר על העמוד" if lang == "he" else "Explain page", "walk", False)
         self.controls_right = x
         # settings row: language, speed, auto-play
         cy2 = int(66 * k)
@@ -237,6 +238,8 @@ class NarratorBar(tk.Canvas):
             self.p.voice_set(rate=rates[(rates.index(cur) + 1) % len(rates)] if cur in rates else 1.0)
         elif "auto" in tags:
             self.p.voice_set(auto=not self.p.voice_cfg["auto"])
+        elif "walk" in tags:
+            self.p.walk_page()
 
 
 class GuidePanel(tk.Frame):
@@ -265,6 +268,11 @@ class GuidePanel(tk.Frame):
                           "rate": v.get("rate") if v.get("rate") in GV.RATES else 1.0}
         self.voice_avail = {}                           # lang -> True / False once known
         self._voice_job = None
+        self._own_focus = None                          # a field the guide put the cursor in (not the user's choice)
+        self._quiet = False                             # a view change made by the narration itself
+        self._walk = None                               # (i, n) while the voice walks through the fields of a group
+        self._walk_page = None                          # walk every group of this page
+        self._opening = True
 
         self.head = tk.Canvas(self, height=int(78 * self.k), bg=HEAD_BG, highlightthickness=0)
         self.head.pack(fill="x")
@@ -291,7 +299,9 @@ class GuidePanel(tk.Frame):
             app.bind_all("<F9>", lambda e: (self.voice_play(), "break")[1])
         except tk.TclError:
             pass
+        self._opening = True
         self.show_home() if not self.lesson_id or not G.lesson(self.lesson_id) else self.show_step(self.index)
+        self._opening = False
 
     # ------------------------------------------------------------------ state
     def _save(self):
@@ -320,13 +330,106 @@ class GuidePanel(tk.Frame):
         self.after(200, poll)
 
     def voice_play(self):
-        """Listen / pause / resume (the play button, F9)."""
+        """Listen / pause / resume (the play button, F9).  The explanation is of the field the cursor is in."""
         if self.voice.state in ("playing", "paused"):
             self.voice.toggle_pause()
         elif self.voice.state == "loading":
             self.voice.stop()
         else:
+            fp = self._focused_path()
+            shown = self.field_path if self.mode == "field" else self._step_path()
+            if fp and fp != shown and G.param(fp) and not (self.mode == "step" and fp in
+                                                            (self._steps()[self.index].get("fields") or [])):
+                self.show_field(fp)                     # the user moved to another field: explain that one
+                if self._voice_job:
+                    self.after_cancel(self._voice_job)
+                    self._voice_job = None
             self.narrate()
+
+    def walk_page(self):
+        """Walk, by voice, through every field of the current page, group by group (the tour steps of the page)."""
+        self.lesson_id = "tour"
+        steps = self._steps()
+        page = self.app.current_page
+        idx = next((i for i, st in enumerate(steps) if st.get("page") == page and st.get("group")), None)
+        if idx is None:
+            return
+        self._walk_page = page
+        self._quiet = True
+        try:
+            self.show_step(idx)
+        finally:
+            self._quiet = False
+        self.narrate()
+
+    def _focused_path(self):
+        """Path of the form field that has the keyboard focus, or None."""
+        try:
+            w = self.app.focus_get()
+        except (KeyError, tk.TclError):
+            return None
+        if w is None:
+            return None
+        for f, widgets, _vw, _g in self.app.rows:
+            if w in widgets and f.get("path"):
+                return f["path"]
+        return None
+
+    def _focus_field(self, page, path):
+        """Put the cursor in the field the guide explains (marked as the guide's own move)."""
+        widgets = self._row(page, path)
+        if not widgets or len(widgets) < 2:
+            return
+        w = widgets[1]
+        try:
+            if str(w.cget("state")) == "disabled":
+                return
+        except tk.TclError:
+            pass
+        try:
+            if self.app.focus_get() is w:               # already there: no FocusIn will come
+                return
+        except (KeyError, tk.TclError):
+            pass
+        self._own_focus = path
+        try:
+            w.focus_set()
+        except tk.TclError:
+            self._own_focus = None
+
+    def _walk_field(self, path, i, n):
+        """The narration reached a field of the walk: highlight it, put the cursor in it and show its card."""
+        self._walk = (i, n)
+        self._quiet = True
+        try:
+            page = self._page_of(path)
+            if page:
+                self.app.goto_page(page)
+                self._hilite(page, path)
+                self._focus_field(page, path)
+            self.show_field(path)
+        finally:
+            self._quiet = False
+
+    def _walk_end(self):
+        self._walk = None
+        steps = self._steps()
+        nxt = self.index + 1
+        if self.lesson_id and nxt < len(steps) and steps[nxt].get("group") and (
+                self.voice_cfg["auto"] or steps[nxt].get("page") == self._walk_page):
+            self._quiet = True
+            try:
+                self.show_step(nxt)
+            finally:
+                self._quiet = False
+            self.after(300, self.narrate)
+            return
+        self._walk_page = None
+        self._quiet = True
+        try:
+            self.show_step(self.index) if self.lesson_id else None
+        finally:
+            self._quiet = False
 
     def voice_stop(self):
         self.voice.stop()
@@ -369,10 +472,11 @@ class GuidePanel(tk.Frame):
                 return []
             st = steps[min(self.index, len(steps) - 1)]
             if st.get("fields"):
-                paths = st["fields"]
-                return GV.step_script(lang, self.lesson_id, st, {"project": self.app.project,
-                                                                  "values": {q: self._value(q) for q in paths}},
-                                      labels={q: self._label(q) for q in paths})
+                paths = [q for q in st["fields"] if G.param(q)]
+                intro = GV.step_script(lang, self.lesson_id, dict(st, fields=None))
+                items = [{"path": q, "value": self._value(q), "project": self.app.project, "label": self._label(q)}
+                         for q in paths]
+                return GV.walk_script(lang, items, self._walk_field, self._walk_end, intro=intro)
             args = None
             if st.get("path") and not getattr(self, "step_hidden", False):
                 p = st["path"]
@@ -382,7 +486,12 @@ class GuidePanel(tk.Frame):
         return []
 
     def _view_changed(self):
-        """A new view is shown: stop the narration, and with auto-play say the new view."""
+        """A new view is shown: stop the narration, and with auto-play say the new view.  A view the narration
+        itself opened (the walk) changes nothing."""
+        if self._quiet:
+            return
+        self._walk = None
+        self._walk_page = None
         self.voice.stop()
         if self._voice_job:
             self.after_cancel(self._voice_job)
@@ -429,6 +538,9 @@ class GuidePanel(tk.Frame):
             n = max(len(steps), 1)
             sub = "%s · שלב %d מתוך %d" % (les["title"], min(self.index + 1, n), n)
             frac = (self.index + 1) / n
+        elif self.mode == "field" and self._walk:
+            i, n = self._walk
+            sub, frac = "הסבר קולי · שדה %d מתוך %d" % (i + 1, n), (i + 1) / n
         elif self.mode == "field":
             sub, frac = "כרטיס שדה", None
         elif self.mode == "review":
@@ -515,6 +627,8 @@ class GuidePanel(tk.Frame):
         hidden = False
         if st.get("path"):
             hidden = not self._hilite(st.get("page"), st["path"])
+            if not hidden and not self._opening:        # opening the guide does not take the cursor away
+                self._focus_field(st.get("page"), st["path"])
         self.step_hidden = hidden
         self._render_step(st, hidden)
         self._step_buttons()
@@ -789,6 +903,10 @@ class GuidePanel(tk.Frame):
             self._live = None
 
     def on_field_focus(self, path):
+        if path == self._own_focus:                     # the guide put the cursor there itself
+            self._own_focus = None
+            return
+        self._own_focus = None
         if G.param(path) and not (self.mode == "step" and self._step_path() == path) and path != self.field_path:
             self.show_field(path)
 

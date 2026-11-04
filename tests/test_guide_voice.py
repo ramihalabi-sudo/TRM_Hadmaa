@@ -3,6 +3,7 @@ English, the English translation stays in step with its Hebrew source, every fix
 the narrator strip of the panel (skipped without a display)."""
 import json
 import os
+import time
 import unittest
 
 from _common import LWIR, VIS, template
@@ -36,6 +37,8 @@ def value_of(p, path):
 def texts(script):
     out = []
     for seg in script:
+        if isinstance(seg, dict):                                        # an action of the walk
+            continue
         out += [s[1] for s in (seg() or [])] if callable(seg) else [seg[1]]
     return out
 
@@ -179,6 +182,55 @@ class Panel(unittest.TestCase):
         gp.bar.set_state("playing", "The effective focal length of the lens.")
         app.update_idletasks()
         gp.bar.set_state("idle", "")
+        app.toggle_guide(False)
+
+    def test_walk_follows_fields_and_cursor(self):
+        """The voice walks the fields of a page one by one: each is highlighted, gets the cursor and its card while it
+        is explained; play explains the field the user put the cursor in, not the field of the step."""
+        app = self.app
+        app.toggle_guide(True)
+        gp = app.guide
+        orig = GV.recording
+        GV.recording = lambda lang, text: "fake.mp3"                     # every sentence "plays" at once
+        try:
+            gp.voice.mci.play = lambda path, speed=1.0: True
+            gp.voice.mci.mode = lambda: "stopped"
+            seen = []
+            walk = gp._walk_field
+
+            def spy(path, i, n):
+                walk(path, i, n)
+                app.update()
+                seen.append((path, gp.field_path, gp._focused_path(), gp.hilited is not None))
+
+            gp._walk_field = spy
+            app.goto_page("Optics")
+            app.update()
+            gp.walk_page()
+            end = time.time() + 60
+            while time.time() < end:
+                app.update()
+                if gp.voice.state == "idle" and not gp._walk_page and seen:
+                    break
+                time.sleep(0.02)
+            self.assertGreater(len(seen), 5)
+            self.assertIn("optics.D_mm", [x[0] for x in seen])
+            for path, card, cursor, lit in seen:
+                self.assertEqual((card, cursor, lit), (path, path, True))
+            self.assertEqual(gp.mode, "step")                            # back to the step after the page
+        finally:
+            GV.recording = orig
+        gp.start("first")
+        gp.show_step(next(i for i, st in enumerate(gp._steps()) if st.get("path") == "optics.f_mm"))
+        app.update()
+        self.assertEqual(gp._focused_path(), "optics.f_mm")             # the step puts the cursor in its field
+        said = []
+        gp.voice.speak = lambda script, lang, rate=1.0: said.append(texts(script))
+        gp._row("Quick setup", "target.W_m")[1].focus_set()
+        app.update()
+        gp.voice_play()
+        self.assertEqual(gp.field_path, "target.W_m")
+        self.assertIn("רוחב המטרה", said[-1][0])
         app.toggle_guide(False)
 
 

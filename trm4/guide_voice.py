@@ -195,10 +195,11 @@ def _he_blocks(blocks, out):
             _add(out, b[2], "he")
 
 
-def field_script(lang, path, value, project, label=None, impact=None):
+def field_script(lang, path, value, project, label=None, impact=None, brief=False):
     """Spoken lesson on a field: an opening, the idea (an analogy for the core fields), the check of the user's own
     value, why it matters, a feel for the numbers, where the value comes from, the common mistake, the computed effect
-    on the ranges and the bottom line.  impact: callable returning the guide_impact result (or None while running)."""
+    on the ranges and the bottom line.  impact: callable returning the guide_impact result (or None while running).
+    brief: the version of the walk through a group (opening, idea, the user's value, why, bottom line)."""
     e = G.param(path)
     if not e:
         return []
@@ -241,6 +242,9 @@ def field_script(lang, path, value, project, label=None, impact=None):
     # why, numbers, source, mistakes
     if why:
         _add(out, why, lang, pick("why") + " ")
+    if brief:
+        _add(out, lesson[2] if lesson else pick("bottom", imp), lang)
+        return out
     if typical:
         _add(out, pick("typical") + " " + _sentence_join(typical, lang), lang)
     if source and imp:
@@ -405,6 +409,36 @@ def group_script(lang, paths, labels, project, values):
     return out
 
 
+WALK = {
+    "he": {"start": "בקבוצה הזו %d שדות. אעבור איתכם על כל אחד מהם, ואסמן אותו בטופס כדי שתראו בדיוק על מה מדובר.",
+           "start1": "בקבוצה הזו שדה אחד. אסמן אותו בטופס ונעבור עליו.",
+           "next": ["השדה הבא.", "ממשיכים.", "ועכשיו, השדה הבא."],
+           "end": "סיימנו את הקבוצה הזו."},
+    "en": {"start": "This group has %d fields. I will go through each of them with you, and highlight it in the form "
+                    "so you can see exactly what we are talking about.",
+           "start1": "This group has one field. I will highlight it in the form and we will go over it.",
+           "next": ["The next field.", "Moving on.", "And now, the next field."],
+           "end": "We have finished this group."},
+}
+
+
+def walk_script(lang, items, on_field, on_end, intro=()):
+    """Narration that walks through fields one by one.  items: [dict(path, value, project, label)];
+    on_field(path, i, n) is called (highlight, card) when the narration reaches a field, on_end() after the last."""
+    out = list(intro)
+    n = len(items)
+    w = WALK[lang]
+    _add(out, (w["start"] % n) if n > 1 else w["start1"], lang)
+    for i, it in enumerate(items):
+        out.append({"do": lambda p=it["path"], i=i: on_field(p, i, n)})
+        if i:
+            _add(out, w["next"][i % len(w["next"])], lang)
+        out += field_script(lang, it["path"], it.get("value"), it.get("project"), it.get("label"), brief=True)
+    _add(out, w["end"], lang)
+    out.append({"do": on_end})
+    return out
+
+
 def home_script(lang, lessons, done):
     out = []
     if lang == "he":
@@ -461,7 +495,7 @@ def static_texts(lang):
 
     def take(script):
         for seg in script:
-            if not callable(seg):
+            if not callable(seg) and not isinstance(seg, dict):
                 out.append(speech(seg[1], lang))
 
     for path in G.PARAMS:
@@ -472,6 +506,12 @@ def static_texts(lang):
         for st in les["steps"]:
             take(step_script(lang, les["id"], st))
     take(home_script(lang, G.LESSONS, set()))
+    take(walk_script(lang, [], None, None)[1:-1])
+    out += [speech(t, lang) for t in WALK[lang]["next"]] + [speech(WALK[lang]["start1"], lang)]
+    for path in G.PARAMS:
+        if lang == "en" and path not in EN.PARAMS:
+            continue
+        take(field_script(lang, path.replace(".N.", ".0."), None, None, brief=True))
     for les in G.LESSONS:
         take(home_script(lang, [les], {les["id"]}))
     if lang == "en":
@@ -720,7 +760,7 @@ class Narrator:
             seg = self._queue[i]
             if callable(seg):
                 break
-            if i in self._live:
+            if isinstance(seg, dict) or i in self._live:
                 continue
             text = speech(seg[1], self.lang)
             if text and not recording(self.lang, text):
@@ -758,7 +798,18 @@ class Narrator:
 
     def _next(self):
         gen = self._gen
-        while self._pos < len(self._queue) and callable(self._queue[self._pos]):
+        while self._pos < len(self._queue) and (callable(self._queue[self._pos]) or
+                                                isinstance(self._queue[self._pos], dict)):
+            seg = self._queue[self._pos]
+            if isinstance(seg, dict):                          # an action: highlight a field, open its card
+                self._pos += 1
+                try:
+                    seg["do"]()
+                except Exception:
+                    pass
+                if gen != self._gen:                           # the action started something else
+                    return
+                continue
             self._expand(self._pos)
         if self._pos >= len(self._queue):
             self.mci.close()
