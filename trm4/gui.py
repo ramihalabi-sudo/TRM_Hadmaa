@@ -4014,7 +4014,8 @@ class App(tk.Tk):
         rows = [("F5", "Calculate"), ("Ctrl+N", "New project"), ("Ctrl+O", "Open project"), ("Ctrl+S", "Save"),
                 ("Ctrl+Shift+S", "Save as"), ("Ctrl+E", "Export text report"), ("Ctrl+P", "Export current plot"),
                 ("Ctrl+D", "Detector lookup"), ("Ctrl+1 ... 9", "Go to parameter page"),
-                ("Ctrl+Shift+1 / 2 / 3", "Quick / Engineering / Lab workflow"), ("F1", "Documentation")]
+                ("Ctrl+Shift+1 / 2 / 3", "Quick / Engineering / Lab workflow"), ("F1", "Documentation"),
+                ("Ctrl+G", "Interactive guide"), ("F9", "Guide: listen to the explanation / pause")]
         dlg = self._dialog("Keyboard shortcuts")
         fr = ttk.Frame(dlg, padding=20)
         fr.pack(fill="both", expand=True)

@@ -12,13 +12,17 @@ A field card also shows the live effect of the value on the DRI ranges and the i
 The text is drawn by rtl_tk (Tk on Windows does not lay out right-to-left paragraphs).
 """
 import json
+import math
+import threading
+import time
 import tkinter as tk
 from tkinter import ttk
 
 from . import guide_design_he as DS
 from . import guide_he as G
 from . import guide_impact as GI
-from .rtl_tk import RtlCanvas, RtlButton, draw_line
+from . import guide_voice as GV
+from .rtl_tk import RtlCanvas, RtlButton, draw_line, line_width, wrap
 
 HEAD_BG = "#16202f"
 HEAD_FG = "#ffffff"
@@ -34,6 +38,205 @@ def _get(d, path):
     for k in path.split("."):
         d = d[int(k)] if isinstance(d, list) else d[k]
     return d
+
+
+class NarratorBar(tk.Canvas):
+    """The narrator strip under the header: an avatar that speaks, the caption of the sentence being said and the
+    controls (listen / pause, stop, language, speed, auto-play)."""
+
+    BG = "#f3f6fb"
+    INK = "#1d2433"
+    MUTED = "#6a7383"
+
+    def __init__(self, master, panel):
+        super().__init__(master, bg=self.BG, highlightthickness=0, borderwidth=0, height=int(82 * panel.k))
+        self.p, self.k = panel, panel.k
+        self.fonts = panel.doc.fonts
+        self.state, self.caption = "idle", ""
+        self._anim = None
+        self._t0 = time.time()
+        self.bind("<Configure>", lambda e: self.draw())
+        self.bind("<ButtonRelease-1>", self._click)
+
+    # ---- state from the narrator
+    def set_state(self, state, caption):
+        self.state, self.caption = state, caption
+        self.draw()
+        if state in ("playing", "loading") and self._anim is None:
+            self._animate()
+
+    def _animate(self):
+        if self.state not in ("playing", "loading"):
+            self._anim = None
+            self.draw()
+            return
+        self._draw_live()
+        self._anim = self.after(80, self._animate)
+
+    # ---- drawing
+    def draw(self):
+        self.delete("all")
+        k, W = self.k, max(self.winfo_width(), 200)
+        v = self.p.voice_cfg
+        lang = v["lang"]
+        pad = int(12 * k)
+        cy = int(28 * k)
+        # avatar (right: the start of a Hebrew line)
+        r = int(17 * k)
+        ax = W - pad - r
+        self.avatar = (ax, cy, r)
+        self.create_oval(ax - r, cy - r, ax + r, cy + r, fill="#16202f", outline="", tags=("play",))
+        hr = int(5.5 * k)                                           # head and shoulders
+        self.create_oval(ax - hr, cy - int(10 * k), ax + hr, cy + int(1 * k), fill="#ffffff", outline="",
+                         tags=("play",))
+        self.create_arc(ax - int(11 * k), cy + int(3 * k), ax + int(11 * k), cy + int(22 * k), start=0, extent=180,
+                        fill="#ffffff", outline="", style="pieslice", tags=("play",))
+        self.create_oval(ax - r, cy - r, ax + r, cy + r, outline="", tags=("play", "ring"))
+        # name and status
+        x = ax - r - int(10 * k)
+        avail = self.p.voice_avail.get(lang)
+        name = GV.NARRATOR[lang] if lang == "en" else "המנחה"
+        if self.state == "loading":
+            sub = "מכין את ההקראה..." if lang == "he" else "Preparing..."
+        elif self.state in ("playing", "paused"):
+            sub = ("מסביר בעברית" if lang == "he" else "Speaking English") + (" · מושהה" if self.state == "paused"
+                                                                               else "")
+        elif avail is False:
+            sub = "אין קול בשפה הזו במחשב" if lang == "he" else "No English voice here"
+        else:
+            sub = "לחצו כדי לשמוע הסבר (F9)" if lang == "he" else "Click to listen (F9)"
+        if lang == "he":
+            draw_line(self, name, x, int(9 * k), self.fonts["h"], self.INK)
+            left = draw_line(self, sub, x, int(30 * k), self.fonts["muted"], self.MUTED)
+        else:
+            self.create_text(x, int(9 * k), text=name, font=self.fonts["h"], fill=self.INK, anchor="ne")
+            self.create_text(x, int(30 * k), text=sub, font=self.fonts["muted"], fill=self.MUTED, anchor="ne")
+            left = x - max(self.fonts["muted"].measure(sub), self.fonts["h"].measure(name))
+        self.bars_x = left - int(8 * k)
+        # controls (left)
+        x = pad
+        x = self._button(x, cy, "▶" if self.state in ("idle", "paused") else "❚❚", "play", accent=True)
+        if self.state != "idle":
+            x = self._button(x, cy, "■", "stop")
+        self.controls_right = x
+        # settings row: language, speed, auto-play
+        cy2 = int(66 * k)
+        x = self._toggle(pad, cy2, [("עברית", "he"), ("English", "en")], lang, "lang")
+        x = self._chip(x, cy2, ("מהירות %g×" if lang == "he" else "Speed %g×") % v["rate"], "rate", v["rate"] != 1.0)
+        x = self._chip(x, cy2, ("הקראה אוטומטית" if lang == "he" else "Auto-play") + (" ✓" if v["auto"] else ""),
+                       "auto", v["auto"])
+        # caption
+        h = int(82 * k)
+        if self.state != "idle" and self.caption:
+            f = self.fonts["p"]
+            width = W - 2 * pad - int(16 * k)
+            lines = (wrap(self.caption, f, width) if lang == "he" else self._wrap_ltr(self.caption, f, width))[:3]
+            top = int(80 * k)
+            lh = f.metrics("linespace")
+            box_h = len(lines) * lh + int(14 * k)
+            self.create_rectangle(pad, top, W - pad, top + box_h, fill="#ffffff", outline="#d7dde5")
+            self.create_rectangle(W - pad - int(3 * k), top, W - pad, top + box_h, fill=ACCENT, outline="")
+            y = top + int(7 * k)
+            for ln in lines:
+                if lang == "he":
+                    draw_line(self, ln, W - pad - int(12 * k), y, f, self.INK)
+                else:
+                    self.create_text(pad + int(10 * k), y, text=ln, font=f, fill=self.INK, anchor="nw")
+                y += lh
+            h = top + box_h + int(8 * k)
+        if int(self["height"]) != h:
+            self.configure(height=h)
+        self._draw_live()
+
+    def _wrap_ltr(self, text, f, width):
+        out, cur = [], ""
+        for w in text.split():
+            cand = (cur + " " + w).strip()
+            if cur and f.measure(cand) > width:
+                out.append(cur)
+                cur = w
+            else:
+                cur = cand
+        return out + ([cur] if cur else [])
+
+    def _draw_live(self):
+        """Speaking animation: a pulsing ring round the avatar and sound bars next to the name."""
+        self.delete("live")
+        k = self.k
+        ax, cy, r = self.avatar
+        t = time.time() - self._t0
+        if self.state == "playing":
+            g = int((2 + 3 * (0.5 + 0.5 * math.sin(t * 6))) * k)
+            self.create_oval(ax - r - g, cy - r - g, ax + r + g, cy + r + g, outline="#4c8dff", width=max(1, int(2 * k)),
+                             tags=("live",))
+        elif self.state == "loading":
+            a = (t * 360) % 360
+            self.create_arc(ax - r - 3 * k, cy - r - 3 * k, ax + r + 3 * k, cy + r + 3 * k, start=a, extent=90,
+                            style="arc", outline="#4c8dff", width=max(1, int(2 * k)), tags=("live",))
+        if self.state in ("playing", "paused"):
+            x = self.bars_x
+            bw, gap = max(2, int(3 * k)), max(1, int(2 * k))
+            for i in range(5):
+                if self.state == "playing":
+                    a = 0.35 + 0.65 * abs(math.sin(t * (5.0 + i * 1.7) + i))
+                else:
+                    a = 0.25
+                bh = int(18 * k * a)
+                x0 = x - (i + 1) * (bw + gap)
+                if x0 < getattr(self, "controls_right", 0) + gap:
+                    break
+                self.create_rectangle(x0, cy - bh // 2, x0 + bw, cy + bh // 2, fill=ACCENT, outline="", tags=("live",))
+
+    def _button(self, x, cy, text, tag, accent=False):
+        k = self.k
+        r = int(13 * k)
+        fill, ink = (ACCENT, "#ffffff") if accent else ("#e4e9f1", self.INK)
+        self.create_oval(x, cy - r, x + 2 * r, cy + r, fill=fill, outline="", tags=(tag,))
+        self.create_text(x + r, cy, text=text, fill=ink, font=("Segoe UI Symbol", max(7, int(8 * k))), tags=(tag,))
+        return x + 2 * r + int(6 * k)
+
+    def _chip(self, x, cy, text, tag, on):
+        k, f = self.k, self.fonts["chip"]
+        w = line_width(text, f) + int(14 * k)
+        h = f.metrics("linespace") + int(8 * k)
+        fill, ink = ("#dbe7ff", ACCENT) if on else ("#e4e9f1", self.INK)
+        RtlCanvas._round(self, x, cy - h // 2, x + w, cy + h // 2, h // 2, fill, tags=(tag,))
+        draw_line(self, text, x + w - int(7 * k), cy - f.metrics("linespace") // 2, f, ink, tags=(tag,))
+        return x + w + int(5 * k)
+
+    def _toggle(self, x, cy, opts, cur, tag):
+        k, f = self.k, self.fonts["chip"]
+        h = f.metrics("linespace") + int(8 * k)
+        ws = [line_width(t, f) + int(12 * k) for t, _v in opts]
+        RtlCanvas._round(self, x, cy - h // 2, x + sum(ws), cy + h // 2, h // 2, "#e4e9f1", tags=(tag,))
+        xx = x
+        for (text, val), w in zip(opts, ws):
+            if val == cur:
+                RtlCanvas._round(self, xx + 1, cy - h // 2 + 1, xx + w - 1, cy + h // 2 - 1, h // 2 - 1,
+                                           ACCENT, tags=(tag, "lang_" + val))
+            draw_line(self, text, xx + w - int(6 * k), cy - f.metrics("linespace") // 2, f,
+                      "#ffffff" if val == cur else self.INK, tags=(tag, "lang_" + val))
+            self.create_rectangle(xx, cy - h // 2, xx + w, cy + h // 2, outline="", fill="", tags=(tag, "lang_" + val))
+            xx += w
+        return xx + int(5 * k)
+
+    def _click(self, e):
+        items = self.find_overlapping(e.x - 1, e.y - 1, e.x + 1, e.y + 1)
+        tags = set()
+        for i in items:
+            tags.update(self.gettags(i))
+        if "play" in tags:
+            self.p.voice_play()
+        elif "stop" in tags:
+            self.p.voice_stop()
+        elif "lang_he" in tags or "lang_en" in tags:
+            self.p.voice_set(lang="he" if "lang_he" in tags else "en")
+        elif "rate" in tags:
+            rates = GV.RATES
+            cur = self.p.voice_cfg["rate"]
+            self.p.voice_set(rate=rates[(rates.index(cur) + 1) % len(rates)] if cur in rates else 1.0)
+        elif "auto" in tags:
+            self.p.voice_set(auto=not self.p.voice_cfg["auto"])
 
 
 class GuidePanel(tk.Frame):
@@ -56,11 +259,18 @@ class GuidePanel(tk.Frame):
         self._review_ranges = None
         self._typing_job = None
         self._live = None                               # project with the value being typed (before refresh)
+        v = st.get("voice") or {}
+        self.voice_cfg = {"lang": v.get("lang") if v.get("lang") in GV.LANGS else "he",
+                          "auto": bool(v.get("auto", False)),
+                          "rate": v.get("rate") if v.get("rate") in GV.RATES else 1.0}
+        self.voice_avail = {}                           # lang -> True / False once known
+        self._voice_job = None
 
         self.head = tk.Canvas(self, height=int(78 * self.k), bg=HEAD_BG, highlightthickness=0)
         self.head.pack(fill="x")
         self.head.bind("<Configure>", lambda e: self._draw_head())
         body = tk.Frame(self, bg=SURFACE)
+        self._body = body
         body.pack(fill="both", expand=True)
         self.doc = RtlCanvas(body, scale=self.k)
         sb = ttk.Scrollbar(body, orient="vertical", command=self.doc.yview)
@@ -72,11 +282,117 @@ class GuidePanel(tk.Frame):
         self.foot.pack(fill="x", padx=int(10 * self.k), pady=int(10 * self.k))
 
         self.head.bind("<ButtonRelease-1>", self._head_click)
+        self.bar = NarratorBar(self, self)
+        self.bar.pack(fill="x", before=body)
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", before=body)
+        self.voice = GV.Narrator(self, self.bar.set_state)
+        self._check_voices()
+        try:
+            app.bind_all("<F9>", lambda e: (self.voice_play(), "break")[1])
+        except tk.TclError:
+            pass
         self.show_home() if not self.lesson_id or not G.lesson(self.lesson_id) else self.show_step(self.index)
 
     # ------------------------------------------------------------------ state
     def _save(self):
-        self.app.settings["guide"] = {"lesson": self.lesson_id, "step": self.index, "done": sorted(self.done)}
+        self.app.settings["guide"] = {"lesson": self.lesson_id, "step": self.index, "done": sorted(self.done),
+                                      "voice": dict(self.voice_cfg)}
+
+    # ------------------------------------------------------------------ voice
+    def _check_voices(self):
+        """Find out in the background which languages have a voice on this computer."""
+        res = {}
+
+        def work():
+            for lang in GV.LANGS:
+                res[lang] = GV.available(lang) is not None
+
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+
+        def poll():
+            if th.is_alive():
+                self.after(200, poll)
+                return
+            self.voice_avail.update(res)
+            self.bar.draw()
+
+        self.after(200, poll)
+
+    def voice_play(self):
+        """Listen / pause / resume (the play button, F9)."""
+        if self.voice.state in ("playing", "paused"):
+            self.voice.toggle_pause()
+        elif self.voice.state == "loading":
+            self.voice.stop()
+        else:
+            self.narrate()
+
+    def voice_stop(self):
+        self.voice.stop()
+
+    def voice_set(self, **kw):
+        self.voice_cfg.update(kw)
+        self._save()
+        restart = self.voice.state != "idle" and ("lang" in kw or "rate" in kw)
+        self.bar.draw()
+        if restart:
+            self.narrate()
+        elif kw.get("auto") and self.voice.state == "idle":
+            self.narrate()
+
+    def narrate(self):
+        """Say the current view in the chosen language."""
+        script = self._script(self.voice_cfg["lang"])
+        if script:
+            self.voice.speak(script, self.voice_cfg["lang"], self.voice_cfg["rate"])
+
+    def _impact_of(self, path):
+        return lambda: self._imp_res if self._imp_key and self._imp_key[0] == path else None
+
+    def _label(self, path):
+        f = self._field_spec(path)
+        return (f or {}).get("label")
+
+    def _script(self, lang):
+        if self.mode == "home":
+            return GV.home_script(lang, G.LESSONS, self.done)
+        if self.mode == "field" and self.field_path:
+            p = self.field_path
+            return GV.field_script(lang, p, self._value(p), self._project(), self._label(p), self._impact_of(p))
+        if self.mode == "review":
+            r = G.review(self._pages(), self.app.project, self.app._row_visible, self._value)
+            return GV.review_script(lang, r, self._review_ranges)
+        if self.mode == "step":
+            steps = self._steps()
+            if not steps:
+                return []
+            st = steps[min(self.index, len(steps) - 1)]
+            if st.get("fields"):
+                paths = st["fields"]
+                return GV.step_script(lang, self.lesson_id, st, {"project": self.app.project,
+                                                                  "values": {q: self._value(q) for q in paths}},
+                                      labels={q: self._label(q) for q in paths})
+            args = None
+            if st.get("path") and not getattr(self, "step_hidden", False):
+                p = st["path"]
+                args = {"path": p, "value": self._value(p), "project": self._project(), "label": self._label(p),
+                        "impact": self._impact_of(p)}
+            return GV.step_script(lang, self.lesson_id, st, args)
+        return []
+
+    def _view_changed(self):
+        """A new view is shown: stop the narration, and with auto-play say the new view."""
+        self.voice.stop()
+        if self._voice_job:
+            self.after_cancel(self._voice_job)
+            self._voice_job = None
+        if self.voice_cfg["auto"] and self.voice_avail.get(self.voice_cfg["lang"], True):
+            self._voice_job = self.after(450, self._auto_say)
+
+    def _auto_say(self):
+        self._voice_job = None
+        self.narrate()
 
     def _pages(self):
         """[(page, fields, workflow)] of the form for the tour and the review."""
@@ -169,6 +485,7 @@ class GuidePanel(tk.Frame):
         self.doc.set_blocks(blocks)
         self._buttons([("סגור את המדריך", lambda: self.app.toggle_guide(False), False)])
         self._draw_head()
+        self._view_changed()
 
     def start(self, lesson_id):
         self.lesson_id = lesson_id
@@ -202,6 +519,7 @@ class GuidePanel(tk.Frame):
         self._render_step(st, hidden)
         self._step_buttons()
         self._draw_head()
+        self._view_changed()
 
     def _step_buttons(self):
         steps = self._steps()
@@ -254,6 +572,7 @@ class GuidePanel(tk.Frame):
         self._render_field()
         self._field_buttons()
         self._draw_head()
+        self._view_changed()
 
     def _field_buttons(self):
         spec = []
@@ -393,6 +712,7 @@ class GuidePanel(tk.Frame):
         spec.append(("שיעורים", self.show_home, False))
         self._buttons(spec)
         self._draw_head()
+        self._view_changed()
 
     def _render_review(self, keep_scroll=False):
         self.doc.set_blocks([("title", "בדיקת כל הערכים")] + self._review_blocks(), keep_scroll=keep_scroll)
@@ -534,6 +854,14 @@ class GuidePanel(tk.Frame):
         self.hilited = None
 
     def close(self):
+        self.voice.stop()
+        if self._voice_job:
+            self.after_cancel(self._voice_job)
+            self._voice_job = None
+        try:
+            self.app.unbind_all("<F9>")
+        except tk.TclError:
+            pass
         self.impact.cancel()
         if self._typing_job:
             self.after_cancel(self._typing_job)

@@ -74,6 +74,24 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.15 - guide: spoken narration in Hebrew and English
+
+The interactive guide can be listened to. `trm4/guide_voice.py` builds the narration of the current view and says it
+sentence by sentence; the narrator strip of the panel (`guide_panel.NarratorBar`) shows a speaking avatar, the
+caption of the sentence and the controls. Nothing of it enters the model; template ranges are unchanged, the run IDs
+change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Teaching | The narrator teaches instead of reading the card: `trm4/guide_teach.py` holds a spoken lesson for each of the 41 core fields in both languages (opening, an intuitive explanation or analogy, the bottom line), the spoken lesson steps in Hebrew (`HE_STEPS`), and `FRAME`: openings, transitions, the reaction to the user's value and closings by impact rating, picked per field (stable) for every other field. |
+| Scripts | `field_script` (opening, idea, the user's value and the suggested one, why it matters, a feel for the numbers, source, system considerations, the common mistake, the computed effect on the ranges - evaluated when it is reached - and the bottom line), `step_script`, `group_script` (tour), `home_script`, `review_script`. |
+| Languages | The screen stays Hebrew; the listener chooses Hebrew or English. `trm4/guide_voice_en.py`: English narration of the 41 core fields, of every hand-written lesson step, the pages and the lessons. Other fields are said in English from their form label, impact rating and check result. |
+| Speech text | `speech(text, lang)`: units, symbols (delta T, sigma, F lambda / d, Cn2), ranges, powers of ten, menu paths and acronyms (letter by letter in Hebrew, with a word list). |
+| Voices | Recorded neural voices (`he-IL-AvriNeural`, `en-US-AndrewNeural`) for every fixed sentence, in `trm4/assets/voice/<lang>/<sha1>.mp3`, packaged with the application; the sentences that depend on the project are said live by the Windows voice (`trm4/assets/tts_windows.ps1`: Windows.Media.SpeechSynthesis, falling back to System.Speech). Playback through the Windows MCI player; no Python package is needed at run time. |
+| Tools | `tools/make_guide_voice.py` makes the missing recordings (needs `edge-tts` and the internet, at build time only), `--check` / `--prune` / `--stamp`; `assets/voice/en_sources.json` records the Hebrew source of each translation. |
+| Settings | `settings["guide"]["voice"]`: language, speed (0.9 - 1.3), auto-play on every new view. F9 = listen / pause. |
+| Tests | `tests/test_guide_voice.py`. |
+
 ## Version 2.14 - guide: size, weight and image defects
 
 `trm4/guide_design_he.py` adds a "system considerations" section to the field cards of the fields that drive the
