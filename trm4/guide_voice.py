@@ -65,6 +65,7 @@ _SYMBOLS = [  # (pattern, hebrew, english) - applied before the units
     (r"ΔT", "דלתא טי", "delta T"), (r"σ", "סיגמה", "sigma"), (r"τ0", "טאו אפס", "tau zero"), (r"τ", "טאו", "tau"),
     (r"λ", "למדא", "lambda"), (r"±", "פלוס מינוס ", "plus or minus "), (r"≤", " עד ", " at most "),
     (r"≈", " בערך ", " about "), (r"~", "בערך ", "about "), (r"²", " בריבוע", " squared"),
+    (r"³", " בשלישית", " cubed"), (r'לק"ג', "לקילוגרם", "per kilogram"), (r'ק"ג', "קילוגרם", "kilograms"),
     (r'ק"מ', "קילומטר", "kilometers"), (r'מ"מ', "מילימטר", "millimeters"), (r'ס"מ', "סנטימטר", "centimeters"),
 ]
 _NUM = r"[-+]?\d+(?:\.\d+)?"
@@ -86,6 +87,10 @@ def speech(text, lang):
     s = re.sub(r"[★⚠ⓘ✓✕•]", " ", s)
     s = s.replace("…", ".").replace("...", ".")
     s = re.sub(r"(\d(?:\.\d+)?)e([-+]?\d+)", lambda m: _sci(m, lang), s)           # 1e-14
+    s = re.sub(r"\$(\d+(?:\.\d+)?)k(?![A-Za-z])", lambda m: "$%d" % round(float(m.group(1)) * 1000), s)  # $1.4k
+    s = re.sub(r"\$([\d,]+)\s*[-–]\s*\$([\d,]+)", (r"\1 עד \2 דולר" if he else r"\1 to \2 dollars"), s)
+    s = re.sub(r"\$([\d,]+)", (r"\1 דולר" if he else r"\1 dollars"), s)
+    s = s.replace("∝", " פרופורציונלי ל" if he else " proportional to ")
     for pat, h, e in _SYMBOLS:
         s = re.sub(pat, h if he else e, s)
     s = re.sub(r"\bF/(\d+(?:\.\d+)?)", (r"אף \1" if he else r"F \1"), s)              # F/4 -> F 4
@@ -195,11 +200,134 @@ def _he_blocks(blocks, out):
             _add(out, b[2], "he")
 
 
+# ---- spoken style: screen text written for reading becomes text written for the ear
+_HE_CONTEXT_SKIP = ("בגלל", "בלי", "בדרך", "בעיקר", "ביחד", "בפועל", "בכל", "בזמן", "בערך", "ברוב", "במקום", "בין")
+
+
+def _lower_first(t):
+    t = str(t).strip()
+    w = t.split(" ", 1)[0]
+    return t if (len(w) > 1 and w[:2].isupper()) else t[:1].lower() + t[1:]
+
+
+def _clause(t, lang):
+    """One screen sentence said aloud: equations, brackets and dashes become spoken connections."""
+    t = str(t).strip()
+    eq = [x.strip() for x in t.rstrip(".").split(" = ")]
+    if len(eq) > 2:                              # "A = B = C = D": a chain of consequences
+        mid = (", כלומר " if lang == "he" else ", which means ")
+        then = (", ולכן " if lang == "he" else ", and so ")
+        t = eq[0] + mid + eq[1] + "".join(then + x for x in eq[2:]) + "."
+    elif len(eq) == 2 and len(eq[0].split()) > 1 and not re.search(r"[\d/]", eq[0][-3:]):
+        t = eq[0] + (" פירושו " if lang == "he" else " means ") + eq[1] + "."   # "A = B" in prose
+    t = re.sub(r"\s*\((גמישות|elasticity)\s+([^)]*)\)", lambda m: (", עם גמישות של " if lang == "he"
+                                                                   else ", with an elasticity of ") + m.group(2), t)
+    t = re.sub(r"\s*\(([^()]{1,80})\)", r", \1,", t)
+    t = re.sub(r",\s*([.;:])", r"\1", t)
+    return t
+
+
+def _connect(sentences, lang):
+    """Discourse markers between the sentences of a paragraph: an example, a contrast, a consequence."""
+    out, contexts = [], 0
+    for i, x in enumerate(sentences):
+        x = _clause(x, lang)
+        if i == 0:
+            out.append(x)
+            continue
+        w = x.split(" ", 1)[0]
+        if lang == "he":
+            ctx = (w.startswith("ב-") or (w.startswith("ב") and len(w) > 2 and not w.startswith(_HE_CONTEXT_SKIP)))
+            if ctx:
+                x = ("למשל, " if contexts == 0 else "לעומת זאת, ") + x
+                contexts += 1
+            elif w[:1].isdigit() or w in ("מעבר", "חציית", "הזזה"):
+                x = "למשל, " + x
+            elif w == "בלי":
+                x = "ושימו לב: " + x
+        else:
+            ctx = w in ("In", "At", "On", "For", "With", "By") and i > 0
+            if ctx:
+                x = ("For example, " if contexts == 0 else "By contrast, ") + _lower_first(x)
+                contexts += 1
+            elif w[:1].isdigit() or w in ("Going", "Halving", "Moving"):
+                x = "For example, " + _lower_first(x)
+            elif w == "Without":
+                x = "And note: " + _lower_first(x)
+        out.append(x)
+    return out
+
+
+def _para(out, text, lang, lead=""):
+    """A paragraph of reference text, said with connections; `lead` is the spoken question that opens it."""
+    if not text:
+        return
+    sents = _connect(sentences(text), lang)
+    if lead:
+        sents[0] = lead + " " + sents[0]
+    for x in sents:
+        out.append((x, x))
+
+
+def _typical(items, lang):
+    """Typical values as one spoken thought: 'in a handheld camera, 25 to 75 mm; and in ...'."""
+    parts = []
+    for it in items:
+        it = str(it).strip().rstrip(".")
+        if ": " not in it:
+            parts.append(it)
+            continue
+        k, v = it.split(": ", 1)
+        if lang == "he":
+            if k.startswith(("יש ", "אין ")):
+                k = "אם " + k
+            elif not k.startswith(("כש", "אם ", "ב")):
+                k = ("ב-" + k) if not ("\u0590" <= k[:1] <= "\u05ff") else "ב" + k
+        else:
+            low = _lower_first(k)
+            verbish = re.search(r"\b(is|are|gives|has|have|needs|known|sees)\b", low)
+            k = ("if " if verbish else "for ") + low
+        parts.append("%s, %s" % (k, v))
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0] + "."
+    last = ("ו" + parts[-1]) if lang == "he" else ("and " + parts[-1])
+    return "; ".join(parts[:-1]) + "; " + last + "."
+
+
+def _source(text, lang):
+    """The source as a spoken answer: 'the lens datasheet' -> 'the source is the lens datasheet'."""
+    if lang != "he":
+        return text
+    w = str(text).split(" ", 1)[0]
+    if (w.endswith("ו") and len(w) > 3) or w.startswith(("אם", "כש", "אלה", "יש", "אין")):   # an instruction
+        return text
+    return "המקור הוא " + text
+
+
+def _mistakes(items, lang):
+    items = [str(m).strip().rstrip(".") for m in items if str(m).strip()][:2]
+    if not items:
+        return []
+    if lang == "he":
+        out = ["ועוד טיפ מניסיון. הטעות שאני פוגש הכי הרבה היא %s." % items[0]]
+        if len(items) > 1:
+            out.append("וטעות נוספת, שכדאי להיזהר ממנה: %s." % items[1])
+    else:
+        out = ["And a tip from experience. The mistake I see most often is %s." % _lower_first(items[0])]
+        if len(items) > 1:
+            out.append("Another one to watch out for: %s." % _lower_first(items[1]))
+    return out
+
+
 def field_script(lang, path, value, project, label=None, impact=None, brief=False):
-    """Spoken lesson on a field: an opening, the idea (an analogy for the core fields), the check of the user's own
-    value, why it matters, a feel for the numbers, where the value comes from, the common mistake, the computed effect
-    on the ranges and the bottom line.  impact: callable returning the guide_impact result (or None while running).
-    brief: the version of the walk through a group (opening, idea, the user's value, why, bottom line)."""
+    """Spoken lesson on a field, built the way a teacher explains (Feynman: simple words and an analogy, then the
+    listener's own case, then a short recap), with signposts between the parts:
+      opening -> "so what is it?" the idea -> "why does it matter?" -> "which numbers do you meet?" -> "where from?"
+      -> "now let's look at yours": the value, the suggestion, the effect on the ranges -> a tip -> "to sum up".
+    impact: callable returning the guide_impact result (None while running).  brief: the walk through a group
+    (opening, idea, why, the user's value, recap)."""
     e = G.param(path)
     if not e:
         return []
@@ -210,7 +338,8 @@ def field_script(lang, path, value, project, label=None, impact=None, brief=Fals
     sug = G.suggestion(res)
     pick = lambda part, *sub: T.pick(lang, part, key, *sub)
     lesson = (T.LESSON.get(key) or {}).get(lang)
-    if lang == "he":
+    he = lang == "he"
+    if he:
         title, what, why = e["title"], e.get("what"), e.get("why")
         typical, source, mistakes = e.get("typical"), e.get("source"), e.get("mistakes")
     else:
@@ -218,61 +347,74 @@ def field_script(lang, path, value, project, label=None, impact=None, brief=Fals
         title = en.get("title") or label or path
         what, why = en.get("what"), en.get("why")
         typical, source, mistakes = en.get("typical"), en.get("source"), en.get("mistakes")
-    # opening and the idea
+    t = _bare(title)
+    # 1. opening, and what we are going to cover
+    _add(out, lesson[0] if lesson else T.intro(lang, key, imp, t), lang)
+    if not brief and imp >= 2:
+        _add(out, pick("preview"), lang)
+    # 2. the idea
     if lesson:
-        _add(out, lesson[0], lang)
-        _add(out, lesson[1], lang)
-    else:
-        _add(out, pick("intro", imp).format(t=_bare(title)), lang)
-        if what:
-            _add(out, what, lang, pick("idea") + " ")
-    # the user's own value, right after the idea: this is where a teacher looks at the student's work
+        _para(out, lesson[1], lang, pick("idea_q"))
+    elif what:
+        _para(out, what, lang, pick("idea_q"))
+    # 3. why it matters
+    if why:
+        _para(out, why, lang, pick("why"))
+    if not brief:
+        # 4. a feel for the numbers, and where the value comes from
+        if typical:
+            _add(out, pick("typical") + " " + _typical(typical, lang), lang)
+        if source and imp:
+            _para(out, _source(source, lang), lang, pick("source"))
+    # 5. the listener's own value
     if res:
         v = value_text(value, lang)
+        _add(out, pick("yours"), lang)
         if res[0] == "ok":
             _add(out, pick("ok").format(v=v), lang)
         else:
             _add(out, pick("warn").format(v=v), lang)
-            if lang == "he":
-                _add(out, res[1], lang)
+            if he:
+                _para(out, res[1], lang, "והסיבה:")
             else:
                 _add(out, FRAME_EN_WARN, lang)
         if sug is not None:
             _add(out, pick("suggest").format(s=value_text(sug, lang)), lang)
-    # why, numbers, source, mistakes
-    if why:
-        _add(out, why, lang, pick("why") + " ")
-    if brief:
-        _add(out, lesson[2] if lesson else pick("bottom", imp), lang)
-        return out
-    if typical:
-        _add(out, pick("typical") + " " + _sentence_join(typical, lang), lang)
-    if source and imp:
-        _add(out, source, lang, pick("source") + " ")
-    if lang == "he" and project is not None:
-        try:
-            from . import guide_design_he as DS
-            design = DS.blocks(path, project)
-        except Exception:
-            design = []
-        lis = [b[1] for b in design if b[0] == "li"][:2]
-        if lis:
-            _add(out, "ועוד שיקול, מעבר לטווח: מה הערך הזה מחייב מהמערכת עצמה. הפירוט המלא מופיע בכרטיס.", lang)
-            for x in lis:
-                _add(out, re.sub(r"^(משקל / גודל|תמונה):\s*", "", x), lang)
-    if mistakes:
-        _add(out, pick("mistakes") + " " + _sentence_join(mistakes[:2], lang), lang)
-    if lang == "en" and not EN.PARAMS.get(key):
-        _add(out, "The card on the screen has the full explanation of this field, in Hebrew.", lang)
-    # the computed effect, then the bottom line
-    if impact is not None and imp != 0:
-        def later():                                    # None while the model is still running
-            r = impact()
-            if r is None:
-                return None
-            body = impact_script(lang, r)
-            return ([(pick("impact"), pick("impact"))] + body) if body else []
-        out.append(later)
+    if not brief:
+        if impact is not None and imp != 0:
+            def later():                                # None while the model is still running
+                r = impact()
+                if r is None:
+                    return None
+                body = impact_script(lang, r)
+                return ([(pick("impact"), pick("impact"))] + body) if body else []
+            out.append(later)
+        if he and project is not None:
+            try:
+                from . import guide_design_he as DS
+                design = DS.blocks(path, project)
+            except Exception:
+                design = []
+            lis = [x[1] for x in design if x[0] == "li"]
+            size = [x for x in lis if x.startswith("משקל")][:1]
+            cost = [x for x in lis if x.startswith("ייצור")][:1]
+            est = [ln for x in design if x[0] == "box" for ln in x[2][1:]
+                   if ln.startswith(("חומר הגלם", "מקרר Stirling"))][:1]
+            if size or cost or est:
+                _add(out, "ודבר אחד שחשוב לדעת, מעבר לטווח: מה הערך הזה מחייב מהמערכת עצמה, במשקל, בייצור ובכסף.",
+                     lang)
+                for x in size:
+                    _para(out, re.sub(r"^משקל / גודל:\s*", "", x), lang, "מבחינת משקל וגודל,")
+                for x in cost:
+                    _para(out, re.sub(r"^ייצור ועלות:\s*", "", x), lang, "ומבחינת ייצור ועלות,")
+                for x in est:
+                    _para(out, x, lang, "ובמערכת שלכם, בהערכה גסה:")
+        # 6. a tip
+        for x in _mistakes(mistakes or [], lang):
+            _add(out, x, lang)
+        if not he and not EN.PARAMS.get(key):
+            _add(out, "The card on the screen has the full explanation of this field, in Hebrew.", lang)
+    # 7. recap
     _add(out, lesson[2] if lesson else pick("bottom", imp), lang)
     return out
 
@@ -409,32 +551,53 @@ def group_script(lang, paths, labels, project, values):
     return out
 
 
-WALK = {
-    "he": {"start": "בקבוצה הזו %d שדות. אעבור איתכם על כל אחד מהם, ואסמן אותו בטופס כדי שתראו בדיוק על מה מדובר.",
-           "start1": "בקבוצה הזו שדה אחד. אסמן אותו בטופס ונעבור עליו.",
-           "next": ["השדה הבא.", "ממשיכים.", "ועכשיו, השדה הבא."],
-           "end": "סיימנו את הקבוצה הזו."},
-    "en": {"start": "This group has %d fields. I will go through each of them with you, and highlight it in the form "
-                    "so you can see exactly what we are talking about.",
-           "start1": "This group has one field. I will highlight it in the form and we will go over it.",
-           "next": ["The next field.", "Moving on.", "And now, the next field."],
-           "end": "We have finished this group."},
-}
+def _names(titles, lang):
+    titles = [t for t in titles if t]
+    if len(titles) <= 1:
+        return "".join(titles)
+    if lang == "he":
+        last = titles[-1]
+        return ", ".join(titles[:-1]) + (" ו-" if not ("\u0590" <= last[:1] <= "\u05ff") else " ו") + last
+    return ", ".join(titles[:-1]) + " and " + titles[-1]
+
+
+def _title_of(path, lang, label=None):
+    e = G.param(path) or {}
+    if lang == "he":
+        return _bare(e.get("title", path))
+    return _bare((EN.PARAMS.get(kb_key(path)) or {}).get("title") or label or path)
 
 
 def walk_script(lang, items, on_field, on_end, intro=()):
-    """Narration that walks through fields one by one.  items: [dict(path, value, project, label)];
-    on_field(path, i, n) is called (highlight, card) when the narration reaches a field, on_end() after the last."""
+    """Narration that walks through fields one by one, as a teacher at the board: it says what the group holds
+    (preview), explains each field while it is highlighted (on_field(path, i, n) is called when the narration reaches
+    it), closes each one before opening the next (callback), and recaps the group at the end (on_end())."""
     out = list(intro)
+    he = lang == "he"
+    titles = [_title_of(it["path"], lang, it.get("label")) for it in items]
     n = len(items)
-    w = WALK[lang]
-    _add(out, (w["start"] % n) if n > 1 else w["start1"], lang)
+    if n == 1:
+        _add(out, "בקבוצה הזו יש שדה אחד: %s. אסמן אותו בטופס ונעבור עליו." % titles[0] if he else
+             "This group has one field: %s. I will highlight it in the form and we will go over it." % titles[0], lang)
+    elif n > 1:
+        if n <= 5:
+            _add(out, ("בקבוצה הזו יש %d שדות: %s." % (n, _names(titles, lang))) if he else
+                 ("This group has %d fields: %s." % (n, _names(titles, lang))), lang)
+        else:
+            _add(out, ("בקבוצה הזו יש %d שדות." % n) if he else ("This group has %d fields." % n), lang)
+        _add(out, "אעבור איתכם על כל אחד מהם, ואסמן אותו בטופס כדי שתראו בדיוק על מה מדובר." if he else
+             "I will go through each of them with you, and highlight it in the form so you can see exactly what "
+             "we are talking about.", lang)
     for i, it in enumerate(items):
-        out.append({"do": lambda p=it["path"], i=i: on_field(p, i, n)})
         if i:
-            _add(out, w["next"][i % len(w["next"])], lang)
+            _add(out, T.transition(lang, it["path"], titles[i - 1], titles[i]), lang)
+        out.append({"do": lambda p=it["path"], i=i: on_field(p, i, n)})
         out += field_script(lang, it["path"], it.get("value"), it.get("project"), it.get("label"), brief=True)
-    _add(out, w["end"], lang)
+    if n > 1:
+        _add(out, ("זהו, סיימנו את הקבוצה. עברנו על %s." % _names(titles, lang)) if he and n <= 5 else
+             "זהו, סיימנו את הקבוצה." if he else
+             ("That's it for this group. We covered %s." % _names(titles, lang)) if n <= 5 else
+             "That's it for this group.", lang)
     out.append({"do": on_end})
     return out
 
@@ -506,8 +669,9 @@ def static_texts(lang):
         for st in les["steps"]:
             take(step_script(lang, les["id"], st))
     take(home_script(lang, G.LESSONS, set()))
-    take(walk_script(lang, [], None, None)[1:-1])
-    out += [speech(t, lang) for t in WALK[lang]["next"]] + [speech(WALK[lang]["start1"], lang)]
+    out.append(speech("אעבור איתכם על כל אחד מהם, ואסמן אותו בטופס כדי שתראו בדיוק על מה מדובר." if lang == "he" else
+                      "I will go through each of them with you, and highlight it in the form so you can see exactly "
+                      "what we are talking about.", lang))
     for path in G.PARAMS:
         if lang == "en" and path not in EN.PARAMS:
             continue

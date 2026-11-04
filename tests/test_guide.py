@@ -210,10 +210,27 @@ class SystemConsiderations(unittest.TestCase):
         p = merged(LWIR)
         for path in ("optics.f_mm", "optics.D_mm", "detector.pitch_h_um", "imager_type", "stab.jitter_preset"):
             heads = [b[1] for b in GH.field_blocks(path, value_of(p, path), p) if b[0] == "h"]
-            self.assertIn("שיקולי מערכת: גודל, משקל ואיכות תמונה", heads, path)
+            self.assertIn("שיקולי מערכת: גודל, משקל, ייצור, עלות ואיכות תמונה", heads, path)
         self.assertEqual(DS.blocks("name", p), [])
-        for path in DS.SYSTEM:
+        for path in list(DS.SYSTEM) + list(DS.COST):
             self.assertIsNotNone(GH.param(path), path)
+
+    def test_manufacturing_and_cost(self):
+        """Manufacturing and cost points on the cards, with the live germanium and cryocooler estimates."""
+        cooled, uncooled, vis = merged(LWIR), merged(UNCOOLED), merged(VIS)
+        lis = [b[1] for b in DS.blocks("optics.D_mm", cooled) if b[0] == "li"]
+        self.assertTrue(any(t.startswith("ייצור ועלות:") for t in lis))
+        lines = lambda path, p: [ln for b in DS.blocks(path, p) if b[0] == "box" for ln in b[2]]
+        ge = [ln for ln in lines("optics.D_mm", cooled) if ln.startswith("חומר הגלם (גרמניום)")]
+        self.assertEqual(len(ge), 1)
+        e = DS.estimates(cooled)
+        lo = e["glass_g"] / 1000.0 * DS.GE_WASTE[0] * DS.GE_USD_KG
+        self.assertIn(DS._usd(lo), ge[0])
+        big = DS.estimates(merged(LWIR, optics__D_mm=2 * cooled["optics"]["D_mm"]))
+        self.assertGreater(big["glass_g"], 3 * e["glass_g"])             # material cost grows faster than D
+        self.assertTrue(any(ln.startswith("מקרר Stirling") for ln in lines("imager_type", cooled)))
+        self.assertFalse(any(ln.startswith("מקרר Stirling") for ln in lines("imager_type", uncooled)))
+        self.assertFalse(any(ln.startswith("חומר הגלם") for ln in lines("optics.D_mm", vis)))   # glass, no Ge
 
 
 class Lessons(unittest.TestCase):

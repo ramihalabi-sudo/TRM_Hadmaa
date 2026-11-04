@@ -74,6 +74,20 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.17 - spoken guide: the flow of a spoken explanation
+
+`guide_voice.field_script` follows the structure of a spoken lesson, with a signpost question opening each part
+(`guide_teach.FRAME`: preview, idea, why, numbers, source, "now let's look at yours", the effect on the ranges, a tip,
+the recap). Screen text is rewritten for the ear: `_clause` (an "A = B = C" chain becomes "A, that is B, and so C";
+a single "=" in prose becomes "means"; brackets become asides), `_connect` (discourse markers: "for example" for the
+first context sentence, "by contrast" for the next), `_typical` (the typical values as one sentence), `_source` and
+`_mistakes`. `walk_script` previews the fields of the group, bridges between fields (`guide_teach.transition`) and
+recaps the group. `guide_design_he.COST` adds manufacturing and cost points to the system considerations of 16
+fields, and `_cost_lines` live estimates: the germanium raw material of the lens (glass mass x 1.5-3 for machining
+losses x 4,100 USD/kg, the 2025 USGS average) and the Stirling cooler life (8,000-27,000 h); sources in
+`research_notes/system_considerations_he.md`, section 4a. The approach follows writing-for-the-ear guidance (short sentences, rhetorical questions,
+introduction / body / recap) and the listening studies on discourse markers in lectures.
+
 ## Version 2.16 - spoken guide: walk through the fields, follow the cursor
 
 `guide_voice.walk_script` walks a group of fields: before each field an action segment (`{"do": fn}`, run by the

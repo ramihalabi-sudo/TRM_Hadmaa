@@ -22,6 +22,9 @@ from . import presets as P
 MATERIAL = {"LWIR": ("גרמניום (Ge)", 126e-6, 5.33), "MWIR": ("סיליקון / גרמניום (Si / Ge)", 63e-6, 2.33),
             "SWIR": ("זכוכית אופטית", -1.0e-6, 3.0), "VIS/NIR": ("זכוכית אופטית", -1.3e-6, 2.6)}
 ALPHA_AL = 23e-6                      # aluminium housing CTE [1/K]
+GE_USD_KG = 4100.0                    # germanium metal, 2025 average (USGS Mineral Commodity Summaries 2026)
+GE_WASTE = (1.5, 3.0)                 # blank mass / finished element mass (generating, grinding, rejects)
+COOLER_H = (8000, 27000)              # Stirling cryocooler MTTF range [h] (vendor and Teledyne FLIR FL-100 data)
 DELTA_T = 40.0                        # operating temperature excursion from the focus temperature [K]
 REF_F, REF_THETA = 2.0, math.radians(2.5)   # reference "easy" lens for the aberration indicators
 
@@ -79,7 +82,7 @@ def estimates(p):
     rN = 0.5 / ifov_urad * 1000.0                             # cy/mrad
     return {
         "f": f, "D": D, "F": F, "lam": lam, "band": band, "material": mat, "gamma": gamma, "diag_mm": diag_mm,
-        "theta_deg": math.degrees(theta), "hfov_deg": hfov, "ifov_urad": ifov_urad, "cooled": cooled,
+        "glass_g": glass_g, "theta_deg": math.degrees(theta), "hfov_deg": hfov, "ifov_urad": ifov_urad, "cooled": cooled,
         "rear_stop": rear_stop, "track": track, "front": front, "n_el": n_el, "lens_g": lens_g, "dof_um": dof,
         "defocus_um": defocus, "spherical": (REF_F / F) ** 3, "coma": th * (REF_F / F) ** 2,
         "astig": th * th * (REF_F / F), "distortion": _distortion(math.degrees(theta)),
@@ -254,22 +257,83 @@ SYSTEM = {
 }
 
 
+# manufacturing difficulty and cost, by field (sources: research_notes/system_considerations_he.md, section 7)
+COST = {
+    "optics.f_mm": ["מוקד ארוך = יותר חומר ועדשה ארוכה; בטלפוטו גם יותר אלמנטים, וכל אלמנט מוסיף חומר, ליטוש, ציפוי "
+                    "ויישור.", "זום רציף יקר ומורכב בהרבה מעדשה קבועה או משני שדות: מנגנון, יישור ואטימות."],
+    "optics.D_mm": ["עלות העדשה עולה מהר עם הקוטר: יותר חומר, גביש גדול יותר ויותר פסולת בעיבוד. לפי ספקים, עדשה "
+                    "ב-F/1.0 עולה פי 2-3 מאותה עדשה ב-F/1.5.", "בגרמניום, גידול גביש בקוטר של 100 mm ומעלה הוא אתגר "
+                    "ייצורי בפני עצמו."],
+    "optics.F_general": ["F קטן = קוטר גדול ויותר אלמנטים או משטחים אספריים (חריטת יהלום): יקר יותר לייצור ולהרכבה."],
+    "optics.D_obsc_mm": ["אופטיקה מחזירה (מראות): זולה וקלה יותר בקוטר גדול, אבל היישור רגיש ודורש מבנה יציב."],
+    "optics.tau_opt": ["ציפוי נגד החזרות (AR) איכותי ל-LWIR יכול להגיע ל-20%-30% מעלות ייצור העדשה (לפי ספקים)."],
+    "category": ["LWIR ו-MWIR נשענים על גרמניום: חומר יקר ותנודתי. הממוצע ב-2025 היה כ-$4,100 לק\"ג (USGS), פי 4 "
+                 "מתחילת 2023, אחרי מגבלות הייצוא של סין.", "בכמויות של יותר מ-1,000 יחידות, עדשות כלקוגניד בכבישה "
+                 "(molding) זולות יותר מגרמניום בחריטת יהלום (לפי ספקים); בכמויות קטנות - להפך.",
+                 "SWIR עם InGaAs: גלאי יקר בהרבה מ-CMOS, ולעיתים כפוף למגבלות ייצוא (ITAR / EAR)."],
+    "imager_type": ["מקורר: ליבה יקרה בהרבה, ומקרר Stirling עם אורך חיים של כ-8,000-27,000 שעות - צריך לתכנן "
+                    "תחזוקה והחלפה, וזה חלק מעלות המחזור.", "לא-מקורר: בלי חלקים נעים, אורך חיים ארוך ועלות נמוכה. "
+                    "אבל במוקד ארוך (לפי מקור בתעשייה, מעל ~350 mm) העדשה המהירה שהוא צריך עלולה לעלות יותר ממערכת "
+                    "מקוררת שלמה."],
+    "detector.pitch_h_um": ["פיקסל קטן = שבב קטן = יותר שבבים בפרוסה, ולכן גלאי זול יותר. אבל אם הוא מחייב עדשה "
+                            "מהירה יותר (F/1), החיסכון יכול להיעלם בעלות העדשה."],
+    "detector.n_h": ["פורמט גדול = שבב גדול: פחות שבבים בפרוסה ותפוקה (yield) נמוכה יותר, ולכן גלאי יקר יותר - "
+                     "ועדשה גדולה יותר."],
+    "detector.cuton_um": ["פס רחב מחייב תיקון כרומטי: עוד אלמנטים או חומרים מיוחדים, ולכן עלות גבוהה יותר."],
+    "detector.cutoff_um": ["פס רחב מחייב תיקון כרומטי: עוד אלמנטים או חומרים מיוחדים, ולכן עלות גבוהה יותר."],
+    "basic.microscan": ["מנגנון נוסף שצריך לייצר, לכייל ולתחזק."],
+    "stab.jitter_preset": ["ככל שדרישת הייצוב מחמירה, הגימבל צריך חיישנים ומנועים מדויקים יותר: העלות והמשקל עולים "
+                           "מהר."],
+    "stab.rand_h_mrad": ["ככל שדרישת הייצוב מחמירה, הגימבל צריך חיישנים ומנועים מדויקים יותר: העלות והמשקל עולים "
+                         "מהר."],
+    "stab.jitter_mode": ["ככל שדרישת הייצוב מחמירה, הגימבל צריך חיישנים ומנועים מדויקים יותר: העלות והמשקל עולים "
+                         "מהר."],
+    "display.observation": ["עינית איכותית היא רכיב אופטי נוסף לייצור; מסך הוא בדרך כלל רכיב מדף, זול יחסית."],
+}
+
+COST_KEYS = {"optics.f_mm": ("ge", "cooler"), "optics.D_mm": ("ge",), "optics.F_general": ("ge",),
+             "category": ("ge",), "imager_type": ("cooler",), "detector.pitch_h_um": ("ge",)}
+
+
+def _usd(x):
+    return ("$%.0f" % x) if x < 1000 else ("$%.1fk" % (x / 1000.0))
+
+
+def _cost_lines(e, path):
+    """Live cost and maintenance estimates of a field card."""
+    L = []
+    for k in COST_KEYS.get(path, ()):
+        if k == "ge" and "גרמניום" in e["material"]:
+            share = 1.0 if e["band"] == "LWIR" else 0.5            # MWIR: part of the elements are silicon
+            kg = e["glass_g"] * share / 1000.0
+            lo, hi = kg * GE_WASTE[0] * GE_USD_KG, kg * GE_WASTE[1] * GE_USD_KG
+            L.append("חומר הגלם (גרמניום) לבדו: כ-%s-%s לעדשה, לפי $%s לק\"ג (ממוצע 2025) וכולל פחת עיבוד - "
+                     "לפני ליטוש, ציפוי, בית והרכבה." % (_usd(lo), _usd(hi), "{:,.0f}".format(GE_USD_KG)))
+        elif k == "cooler" and e["cooled"]:
+            lo, hi = COOLER_H
+            L.append("מקרר Stirling: כ-%s-%s שעות עד תחזוקה; בעבודה של 8 שעות ביום, כ-%.0f-%.0f שנים." % (
+                "{:,}".format(lo), "{:,}".format(hi), lo / 8 / 365, hi / 8 / 365))
+    return L
+
+
 def blocks(path, p):
     """RtlCanvas blocks of the system-considerations section of a field card ([] when it has none)."""
     s = SYSTEM.get(path)
-    if not s:
+    cost = COST.get(path, [])
+    if not s and not cost:
         return []
-    swap, image, keys = s
-    e = estimates(p) if keys else None
-    out = [("h", "שיקולי מערכת: גודל, משקל ואיכות תמונה")]
+    swap, image, keys = s or ([], [], ())
+    e = estimates(p) if (keys or COST_KEYS.get(path)) else None
+    out = [("h", "שיקולי מערכת: גודל, משקל, ייצור, עלות ואיכות תמונה")]
     out += [("li", "משקל / גודל: " + t) for t in swap]
+    out += [("li", "ייצור ועלות: " + t) for t in cost]
     out += [("li", "תמונה: " + t) for t in image]
     if e:
-        lines = _lines(e, keys, p)
+        lines = _lines(e, keys, p) + _cost_lines(e, path)
         if lines:
             out.append(("box", "plain", ["במערכת שלכם (הערכה הנדסית מסדר ראשון)"] + lines, True))
     out.append(("muted", "שיקולים אלה לא נכנסים לטווח של TRM4 (שמחושב על הציר), חוץ ממודל הסטיות (q / blur) או MTF "
-                         "מיובא. הם הערכה ראשונית - תכנון אופטי ודפי נתונים מחליפים אותם."))
+                         "מיובא. הם הערכה ראשונית - תכנון אופטי, דפי נתונים והצעות מחיר מחליפים אותם."))
     return out
 
 

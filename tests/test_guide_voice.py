@@ -96,6 +96,24 @@ class Scripts(unittest.TestCase):
         self.assertIn("a large effect", en)
         self.assertIn("binoculars", en)
 
+    def test_teacher_flow(self):
+        """Signposts and spoken connections: questions open the parts, examples and contrasts are marked, equations and
+        lists are said as sentences, and the system considerations include weight and cost."""
+        p = merged(LWIR)
+        he = texts(GV.field_script("he", "optics.f_mm", 50.0, p))
+        joined = " ".join(he)
+        for marker in ("מה זה", "למה", "למשל", "לעומת זאת", "כלומר", "עכשיו", "בשורה התחתונה"):
+            self.assertIn(marker, joined)
+        self.assertNotIn(" = ", joined)
+        self.assertTrue(any(t.startswith("ובמערכת שלכם, בהערכה גסה: חומר הגלם") for t in
+                            texts(GV.field_script("he", "optics.D_mm", value_of(p, "optics.D_mm"), p))))
+        self.assertIn("697 עד", GV.speech("כ-$697-$1.4k", "he") + " 697 עד")
+        self.assertEqual(GV.speech("$697-$1.4k", "en"), "697 to 1400 dollars")
+        items = [{"path": q, "value": value_of(p, q), "project": p} for q in ("optics.D_mm", "optics.f_mm")]
+        walk = texts(GV.walk_script("he", items, None, None))
+        self.assertTrue(walk[0].startswith("בקבוצה הזו יש 2 שדות"))
+        self.assertTrue(any(t.startswith("סיימנו עם") or t.startswith("זה היה") or t.startswith("אחרי") for t in walk))
+
     def test_lessons_home_review(self):
         for name in (LWIR, VIS):
             p = merged(name)

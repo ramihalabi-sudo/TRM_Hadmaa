@@ -444,40 +444,47 @@ LESSON = {
     },
 }
 
-# FRAME[lang][part][impact] -> variants; {t} is the field title.  The variant is picked per field (stable).
+# FRAME[lang][part] -> variants (by impact where it is a dict); picked per field so the same card always sounds the
+# same, and different fields do not sound like a template.  The parts follow the order of a spoken explanation:
+# opening, preview, the question that opens each part (signposting), the turn to the listener's own value, the
+# effect on the ranges, the recap.  {t} = field title, {lt} = "ל" + title, {v} = the user's value, {s} = suggestion.
 FRAME = {
     "he": {
         "intro": {
             3: ["עכשיו נעצור על שדה חשוב במיוחד: {t}.", "בואו נדבר על {t}. זה אחד המנופים החזקים על הטווח.",
-                "הגענו ל{t}, ופה כדאי להקדיש רגע ולדייק."],
-            2: ["השדה הבא הוא {t}. השפעה בינונית, ושווה להבין אותו.", "נעבור ל{t}.",
+                "הגענו {lt}, ופה כדאי להקדיש רגע ולדייק."],
+            2: ["השדה הבא הוא {t}. השפעה בינונית, ושווה להבין אותו.", "עכשיו נעבור {lt}.",
                 "בואו נכיר את {t}."],
-            1: ["השדה הבא הוא {t}. הוא משפיע מעט, אז נעבור עליו בקצרה.", "עכשיו {t}, שדה משני.",
+            1: ["השדה הבא הוא {t}. הוא משפיע מעט, אז נעבור עליו בקצרה.", "עכשיו {t}. זה שדה משני.",
                 "נעבור מהר על {t}."],
             0: ["השדה הבא הוא {t}. חדשות טובות: הוא לא משפיע על הטווח.",
-                "{t} הוא שדה של תיעוד ובדיקה, לא של טווח.", "נעבור על {t}. הוא לא נכנס לחישוב הטווח."],
+                "עכשיו {t}. זה שדה של תיעוד ובדיקה, לא של טווח.", "נעבור על {t}. הוא לא נכנס לחישוב הטווח."],
         },
-        "idea": ["במילים פשוטות:", "מה זה אומר?", "קודם כול, מה זה בכלל?"],
-        "why": ["ולמה זה חשוב לנו?", "ולמה שזה יעניין אתכם?", "עכשיו, איך זה משפיע?"],
-        "typical": ["כדי שתהיה לכם תחושה של המספרים:", "ערכים שתפגשו בדרך כלל:", "לדוגמה:"],
-        "source": ["ואיפה מוצאים את הערך?", "ומאיפה לוקחים את המספר?"],
-        "mistakes": ["וטיפ מניסיון, טעות שחוזרת הרבה:", "ורגע של זהירות, זו הטעות הנפוצה:"],
-        "bottom": {
-            3: ["בשורה התחתונה: שדה כזה שווה את הזמן. תזינו נתון אמיתי של המערכת.",
-                "אז לסיכום: כאן דיוק של הערך באמת משנה את התוצאה."],
-            2: ["לסיכום: ערך סביר מספיק כאן, ונתון אמיתי עדיף.", "אז בקצרה: כדאי לבדוק אותו, אבל בלי לשבור את הראש."],
-            1: ["בשורה התחתונה: אם אין נתון טוב יותר, אפשר להשאיר את ברירת המחדל.",
-                "לסיכום: זה לא המקום להשקיע את רוב הזמן."],
-            0: ["אז אפשר למלא אותו לצורך התיעוד ולהמשיך הלאה.", "בשורה התחתונה: הוא לא ישנה את הטווח."],
-        },
-        "ok": ["בדקתי את הערך שהזנתם, {v}, והוא נראה תקין.", "אצלכם הוזן {v}. זה ערך סביר.",
-               "הערך שלכם, {v}, עובר את הבדיקה."],
-        "warn": ["פה אני רוצה לעצור רגע. הזנתם {v}, ומשהו בו נראה חשוד.",
-                 "רגע, כדאי להסתכל על הערך שלכם, {v}.", "שימו לב, הערך {v} מעורר אצלי שאלה."],
-        "suggest": ["הייתי מנסה {s}. הכפתור 'החל את הערך המוצע' עושה את זה בשבילכם, ו'בטל' מחזיר.",
+        "preview": ["נבין מה זה, למה זה חשוב, ואז נסתכל על הערך שלכם.",
+                    "קודם נבין את הרעיון, אחר כך נראה מספרים, ובסוף נבדוק מה קורה אצלכם."],
+        "idea_q": ["אז מה זה בעצם?", "קודם כול, מה זה?", "נתחיל מהרעיון."],
+        "why": ["ולמה זה חשוב לנו?", "עכשיו, למה זה משנה?", "ומה זה עושה בפועל?"],
+        "typical": ["ואיזה מספרים פוגשים בפועל? בדרך כלל,", "כדי שתהיה לכם תחושה של המספרים:",
+                    "ובמספרים, בערך ככה:"],
+        "source": ["ומאיפה מביאים את המספר?", "ואיפה מוצאים את הערך?"],
+        "yours": ["עכשיו בואו נסתכל אצלכם.", "ומה קורה במערכת שלכם?", "עכשיו לערך שלכם."],
+        "ok": ["הזנתם {v}, וזה ערך סביר.", "יש לכם {v}. זה בסדר גמור.", "הערך שלכם הוא {v}, והוא עובר את הבדיקה."],
+        "warn": ["הזנתם {v}, ופה אני רוצה לעצור רגע.", "יש לכם {v}, ומשהו בו נראה לי חשוד.",
+                 "הערך שלכם הוא {v}, וכדאי להסתכל עליו שוב."],
+        "suggest": ["אז הייתי מנסה {s}. הכפתור 'החל את הערך המוצע' עושה את זה בשבילכם, ו'בטל' מחזיר.",
                     "ההצעה שלי היא {s}. אפשר להחיל אותה בכפתור, ולבטל אם תתחרטו."],
-        "impact": ["ועכשיו החלק המעניין: מה זה עושה לטווחים שלכם.",
-                   "בואו נראה מה המספרים אומרים על המערכת שלכם."],
+        "impact": ["ומה זה עושה לטווח שלכם? חישבתי את זה.", "ואיך זה מתורגם לטווחים? בואו נראה."],
+        "bottom": {
+            3: ["אז לסיכום: שדה כזה שווה את הזמן. תזינו נתון אמיתי של המערכת.",
+                "בשורה התחתונה, כאן דיוק של הערך באמת משנה את התוצאה."],
+            2: ["אז לסיכום: ערך סביר מספיק כאן, ונתון אמיתי עדיף.",
+                "בקיצור, כדאי לבדוק אותו, אבל בלי לשבור את הראש."],
+            1: ["בשורה התחתונה, אם אין נתון טוב יותר, אפשר להשאיר את ברירת המחדל.",
+                "אז לסיכום: זה לא המקום להשקיע את רוב הזמן."],
+            0: ["אז אפשר למלא אותו לצורך התיעוד, ולהמשיך הלאה.", "בשורה התחתונה, הוא לא ישנה את הטווח."],
+        },
+        "transition": ["סיימנו עם {p}. עכשיו נעבור {ln}.", "זה היה {p}. ומכאן {ln}.",
+                       "אחרי {p}, השדה הבא הוא {n}."],
         "next": ["כשתהיו מוכנים, 'הבא' ממשיך לשלב הבא.", "אם הכול ברור, ממשיכים ב'הבא'."],
     },
     "en": {
@@ -485,50 +492,73 @@ FRAME = {
             3: ["Now let's stop at a particularly important field: {t}.",
                 "Let's talk about {t}. It is one of the strong levers on the range.",
                 "We have reached {t}, and this one is worth a moment to get right."],
-            2: ["The next field is {t}. It has a medium effect, and it is worth understanding.", "Let's move on to {t}.",
-                "Let's get to know {t}."],
+            2: ["The next field is {t}. It has a medium effect, and it is worth understanding.",
+                "Let's move on to {t}.", "Let's get to know {t}."],
             1: ["The next field is {t}. It has a small effect, so we will go over it quickly.",
-                "Now {t}, a secondary field.", "A quick look at {t}."],
+                "Now {t}. It is a secondary field.", "A quick look at {t}."],
             0: ["The next field is {t}. Good news: it does not affect the range.",
-                "{t} is a field for documentation and checks, not for the range.",
+                "Now {t}. It is there for documentation and checks, not for the range.",
                 "Let's look at {t}. It does not enter the range calculation."],
         },
-        "idea": ["In simple words:", "What does it mean?", "First of all, what is it?"],
-        "why": ["And why does it matter to us?", "So why should you care?", "Now, how does it affect things?"],
-        "typical": ["To give you a feel for the numbers:", "Values you will usually meet:", "For example:"],
-        "source": ["And where do you find the value?", "And where does the number come from?"],
-        "mistakes": ["And a tip from experience, a mistake that comes up a lot:",
-                     "And a word of caution, this is the common mistake:"],
+        "preview": ["We will see what it is, why it matters, and then look at your value.",
+                    "First the idea, then some numbers, and at the end we will check what happens in your system."],
+        "idea_q": ["So what is it, really?", "First of all, what is it?", "Let's start with the idea."],
+        "why": ["And why does it matter to us?", "Now, why does it make a difference?", "And what does it do in practice?"],
+        "typical": ["And which numbers do you meet in practice? Usually,", "To give you a feel for the numbers:",
+                    "In numbers, roughly like this:"],
+        "source": ["And where does the number come from?", "And where do you find the value?"],
+        "yours": ["Now let's look at yours.", "And what happens in your system?", "Now to your value."],
+        "ok": ["You entered {v}, and that is a reasonable value.", "You have {v}. That is perfectly fine.",
+               "Your value is {v}, and it passes the check."],
+        "warn": ["You entered {v}, and here I want to stop for a moment.",
+                 "You have {v}, and something about it looks suspicious to me.",
+                 "Your value is {v}, and it is worth a second look."],
+        "suggest": ["So I would try {s}. The apply button does it for you, and undo brings your value back.",
+                    "My suggestion is {s}. You can apply it with the button, and undo it if you change your mind."],
+        "impact": ["And what does this do to your range? I calculated it.",
+                   "And how does it translate into ranges? Let's see."],
         "bottom": {
-            3: ["The bottom line: a field like this is worth your time. Enter real data of your system.",
-                "So to sum up: here the accuracy of the value really changes the result."],
-            2: ["To sum up: a reasonable value is enough here, and real data is better.",
-                "So in short: check it, but do not lose sleep over it."],
+            3: ["So to sum up: a field like this is worth your time. Enter real data of your system.",
+                "The bottom line: here the accuracy of the value really changes the result."],
+            2: ["So to sum up: a reasonable value is enough here, and real data is better.",
+                "In short, check it, but do not lose sleep over it."],
             1: ["The bottom line: if there is no better data, you can keep the default.",
-                "To sum up: this is not where to spend most of your time."],
+                "So to sum up: this is not where to spend most of your time."],
             0: ["So you can fill it in for the record, and move on.", "The bottom line: it will not change the range."],
         },
-        "ok": ["I checked the value you entered, {v}, and it looks fine.", "You entered {v}. That is a reasonable value.",
-               "Your value, {v}, passes the check."],
-        "warn": ["I want to stop here for a moment. You entered {v}, and something about it looks suspicious.",
-                 "Wait, it is worth looking at your value, {v}.", "Note that the value {v} raises a question for me."],
-        "warn_more": ["The note on the screen explains exactly what looks wrong."],
-        "suggest": ["I would try {s}. The apply button does it for you, and undo brings your value back.",
-                    "My suggestion is {s}. You can apply it with the button, and undo it if you change your mind."],
-        "impact": ["And now the interesting part: what this does to your ranges.",
-                   "Let's see what the numbers say about your system."],
+        "transition": ["That's it for {p}. Now let's move on to {n}.", "That was {p}. From here, {n}.",
+                       "After {p}, the next field is {n}."],
         "next": ["When you are ready, Next moves on.", "If everything is clear, continue with Next."],
     },
 }
 
 
-def pick(lang, part, key, *sub):
-    """A variant of a frame phrase, stable for `key` (the field path) so the same card always sounds the same."""
+def _variants(lang, part, key, *sub):
     opts = FRAME[lang][part]
     for s in sub:
         opts = opts[s]
     h = int(hashlib.md5(("%s|%s" % (part, key)).encode("utf-8")).hexdigest()[:6], 16)
     return opts[h % len(opts)]
+
+
+def pick(lang, part, key, *sub):
+    """A variant of a frame phrase, stable for `key` (the field path) so the same card always sounds the same."""
+    return _variants(lang, part, key, *sub)
+
+
+def _le(title):
+    """'ל' + title as said in Hebrew: 'לאורך המוקד', 'ל-F-number'."""
+    t = str(title)
+    return ("ל" + t) if t[:1] and "֐" <= t[:1] <= "׿" else "ל-" + t
+
+
+def intro(lang, key, imp, title):
+    return _variants(lang, "intro", key, imp).format(t=title, lt=_le(title))
+
+
+def transition(lang, key, prev, nxt):
+    """The bridge between two fields of a walk: close the previous one, open the next (a callback, then a preview)."""
+    return _variants(lang, "transition", key).format(p=prev, n=nxt, ln=_le(nxt))
 
 
 # (lesson id, Hebrew step title) -> spoken explanation of the step, in Hebrew (the English one is in guide_voice_en)

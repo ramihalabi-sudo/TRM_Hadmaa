@@ -60,6 +60,33 @@
 - **טורבולנציה:** r0 = (0.423 k² Cn² L)^(-3/5) לגל מישורי ול-Cn² קבוע. מעבר ל-D ≈ 3 r0 הגדלת הקוטר כמעט לא משפרת
   רזולוציה ביום.
 
+## 4א. ייצור ועלות (נוסף בגרסה 2.17)
+
+המדריך מציג לשדות המשפיעים גם "ייצור ועלות". אלה כיווני מגמה ולא מחירים: מחירים אמיתיים מגיעים מהצעות מחיר.
+
+- **גרמניום:** מחיר המתכת באירופה (99.999%) עלה מכ-$3,150 לק"ג בינואר 2025 לכ-$5,380 באוקטובר; הממוצע השנתי
+  ב-2025: כ-$4,100 לק"ג למתכת (USGS, Mineral Commodity Summaries 2026). בתחילת 2023 המחיר היה מעט יותר מ-$1,000
+  (Fastmarkets). הסיבה: מגבלות ייצוא של סין (רישיון מאוגוסט 2023, איסור לארה"ב מדצמבר 2024). המחיר בסין עצמה נמוך
+  יותר (Project Blue) - השוק התפצל.
+- **הערכת חומר הגלם:** משקל הזכוכית של העדשה (פרק 3, בלי הבית) כפול 1.5-3 לפחת עיבוד (גלם, השחזה, פסולת), כפול
+  $4,100 לק"ג. ב-MWIR רק חצי מהמשקל נספר כגרמניום (חלק מהאלמנטים מסיליקון). זו עלות החומר בלבד - לפני ליטוש, חריטה,
+  ציפוי, בית והרכבה, שהם בדרך כלל רוב המחיר.
+- **קוטר ו-F:** לפי ספקים, עדשה ב-F/1.0 עולה פי 2-3 מאותה עדשה ב-F/1.5 (יותר חומר ופסולת גבוהה יותר). גידול גביש
+  גרמניום בקוטר 100 mm ומעלה הוא אתגר ייצורי (DRDO). ציפוי AR איכותי ל-LWIR: 20%-30% מעלות ייצור העדשה (מקור ספק, לא
+  מאומת).
+- **כלקוגניד מול גרמניום:** בכבישה (precision molding) ומעל כ-1,000 יחידות, כלקוגניד זול יותר מגרמניום בחריטת יהלום;
+  בכמויות קטנות חריטת יהלום זולה יותר (LightPath). ב-GASIR הגרמניום הוא רק כ-20% מהחומר (Umicore).
+- **מקורר מול לא-מקורר:** מקרר Stirling: MTTF של כ-8,000-20,000 שעות לפי מדריכי ספקים, ו-27,000 שעות ל-FL-100 של
+  Teledyne FLIR (Inside GNSS). בעבודה של 8 שעות ביום: כ-3-9 שנים עד תחזוקה. לא-מקורר: בלי חלקים נעים. מקור בתעשייה
+  טוען שמעל מוקד של כ-350 mm עלות עדשת הלא-מקורר עוברת את עלות מערכת מקוררת שלמה (טענה יחידה, לא מאומתת).
+- **פסיעה ופורמט:** פיקסל קטן = שבב קטן = יותר שבבים בפרוסה ומחיר נמוך יותר לגלאי (Umicore: מ-50 µm ל-12 µm כ-17
+  פי יותר גלאים בפרוסה - גבול עליון תאורטי); אבל 10-12 µm עלולים לחייב עדשת F/1.0 שמבטלת את החיסכון (Tech Briefs).
+  שבב גדול = פחות שבבים בפרוסה ותפוקה נמוכה (פטנט US 9410850).
+- **SWIR:** גלאי InGaAs יקרים בהרבה מ-CMOS, וגלאי שטח InGaAs כפופים לעיתים ל-ITAR או ל-EAR (6A003.b.4.a).
+
+מגבלות: רוב נתוני העלות מגיעים מספקים או מאתרי שוק; המחירים משתנים מהר. המדריך מציג אותם כ"לפי ספקים" או עם שנת
+המקור, ולא כמחירים.
+
 ## 4. מה לא נבדק ומגבלות
 
 - מספרי המשקל והאורך הם כללי אצבע ולא מחליפים תכנון.
@@ -79,3 +106,15 @@
 - Xenics LWIR MicroCube 640 leaflet: https://www.exosens.com/system/files/2024-04/Xenics_LWIR_MicroCube%20640_Leaflet.pdf
 - Cooled vs uncooled thermal camera cores (vendor guide): https://irhubs-2026.pages.dev/information/news/cooled-vs-uncooled-thermal-camera-cores/
 - Wavelength Electronics, *Replacing Germanium with Chalcogenide Glass*: https://us.wavelength-oe.com/application-notes/infrared-optics/ge-to-chalcogenide
+- USGS, *Mineral Commodity Summaries 2026 - Germanium*: https://pubs.usgs.gov/periodicals/mcs2026/mcs2026-germanium.pdf
+- Fastmarkets, *China's export curbs on gallium and germanium*: https://www.fastmarkets.com/insights/are-chinas-export-curbs-on-gallium-and-germanium-a-political-symbol-or-a-real-threat/
+- Project Blue, *US and EU germanium prices surge*: https://projectblue.com/blue/news-analysis/1303/us-and-eu-germanium-prices-surge-as-material-remains-scarce-
+- Inside GNSS, *Understanding cryocooled infrared system reliability*: https://insidegnss.com/?p=189069
+- LightPath, *Investigation of As40Se60 chalcogenide glass in precision glass molding*: https://www.lightpath.com/wp-content/uploads/2021/03/Investigation-of-As40Se60-chalcogenide-glass-in-precision-glass.pdf
+- Umicore, *GASIR*: https://www.umicore.com/en/markets-products/optics/infrared-optics/gasir/
+- Why are infrared lenses so expensive (vendor article): https://irhubs-2026.pages.dev/information/news/why-are-infrared-lenses-so-much-more-expensive-than-standard-lenses/
+- DRDO, germanium single-crystal growth: https://drdo.gov.in/drdo/sites/default/files/inline-files/GermaniumSCGfIO12032025.pdf
+- Umicore, *The evolution of lens designs for 12 micron uncooled LWIR detectors*: https://www.umicore.com/en/newsroom/the-evolution-of-lens-designs-for-12micron-uncooled-lwir-detectors/
+- Tech Briefs, *Trends in thermal imaging*: https://www.techbriefs.com/component/content/article/28511-trends-in-thermal-imaging
+- US patent 9410850 (die size and yield): https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/9410850
+- Princeton Infrared Technologies, ITAR-free SWIR camera (EAR 6A003.b.4.a): https://www.gophotonics.com/news/details/636-princeton-infrared-technologies-launches-first-megapixel-swir-camera-with-no-itar-export-restrictions
