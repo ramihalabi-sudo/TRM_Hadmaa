@@ -14,6 +14,9 @@ LESSONS = {
                                               "the Engineering Analysis workflow."),
     "results": ("Reading the results and improving them", "What limits the range, what is most worth improving, "
                                                            "uncertainty, and the Hebrew report."),
+    "system": ("System considerations: weight, cost and testing", "What each parameter asks of the system - weight, "
+                                                                  "data, manufacturing and export - and how to verify "
+                                                                  "it by measurement."),
     "tour": ("A full tour of the application", "Every page and every field your project shows, group by group: "
                                                "what each field means, a check of your value and its effect on "
                                                "the range."),
@@ -600,6 +603,85 @@ STEPS = {
         "report with all the assumptions. And File, Save, saves the project with its source tags.",
         "You are done! You can open the guide again at any time from Help, Interactive guide, or keep it open: "
         "clicking a field shows its explanation card."]),
+    ("system", "מה השיעור הזה מוסיף"): ("What this lesson adds", [
+        "In this lesson we step away from the range for a moment, and ask a system engineer's question: what does "
+        "each parameter cost us?",
+        "Every gain in range asks something of the system: weight, length, power, money, or harder manufacturing.",
+        "The lesson is based on the research on the system parameters, but every claim in it was checked against "
+        "manufacturer datasheets and scientific sources.",
+        "Some of it we kept as it is: the link between focal length, diameter and F-number, the comparison of VOx "
+        "and amorphous silicon, and the lab tests. Some of it we corrected, because the numbers did not hold: the "
+        "weight, which grows much faster than the research said, and the read noise of the IMX174. And some we "
+        "added: the link between NETD and F-number, the 9 hertz export threshold, the data rate and the measurement "
+        "standards.",
+        "One important thing: nothing here changes the range the program calculates. These are considerations that "
+        "come with it."]),
+    ("system", "מוקד ו-F: כללי הגדילה"): ("Focal length and F-number: the scaling rules", [
+        "The aperture diameter is the focal length divided by the F-number. A 50 millimeter lens at F 1.4 needs an "
+        "aperture of about 36 millimeters, and at F 4, only about 12.5.",
+        "At the same F-number, a longer focal length also means a larger diameter. The glass grows in width and in "
+        "thickness, so the weight grows roughly as the cube of the diameter. As a result, a focal length 10 percent "
+        "longer weighs about a third more, and 50 percent longer weighs more than three times as much. The original "
+        "research estimated only 15 to 50 percent, which is too low.",
+        "The other way round, going from F 4 to F 8 halves the diameter, and the glass weight drops to a quarter or "
+        "even an eighth. The price: the signal per pixel falls as F squared, and in a thermal camera the NETD rises "
+        "by the same ratio.",
+        "A tip: the cards of the focal length, the diameter and the F-number show a sensitivity analysis with the "
+        "numbers of your system."]),
+    ("system", "פיקסל ופורמט"): ("Pixel and format", [
+        "A pixel a quarter smaller, at the same focal length, gives an IFOV a quarter smaller, so more detail. But "
+        "each pixel collects only about half the light, because its area is smaller.",
+        "Here is a point the original research missed: at the same IFOV, a smaller pixel allows a focal length and "
+        "a diameter smaller by the same ratio, so the lens weight falls as the cube of the pitch. A pixel a quarter "
+        "smaller, and the lens weighs less than half.",
+        "And a small correction: a format 10 percent larger on each axis is not 10 percent more pixels, but 21 "
+        "percent, so a larger and more expensive chip.",
+        "An example checked against the manufacturer: the Sony IMX174, in a Basler camera. A 5.86 micron pixel, a "
+        "quantum efficiency of about 70 percent, and a read noise of about 7 electrons, not 2.6 as the research "
+        "said."]),
+    ("system", "NETD וחומר הגלאי"): ("NETD and the detector material", [
+        "The most useful rule here: the NETD grows as the F-number squared. Going from F 1.4 to F 1 halves the "
+        "NETD. So before jumping to an expensive cooled detector, check a faster lens.",
+        "An important correction to the original research: there is no such thing as a cooled VOx detector. Both "
+        "VOx and amorphous silicon are uncooled microbolometers. Cooled detectors are InSb, MCT or T2SL, with a "
+        "Stirling cooler.",
+        "The temperature coefficient of the two is similar, about 2 to 3 percent per kelvin. The advantage of VOx "
+        "is lower noise; amorphous silicon is easier to manufacture.",
+        "Today's numbers: the Lepton 3.5 reaches less than 50 millikelvin, and the Boson plus 20 millikelvin or "
+        "less. And compare NETD values only under the same conditions: the same F-number and the same background "
+        "temperature."]),
+    ("system", "רעש, זרם חושך וטווח דינמי"): ("Noise, dark current and dynamic range", [
+        "The dynamic range is 20 times the log of the full well divided by the read noise. For the IMX174 it comes "
+        "to about 73 decibels.",
+        "The original research gave a dark current of tens of thousands of electrons per second, but in a modern "
+        "sensor it is units to tens. It doubles roughly every 6 to 8 degrees, so it matters mainly in long "
+        "exposures and in a warm housing."]),
+    ("system", "קצב פריימים, נתונים וייצוא"): ("Frame rate, data and export", [
+        "The original research gave the frame rate a cost in percent, with no source. Instead, we calculate the "
+        "data rate: pixels, times bits, times frame rate. A full HD day camera at 14 bits and 50 hertz puts out "
+        "about 1.5 gigabits per second. That is more than GigE carries, so you need a faster interface, or "
+        "compression.",
+        "And something worth knowing: an uncooled thermal camera up to 9 hertz is classified in the United States "
+        "as easier to export. Above 9 hertz, a license is usually required. That is exactly why the Lepton runs at "
+        "8.7 hertz: not a technical limit, but an export decision.",
+        "This is engineering background only, not legal advice. Check the classification with your export "
+        "officer."]),
+    ("system", "איך מאמתים: מדידות ותקנים"): ("How to verify: measurements and standards", [
+        "How do you know the numbers are right? You measure.",
+        "For day and SWIR cameras the standard is EMVA 1288: quantum efficiency, read noise, full well and dynamic "
+        "range. Ask the supplier for the report. The MTF is measured with the slanted edge method of ISO 12233, in "
+        "the center and in the corners. The NETD is measured against a blackbody at a known F-number and frame "
+        "rate, and ASTM standards define the procedure. The read noise is measured in complete darkness, from the "
+        "difference between two frames.",
+        "When you have a measured value, enter it with the measured tag, so the report shows that the range rests "
+        "on a measurement."]),
+    ("system", "סיכום: איזון בין הטווח למערכת"): ("Summary: balancing the range and the system", [
+        "To sum up. For long range, lengthen the focal length and lower the F-number, but the weight and the cost "
+        "grow fast, roughly as the cube of the focal length.",
+        "For a light and cheap system, choose a small pixel for the same IFOV, an uncooled detector with a fast "
+        "lens, and the frame rate you actually need.",
+        "And most important: the numbers here are rules of thumb. The optical design, the datasheets and the "
+        "measurements decide in the end. You have finished the lesson, well done."]),
     ("tour", "איך עובד הסיור"): ("How the tour works", [
         "We will go over every page of the form in Engineering mode, group by group. Each step shows the fields of "
         "the group: your value, a check of it, and how much it affects the range.",

@@ -456,6 +456,14 @@ def field_script(lang, path, value, project, label=None, impact=None, brief=Fals
                     _para(out, re.sub(r"^ייצור ועלות:\s*", "", x), lang, "ומבחינת ייצור ועלות,")
                 for x in est:
                     _para(out, x, lang, "ובמערכת שלכם, בהערכה גסה:")
+            try:
+                sens = DS.spoken_sensitivity(path, project)
+            except Exception:
+                sens = []
+            if sens:
+                _add(out, "ועכשיו ניתוח רגישות קצר: מה קורה למערכת אם משנים את הערך הזה.", lang)
+                for x in sens:
+                    _para(out, x, lang, auto=False)
         # 6. a tip
         for x in _mistakes(mistakes or [], lang):
             _add(out, x, lang)

@@ -74,6 +74,16 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.19 - system considerations: the system-parameters research, checked
+
+The research "system parameters with system considerations" was checked against datasheets and the literature
+(`research_notes/system_parameters_review_he.md`: kept / changed / added, with sources). New guide lesson `system`
+(8 steps, written in Hebrew and narrated in Hebrew and English, recorded). `guide_design_he.sensitivity(path, p)`
+adds a live -50 ... +50 % sensitivity line to the cards of the focal length, diameter / F, pitch, format and frame
+rate (lens mass and length from `estimates()`, NETD ~ F^2, die area, data rate, the 9 Hz export threshold of
+uncooled cameras); `spoken_sensitivity` says it in the narration. New cost notes for NETD, read noise and frame rate.
+No effect on the ranges.
+
 ## Version 2.18 - spoken guide: cause and result
 
 `guide_voice._connect` marks results between sentences (`_RESULT_HE` / `_RESULT_EN`: verbs of effect such as

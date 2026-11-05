@@ -4,5 +4,5 @@ Every substantial change gets a new version: raise VERSION here, add its entry a
 AppVersion in packaging/TRM_HADMAAv1.iss and run `python tools/version_report.py` (tests/test_version.py checks
 that the four agree).  MODEL_VERSION in model.py is built from VERSION and enters the run ID.
 """
-VERSION = "2.18"
-VERSION_DATE = "2026-11-04"
+VERSION = "2.19"
+VERSION_DATE = "2026-11-05"

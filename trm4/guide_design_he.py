@@ -289,7 +289,98 @@ COST = {
     "stab.jitter_mode": ["ככל שדרישת הייצוב מחמירה, הגימבל צריך חיישנים ומנועים מדויקים יותר: העלות והמשקל עולים "
                          "מהר."],
     "display.observation": ["עינית איכותית היא רכיב אופטי נוסף לייצור; מסך הוא בדרך כלל רכיב מדף, זול יחסית."],
+    "detector.netd_mK": ["NETD גדל כמו F² (Teledyne FLIR): מעבר מ-F/1.4 ל-F/1.0 חוצה את ה-NETD. לכן הדרך הזולה לשפר "
+                         "רגישות היא לרוב עדשה מהירה יותר, ולא גלאי מקורר - אבל עדשה מהירה יקרה יותר (פי 2-3 בין "
+                         "F/1.5 ל-F/1.0, לפי ספקים).",
+                         "VOx ו-a-Si הם שניהם גלאים לא-מקוררים. ל-VOx רעש 1/f נמוך יותר, אבל הוא לא תואם לקו CMOS רגיל "
+                         "ודורש קו ייצור ייעודי; a-Si נוח יותר לייצור. מקדם הטמפרטורה (TCR) של שניהם דומה, כ-2%-3% "
+                         "לקלווין. ליבות VOx מגיעות היום ל-20 mK ופחות (Boson+ Industrial, ב-F/1.0)."],
+    "detector.noise_floor_e": ["רעש קריאה נמוך דורש ADC ומגבר שקטים וחיישן מודרני; זה נקבע בבחירת החיישן ולא בתכנון "
+                               "שלכם. המספרים האמינים מגיעים מדוח EMVA 1288 של המצלמה."],
+    "basic.frame_rate": ["קצב פריימים מגדיל את קצב הנתונים, ואיתו את דרישות הממשק, המעבד וההספק.",
+                         "מצלמה תרמית לא-מקוררת בקצב של עד 9 Hz מסווגת בארה\"ב 6A993; מעל 9 Hz היא 6A003.b.4.b ודורשת "
+                         "רישיון ייצוא לרוב היעדים. לכן ליבות כמו Lepton נמכרות ב-8.7 Hz. בדקו את הסיווג העדכני לפני "
+                         "שמתכננים קצב."],
 }
+
+# live sensitivity of the system to +-10 / 25 / 50 % changes of a field (the "system parameters" research, v2.19)
+SENS_STEPS = (-0.5, -0.25, -0.1, 0.1, 0.25, 0.5)
+
+
+def _x(r):
+    """A ratio as said: 1.25, 3.38, 0.08."""
+    return ("%.2f" % r).rstrip("0").rstrip(".") if r < 10 else "%.0f" % r
+
+
+def _with(p, **kw):
+    """Copy of the project with section values replaced: _with(p, optics={"f_mm": 80})."""
+    q = dict(p)
+    for sec, vals in kw.items():
+        q[sec] = dict(p.get(sec, {}), **vals)
+    return q
+
+
+def _mass(e):
+    return 0.5 * (e["lens_g"][0] + e["lens_g"][1])
+
+
+def sensitivity(path, p):
+    """Lines of the live sensitivity of a field: how lens mass / length, NETD, die area and data rate move when the
+    field changes by -50 ... +50 %.  First-order scaling of estimates(); [] when the field has none."""
+    e = estimates(p)
+    if not e:
+        return []
+    o, d, b = p.get("optics", {}), p.get("detector", {}), p.get("basic", {})
+    general = o.get("aperture") == "general" or _f(o.get("D_mm")) <= 0
+    thermal = p.get("category") == "Thermal"
+    pct = lambda s: "%+d%%" % round(100 * s)
+    L = []
+    if path == "optics.f_mm":
+        m, t = [], []
+        for s in SENS_STEPS:
+            f2 = e["f"] * (1 + s)
+            q = _with(p, optics={"f_mm": f2} if general else {"f_mm": f2, "D_mm": e["D"] * (1 + s)})
+            e2 = estimates(q)
+            m.append(_mass(e2) / _mass(e))
+            t.append(sum(e2["track"]) / sum(e["track"]))
+        L.append("ניתוח רגישות: מוקד %s (באותו F, ולכן קוטר משתנה איתו): משקל העדשה פי %s, ואורכה פי %s. "
+                 "המשקל גדל בערך כמו f³, ולא באופן ליניארי." % (
+                     " / ".join(pct(s) for s in SENS_STEPS), " / ".join(_x(r) for r in m), " / ".join(_x(r) for r in t)))
+    elif path in ("optics.D_mm", "optics.F_general"):
+        m, n = [], []
+        for s in SENS_STEPS:
+            D2 = e["D"] * (1 + s)
+            q = _with(p, optics={"F_general": e["f"] / D2} if general else {"D_mm": D2})
+            m.append(_mass(estimates(q)) / _mass(e))
+            n.append(1.0 / (1 + s) ** 2)
+        L.append("ניתוח רגישות: קוטר %s (אותו מוקד): משקל העדשה פי %s%s." % (
+            " / ".join(pct(s) for s in SENS_STEPS), " / ".join(_x(r) for r in m),
+            ("; ה-NETD פי %s (∝ F²)" % " / ".join(_x(r) for r in n)) if thermal else
+            ("; האות לפיקסל פי %s (∝ 1/F²)" % " / ".join(_x(1 / r) for r in n))))
+    elif path == "detector.pitch_h_um":
+        steps = (-0.25, -0.1, 0.1, 0.25)
+        L.append("ניתוח רגישות: פסיעה %s באותו מוקד: IFOV פי %s, האות לפיקסל ושטח השבב פי %s. ובאותו IFOV (מוקד "
+                 "וקוטר משתנים עם הפסיעה): משקל העדשה פי %s (∝ פסיעה³)." % (
+                     " / ".join(pct(s) for s in steps), " / ".join(_x(1 + s) for s in steps),
+                     " / ".join(_x((1 + s) ** 2) for s in steps), " / ".join(_x((1 + s) ** 3) for s in steps)))
+    elif path == "detector.n_h":
+        steps = (0.1, 0.25, 0.5)
+        L.append("ניתוח רגישות: הגדלת הפורמט ב-%s בכל ציר (אותה פסיעה): מספר הפיקסלים, שטח השבב וקצב הנתונים "
+                 "פי %s - שבב גדול יותר הוא גם תפוקה (yield) נמוכה יותר." % (
+                     " / ".join("%d%%" % round(100 * s) for s in steps),
+                     " / ".join(_x((1 + s) ** 2) for s in steps)))
+    elif path == "basic.frame_rate":
+        fps = _f(b.get("frame_rate"))
+        bits = int(_f(d.get("adc_bits"))) or 14          # 0 = not set: a typical 14-bit output
+        nh, nv = int(_f(d.get("n_h"))), int(_f(d.get("n_v")))
+        if fps > 0:
+            mbps = nh * nv * bits * fps / 1e6
+            L.append("קצב הנתונים הגולמי: %d x %d פיקסלים, %d ביט, %s Hz - כ-%s Mbit/s. הוא גדל ליניארית עם "
+                     "הקצב: עוד 50%% בקצב, עוד 50%% בקצב הנתונים." % (nh, nv, bits, _n(fps), "{:,.0f}".format(mbps)))
+            if thermal and p.get("imager_type") == "uncooled":
+                L.append("מצלמה לא-מקוררת ב-%s Hz: %s" % (_n(fps), "מעל 9 Hz - בדרך כלל דורשת רישיון ייצוא אמריקאי "
+                         "(6A003.b.4.b)." if fps > 9 else "עד 9 Hz - הגרסה ה'איטית' (6A993), קלה יותר לייצוא."))
+    return L
 
 COST_KEYS = {"optics.f_mm": ("ge", "cooler"), "optics.D_mm": ("ge",), "optics.F_general": ("ge",),
              "category": ("ge",), "imager_type": ("cooler",), "detector.pitch_h_um": ("ge",)}
@@ -316,6 +407,56 @@ def _cost_lines(e, path):
     return L
 
 
+def spoken_sensitivity(path, p):
+    """The sensitivity of a field in one or two spoken sentences (the guide narration): the effect of a +10 % and a
+    +50 % change (pitch: -25 %), from the same numbers as sensitivity()."""
+    e = estimates(p)
+    if not e or path not in SENS_PATHS:
+        return []
+    o, d, b = p.get("optics", {}), p.get("detector", {}), p.get("basic", {})
+    general = o.get("aperture") == "general" or _f(o.get("D_mm")) <= 0
+    thermal = p.get("category") == "Thermal"
+    if path == "optics.f_mm":
+        r = []
+        for s in (0.1, 0.5):
+            f2 = e["f"] * (1 + s)
+            q = _with(p, optics={"f_mm": f2} if general else {"f_mm": f2, "D_mm": e["D"] * (1 + s)})
+            r.append(_mass(estimates(q)) / _mass(e))
+        return ["אם תאריכו את המוקד בעשרה אחוזים, באותו F, משקל העדשה יגדל פי %s, ואם תאריכו אותו בחמישים אחוז, "
+                "המשקל יגדל פי %s. כלומר, המשקל גדל הרבה יותר מהר מהמוקד." % (_x(r[0]), _x(r[1]))]
+    if path in ("optics.D_mm", "optics.F_general"):
+        r = []
+        for s in (0.1, 0.5):
+            D2 = e["D"] * (1 + s)
+            q = _with(p, optics={"F_general": e["f"] / D2} if general else {"D_mm": D2})
+            r.append(_mass(estimates(q)) / _mass(e))
+        out = ["אם תגדילו את הקוטר בעשרה אחוזים, משקל העדשה יגדל פי %s, ובחמישים אחוז, פי %s." % (_x(r[0]), _x(r[1]))]
+        out.append("ובתמורה, ה-NETD ירד פי %s, כי הוא גדל כמו F בריבוע." % _x(1.5 ** 2) if thermal else
+                   "ובתמורה, האות לפיקסל יגדל פי %s, כי הוא גדל כמו אחד חלקי F בריבוע." % _x(1.5 ** 2))
+        return out
+    if path == "detector.pitch_h_um":
+        return ["אם תקטינו את הפסיעה ברבע, באותו מוקד, האות לכל פיקסל ירד לבערך חצי, כי שטח הפיקסל ירד פי %s. "
+                "אבל אם תשמרו על אותו IFOV, העדשה תקטן, ומשקלה ירד פי %s." % (_x(0.75 ** 2), _x(1 / 0.75 ** 3))]
+    if path == "detector.n_h":
+        return ["הגדלה של עשרה אחוזים בכל ציר של הפורמט היא בעצם עשרים ואחד אחוז יותר פיקסלים: יותר שטח שבב, "
+                "ויותר נתונים לשנייה."]
+    fps = _f(b.get("frame_rate"))
+    if fps <= 0:
+        return []
+    bits = int(_f(d.get("adc_bits"))) or 14
+    mbps = int(_f(d.get("n_h"))) * int(_f(d.get("n_v"))) * bits * fps / 1e6
+    out = ["בקצב של %s הרץ, המצלמה מוציאה בערך %s מגה-ביט לשנייה, וכל תוספת בקצב מוסיפה באותו יחס." % (
+        _n(fps), "{:,.0f}".format(mbps))]
+    if thermal and p.get("imager_type") == "uncooled":
+        out.append("ועוד דבר: במצלמה לא-מקוררת, קצב מעל תשעה הרץ מחייב בדרך כלל רישיון ייצוא אמריקאי." if fps > 9 else
+                   "ועוד דבר: במצלמה לא-מקוררת, קצב של עד תשעה הרץ נחשב לגרסה האיטית, שקל יותר לייצא.")
+    return out
+
+
+SENS_PATHS = ("optics.f_mm", "optics.D_mm", "optics.F_general", "detector.pitch_h_um", "detector.n_h",
+              "basic.frame_rate")
+
+
 def blocks(path, p):
     """RtlCanvas blocks of the system-considerations section of a field card ([] when it has none)."""
     s = SYSTEM.get(path)
@@ -323,13 +464,13 @@ def blocks(path, p):
     if not s and not cost:
         return []
     swap, image, keys = s or ([], [], ())
-    e = estimates(p) if (keys or COST_KEYS.get(path)) else None
+    e = estimates(p) if (keys or COST_KEYS.get(path) or path in SENS_PATHS) else None
     out = [("h", "שיקולי מערכת: גודל, משקל, ייצור, עלות ואיכות תמונה")]
     out += [("li", "משקל / גודל: " + t) for t in swap]
     out += [("li", "ייצור ועלות: " + t) for t in cost]
     out += [("li", "תמונה: " + t) for t in image]
     if e:
-        lines = _lines(e, keys, p) + _cost_lines(e, path)
+        lines = _lines(e, keys, p) + _cost_lines(e, path) + sensitivity(path, p)
         if lines:
             out.append(("box", "plain", ["במערכת שלכם (הערכה הנדסית מסדר ראשון)"] + lines, True))
     out.append(("muted", "שיקולים אלה לא נכנסים לטווח של TRM4 (שמחושב על הציר), חוץ ממודל הסטיות (q / blur) או MTF "

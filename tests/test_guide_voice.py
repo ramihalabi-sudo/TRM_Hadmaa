@@ -105,6 +105,10 @@ class Scripts(unittest.TestCase):
         for marker in ("מה זה", "למה", "למשל", "לעומת זאת", "כלומר", "עכשיו", "בשורה התחתונה"):
             self.assertIn(marker, joined)
         self.assertNotIn(" = ", joined)
+        # the spoken sensitivity of the field (system research review, v2.19)
+        sens = " ".join(texts(GV.field_script("he", "optics.f_mm", 100.0, p)))
+        self.assertIn("ניתוח רגישות קצר", sens)
+        self.assertIn("משקל העדשה יגדל פי", sens)
         # cause and result said out loud, as people do when they explain (interview answers: action -> "as a result")
         warn = " ".join(texts(GV.field_script("he", "optics.f_mm", 2.5, p, impact=lambda: {
             "base": {"Detection": 10.0}, "alts": [("הערך המוצע", 25, {"Detection": 12.0}, None, [])]})))

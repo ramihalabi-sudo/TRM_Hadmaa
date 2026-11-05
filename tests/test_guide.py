@@ -232,6 +232,47 @@ class SystemConsiderations(unittest.TestCase):
         self.assertFalse(any(ln.startswith("מקרר Stirling") for ln in lines("imager_type", uncooled)))
         self.assertFalse(any(ln.startswith("חומר הגלם") for ln in lines("optics.D_mm", vis)))   # glass, no Ge
 
+    def test_system_sensitivity(self):
+        """The live +-10/25/50 % sensitivity of the cards (research review, v2.19): mass ~ f^3 at a fixed F,
+        NETD ~ F^2, die area ~ format^2, the data rate and the 9 Hz export line of uncooled cameras."""
+        uncooled, vis = merged(UNCOOLED), merged(VIS)
+        e = DS.estimates(uncooled)
+        q = DS._with(uncooled, optics={"f_mm": e["f"] * 1.1, "D_mm": e["D"] * 1.1})
+        self.assertAlmostEqual(DS._mass(DS.estimates(q)) / DS._mass(e), 1.1 ** 3, delta=0.02)   # not +15 %
+        lines = lambda path, p: [ln for b in DS.blocks(path, p) if b[0] == "box" for ln in b[2]]
+        self.assertTrue(any(ln.startswith("ניתוח רגישות: מוקד") for ln in lines("optics.f_mm", uncooled)))
+        d = [ln for ln in lines("optics.D_mm", uncooled) if ln.startswith("ניתוח רגישות")][0]
+        self.assertIn("NETD פי 4 / 1.78", d)                                 # F^2 at -50 / -25 %
+        self.assertIn("פי 1.21 / 1.56 / 2.25", DS.sensitivity("detector.n_h", vis)[0])
+        rate = DS.sensitivity("basic.frame_rate", uncooled)
+        mbps = 640 * 480 * 14 * uncooled["basic"]["frame_rate"] / 1e6
+        self.assertIn("{:,.0f}".format(mbps), rate[0])
+        self.assertIn("6A003", rate[1])                                       # 30 Hz uncooled: above 9 Hz
+        slow = DS.sensitivity("basic.frame_rate", merged(UNCOOLED, basic__frame_rate=8.7))
+        self.assertIn("6A993", slow[1])
+        self.assertEqual(len(DS.sensitivity("basic.frame_rate", vis)), 1)     # no export line for a day camera
+        for path in DS.SENS_PATHS:
+            self.assertTrue(DS.spoken_sensitivity(path, uncooled), path)
+        self.assertEqual(DS.spoken_sensitivity("target.W_m", uncooled), [])
+        for path in ("detector.netd_mK", "detector.noise_floor_e", "basic.frame_rate"):
+            self.assertTrue(any(t.startswith("ייצור ועלות:") for t in [b[1] for b in DS.blocks(path, uncooled)
+                                                                      if b[0] == "li"]), path)
+
+    def test_system_lesson(self):
+        """The system-considerations lesson: thermal and day cameras get their own steps, each step is spoken."""
+        from trm4 import guide_teach as T, guide_voice_en as EN
+        th = [s["title"] for s in GH.steps("system", merged(UNCOOLED))]
+        day = [s["title"] for s in GH.steps("system", merged(VIS))]
+        self.assertIn("NETD וחומר הגלאי", th)
+        self.assertNotIn("NETD וחומר הגלאי", day)
+        self.assertIn("רעש, זרם חושך וטווח דינמי", day)
+        for st in GH.lesson("system")["steps"]:
+            self.assertIn(("system", st["title"]), T.HE_STEPS)
+            self.assertIn(("system", st["title"]), EN.STEPS)
+        text = " ".join(str(b) for st in GH.lesson("system")["steps"] for b in st["blocks"])
+        for fact in ("7 אלקטרונים", "VOx מקורר", "NETD ∝ F²", "9 Hz", "EMVA 1288", "ISO 12233"):
+            self.assertIn(fact, text)
+
 
 class Lessons(unittest.TestCase):
     def test_lessons_have_steps_for_every_category(self):
