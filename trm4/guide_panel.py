@@ -365,7 +365,8 @@ class GuidePanel(tk.Frame):
     def _focused_path(self):
         """Path of the form field that has the keyboard focus, or None."""
         try:
-            w = self.app.focus_get()
+            # the window may not have the system focus (another window in front): the field Tk keeps for it
+            w = self.app.focus_get() or self.app.focus_lastfor()
         except (KeyError, tk.TclError):
             return None
         if w is None:
@@ -387,7 +388,7 @@ class GuidePanel(tk.Frame):
         except tk.TclError:
             pass
         try:
-            if self.app.focus_get() is w:               # already there: no FocusIn will come
+            if (self.app.focus_get() or self.app.focus_lastfor()) is w:   # already there: no FocusIn will come
                 return
         except (KeyError, tk.TclError):
             pass

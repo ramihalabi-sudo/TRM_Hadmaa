@@ -84,7 +84,7 @@ class Scripts(unittest.TestCase):
         p = merged(LWIR)
         he = " ".join(texts(GV.field_script("he", "optics.f_mm", 2.5, p)))
         self.assertIn("2.5", he)                                         # 2.5 mm: entered in cm?
-        self.assertIn(GH.check("optics.f_mm", 2.5, p)[1].split(".")[0], he)   # the reason, in the teacher's words
+        self.assertIn("פחות מ-3 mm", he)                                 # the reason, in the teacher's words
         self.assertIn(" 25", he)                                         # the suggested value
         self.assertIn("משקפת", he)                                       # the analogy of the core lesson
         res = {"base": {"Detection": 10.0, "Recognition": 4.0, "Identification": 2.0},
@@ -105,6 +105,15 @@ class Scripts(unittest.TestCase):
         for marker in ("מה זה", "למה", "למשל", "לעומת זאת", "כלומר", "עכשיו", "בשורה התחתונה"):
             self.assertIn(marker, joined)
         self.assertNotIn(" = ", joined)
+        # cause and result said out loud, as people do when they explain (interview answers: action -> "as a result")
+        warn = " ".join(texts(GV.field_script("he", "optics.f_mm", 2.5, p, impact=lambda: {
+            "base": {"Detection": 10.0}, "alts": [("הערך המוצע", 25, {"Detection": 12.0}, None, [])]})))
+        for marker in ("ולמה", "? כי ", "כי פחות", "כך שייתכן", "ולכן הייתי מנסה", "אם תעברו לערך המוצע",
+                       "ולכן, במערכת שלכם"):
+            self.assertIn(marker, warn)
+        en = " ".join(texts(GV.field_script("en", "optics.f_mm", 50.0, p)))
+        self.assertIn("? Because ", en)
+        self.assertNotIn("Think of binoculars. So", en)                  # hand-written lessons are said as written
         self.assertTrue(any(t.startswith("ובמערכת שלכם, בהערכה גסה: חומר הגלם") for t in
                             texts(GV.field_script("he", "optics.D_mm", value_of(p, "optics.D_mm"), p))))
         self.assertIn("697 עד", GV.speech("כ-$697-$1.4k", "he") + " 697 עד")

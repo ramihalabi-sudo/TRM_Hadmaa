@@ -74,6 +74,17 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.18 - spoken guide: cause and result
+
+`guide_voice._connect` marks results between sentences (`_RESULT_HE` / `_RESULT_EN`: verbs of effect such as
+shortens, gives, drops) with "as a result" / "so" / "because of that", in turn; `_because` opens the answer to
+"why does it matter?" with "because"; `_clause` turns an explaining dash into "because" and a consequence dash into
+"so that", and "(= X)" into "that is X". The warning, the suggested value and the effect on the ranges are said as
+reason -> action -> result ("because ...", "so I would try ...", "if you move to ..., the ranges become ...", "so in
+your system ..."), as in a structured interview answer (situation, action, result). Hand-written spoken text (the
+analogies of `guide_teach.LESSON`) is said as written (`auto=False`). `GuidePanel._focused_path` also reads the
+field Tk keeps for the window (`focus_lastfor`) when another window has the system focus.
+
 ## Version 2.17 - spoken guide: the flow of a spoken explanation
 
 `guide_voice.field_script` follows the structure of a spoken lesson, with a signpost question opening each part

@@ -222,17 +222,35 @@ def _clause(t, lang):
         t = eq[0] + (" פירושו " if lang == "he" else " means ") + eq[1] + "."   # "A = B" in prose
     t = re.sub(r"\s*\((גמישות|elasticity)\s+([^)]*)\)", lambda m: (", עם גמישות של " if lang == "he"
                                                                    else ", with an elasticity of ") + m.group(2), t)
+    t = re.sub(r"\s*\(=\s*([^()]{1,80})\)", (r", כלומר \1," if lang == "he" else r", that is \1,"), t)
     t = re.sub(r"\s*\(([^()]{1,80})\)", r", \1,", t)
+    if lang == "he":                                 # "X - זה משנה" -> "X, כי זה משנה"; "X - ייתכן" -> "X, כך שייתכן"
+        t = re.sub(r"\s+-\s+(?=(זה|הוא|היא|הם|הן)\s)", ", כי ", t)
+        t = re.sub(r"\s+-\s+(ייתכן|צריך|נדרש|נדרשת|נדרשים|אין|הטווח|הטווחים|התמונה|הניגוד)(?=\s)", r", כך ש\1", t)
+    else:
+        t = re.sub(r"\s+-\s+(?=(it|this|that|they)\s)", ", because ", t)
+        t = re.sub(r"\s+-\s+(?=(maybe|perhaps|you|the range|the image)\b)", ", so ", t)
     t = re.sub(r",\s*([.;:])", r"\1", t)
     return t
 
 
-def _connect(sentences, lang):
-    """Discourse markers between the sentences of a paragraph: an example, a contrast, a consequence."""
-    out, contexts = [], 0
+_RESULT_HE = re.compile(r"\b(מקצר|מקצרת|מקצרים|מאריך|מאריכה|קיצר|קיצרו|התקצר|הוסיף|הוסיפו|ירד|יורד|יורדת|עולה|"
+                        r"גדל|גדלה|קטן|קטנה|נותן|נותנת|נותנים|מגדיל|מגדילה|מקטין|מקטינה|משפר|משפרת|פוגע|פוגעת|"
+                        r"נעלם|נעלמת|קורס|מנפח|מנפחת)\b")
+_RESULT_EN = re.compile(r"\b(shortens|shortened|lengthens|adds|added|drops|dropped|rises|grows|gives|increases|"
+                        r"reduces|improves|hurts|collapses|disappears|inflates)\b")
+_SO_HE = ["כתוצאה מכך, ", "ולכן, ", "בעקבות זה, "]
+_SO_EN = ["As a result, ", "So ", "Because of that, "]
+
+
+def _connect(sentences, lang, auto=True):
+    """Discourse markers between the sentences of a paragraph, as people link ideas when they speak: an example
+    ("for example"), a contrast ("by contrast"), and above all cause and result ("so", "as a result", "because of
+    that") - the explicit causal links that make spoken explanations easy to follow."""
+    out, contexts, results = [], 0, 0
     for i, x in enumerate(sentences):
         x = _clause(x, lang)
-        if i == 0:
+        if i == 0 or not auto:
             out.append(x)
             continue
         w = x.split(" ", 1)[0]
@@ -245,6 +263,12 @@ def _connect(sentences, lang):
                 x = "למשל, " + x
             elif w == "בלי":
                 x = "ושימו לב: " + x
+            elif _RESULT_HE.search(x) and not x.startswith(("ולכן", "כתוצאה", "בעקבות", "אבל", "כי", "כלומר")):
+                x = _SO_HE[results % len(_SO_HE)] + x
+                results += 1
+            elif _RESULT_HE.search(x) and not x.startswith(("ולכן", "כתוצאה", "בעקבות", "אבל", "כי", "כלומר")):
+                x = _SO_HE[results % len(_SO_HE)] + x
+                results += 1
         else:
             ctx = w in ("In", "At", "On", "For", "With", "By") and i > 0
             if ctx:
@@ -254,15 +278,22 @@ def _connect(sentences, lang):
                 x = "For example, " + _lower_first(x)
             elif w == "Without":
                 x = "And note: " + _lower_first(x)
+            elif _RESULT_EN.search(x) and w not in ("So", "As", "Because", "But", "That"):
+                x = _SO_EN[results % len(_SO_EN)] + _lower_first(x)
+                results += 1
+            elif _RESULT_EN.search(x) and w not in ("So", "As", "Because", "But", "That"):
+                x = _SO_EN[results % len(_SO_EN)] + _lower_first(x)
+                results += 1
         out.append(x)
     return out
 
 
-def _para(out, text, lang, lead=""):
-    """A paragraph of reference text, said with connections; `lead` is the spoken question that opens it."""
+def _para(out, text, lang, lead="", auto=True):
+    """A paragraph of reference text, said with connections; `lead` is the spoken question that opens it.
+    auto=False: hand-written spoken text (the lessons), said as written."""
     if not text:
         return
-    sents = _connect(sentences(text), lang)
+    sents = _connect(sentences(text), lang, auto)
     if lead:
         sents[0] = lead + " " + sents[0]
     for x in sents:
@@ -294,6 +325,22 @@ def _typical(items, lang):
         return parts[0] + "."
     last = ("ו" + parts[-1]) if lang == "he" else ("and " + parts[-1])
     return "; ".join(parts[:-1]) + "; " + last + "."
+
+
+def _because(text, lang):
+    """The answer to "why does it matter?" opens with "because", as a spoken answer does."""
+    t = str(text).strip()
+    if lang == "he":
+        return t if t.startswith(("כי", "בגלל")) else "כי " + t
+    return t if t.lower().startswith(("because", "since")) else "Because " + _lower_first(t)
+
+
+def _because(text, lang):
+    """The answer to "why does it matter?" opens with "because", as a spoken answer does."""
+    t = str(text).strip()
+    if lang == "he":
+        return t if t.startswith(("כי", "בגלל")) else "כי " + t
+    return t if t.lower().startswith(("because", "since")) else "Because " + _lower_first(t)
 
 
 def _source(text, lang):
@@ -354,12 +401,12 @@ def field_script(lang, path, value, project, label=None, impact=None, brief=Fals
         _add(out, pick("preview"), lang)
     # 2. the idea
     if lesson:
-        _para(out, lesson[1], lang, pick("idea_q"))
+        _para(out, lesson[1], lang, pick("idea_q"), auto=False)
     elif what:
         _para(out, what, lang, pick("idea_q"))
     # 3. why it matters
     if why:
-        _para(out, why, lang, pick("why"))
+        _para(out, _because(why, lang), lang, pick("why"))
     if not brief:
         # 4. a feel for the numbers, and where the value comes from
         if typical:
@@ -375,7 +422,7 @@ def field_script(lang, path, value, project, label=None, impact=None, brief=Fals
         else:
             _add(out, pick("warn").format(v=v), lang)
             if he:
-                _para(out, res[1], lang, "והסיבה:")
+                _para(out, res[1], lang, "כי")
             else:
                 _add(out, FRAME_EN_WARN, lang)
         if sug is not None:
@@ -456,17 +503,23 @@ def impact_script(lang, res):
             continue
         val = value_text(v, lang) if not isinstance(v, str) else (v if label == "הערך המוצע" else label)
         if lang == "he":
-            _add(out, "עם %s: %s." % ("הערך המוצע, " + val if label == "הערך המוצע" else val, "; ".join(parts)), lang)
+            _add(out, ("אם תעברו לערך המוצע, %s, הטווחים יהיו: %s." % (val, "; ".join(parts))) if label == "הערך המוצע"
+                 else "ואם תשנו ל%s, אז: %s." % (("-" if not "\u0590" <= val[:1] <= "\u05ff" else "") + val,
+                                                  "; ".join(parts)), lang)
         else:
-            _add(out, "With %s: %s." % ("the suggested value, " + val if label == "הערך המוצע" else val,
-                                        "; ".join(parts)), lang)
+            _add(out, ("If you move to the suggested value, %s, the ranges become: %s." % (val, "; ".join(parts)))
+                 if label == "הערך המוצע" else "And if you change it to %s, then: %s." % (val, "; ".join(parts)), lang)
     if res.get("alts"):
         if lang == "he":
-            _add(out, "כלומר: " + GI.verdict(worst) + ".", lang)
+            a = abs(worst)
+            _add(out, "ולכן, במערכת שלכם, " + ("לשדה הזה כמעט אין השפעה." if a < 2 else "יש לשדה הזה השפעה קטנה."
+                                                 if a < 8 else "יש לשדה הזה השפעה בינונית." if a < 20 else
+                                                 "יש לשדה הזה השפעה גדולה."), lang)
         else:
             a = abs(worst)
-            _add(out, "In other words, " + ("almost no effect in your system." if a < 2 else "a small effect."
-                                            if a < 8 else "a medium effect." if a < 20 else "a large effect."), lang)
+            _add(out, "So in your system, this field has " + ("almost no effect." if a < 2 else "a small effect."
+                                                                if a < 8 else "a medium effect." if a < 20 else
+                                                                "a large effect."), lang)
     return out
 
 
