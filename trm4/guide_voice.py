@@ -12,7 +12,9 @@ Where the voice comes from, per sentence:
 Playback goes through the Windows MCI player (winmm), so no Python package is needed; on other systems the narrator
 reports that no voice is available.
 
-speech(text, lang) turns screen text into what a voice should read (units, symbols, ranges, acronyms).
+speech(text, lang) turns screen text into what a voice should read (units, symbols, ranges, acronyms).  In Hebrew
+the English words stay in English: a recording says them with an English voice tuned to the Hebrew narrator
+(voice_parts, MIX_EN; tools/voice_mix.py), and the live Windows voice gets them spelled in Hebrew (live_text).
 """
 import ctypes
 import hashlib
@@ -45,7 +47,7 @@ _LETTERS_HE = {"A": "איי", "B": "בי", "C": "סי", "D": "די", "E": "אי"
 # words a Hebrew voice should say as a word, not letter by letter
 _WORDS_HE = {"IFOV": "איי-פוב", "FOV": "פוב", "NFOV": "אן-פוב", "WFOV": "דאבל-יו-פוב", "LWIR": "אל-וויר",
              "MWIR": "אם-וויר", "SWIR": "אס-וויר", "NIR": "אן-איי-אר", "VIS": "ויז", "STANAG": "סטנאג",
-             "MODTRAN": "מודטרן", "TRM4": "טי אר אם ארבע", "NV-IPM": "אן וי איי פי אם", "CMOS": "סימוס",
+             "MODTRAN": "מודטרן", "TRM_HADMAA": "טי אר אם הדמאה", "TRM4": "טי אר אם ארבע", "NV-IPM": "אן וי איי פי אם", "CMOS": "סימוס",
              "InGaAs": "אינגאס", "InSb": "אינדיום אנטימוניד", "XBn": "אקס בי אן", "VOx": "וי או אקס",
              "rms": "אר אם אס", "PDF": "פי די אף", "RSS": "אר אס אס", "json": "ג'ייסון", "preset": "פריסט",
              "e-": "אלקטרונים"}
@@ -60,9 +62,9 @@ _UNITS = {  # unit after a number: (hebrew, english)
     "nm": ("ננומטר", "nanometers"), "s": ("שניות", "seconds"), "W": ("ואט", "watts"),
 }
 _SYMBOLS = [  # (pattern, hebrew, english) - applied before the units
-    (r"Fλ/d", "אף למדא חלקי די", "F lambda over d"), (r"F/#", "אף נאמבר", "F-number"),
-    (r"Cn²", "סי-אן בריבוע", "C n squared"), (r"m\^-2/3", "מטר בחזקת מינוס שתיים שליש", "meters to the minus two thirds"),
-    (r"ΔT", "דלתא טי", "delta T"), (r"σ", "סיגמה", "sigma"), (r"τ0", "טאו אפס", "tau zero"), (r"τ", "טאו", "tau"),
+    (r"Fλ/d", "F lambda over d", "F lambda over d"), (r"F/#", "F-number", "F-number"),
+    (r"Cn²", "C n squared", "C n squared"), (r"m\^-2/3", "מטר בחזקת מינוס שתיים שליש", "meters to the minus two thirds"),
+    (r"ΔT", "delta T", "delta T"), (r"σ", "סיגמה", "sigma"), (r"τ0", "טאו אפס", "tau zero"), (r"τ", "טאו", "tau"),
     (r"λ", "למדא", "lambda"), (r"±", "פלוס מינוס ", "plus or minus "), (r"≤", " עד ", " at most "),
     (r"≈", " בערך ", " about "), (r"~", "בערך ", "about "), (r"²", " בריבוע", " squared"),
     (r"³", " בשלישית", " cubed"), (r'לק"ג', "לקילוגרם", "per kilogram"), (r'ק"ג', "קילוגרם", "kilograms"),
@@ -93,8 +95,8 @@ def speech(text, lang):
     s = s.replace("∝", " פרופורציונלי ל" if he else " proportional to ")
     for pat, h, e in _SYMBOLS:
         s = re.sub(pat, h if he else e, s)
-    s = re.sub(r"\bF/(\d+(?:\.\d+)?)", (r"אף \1" if he else r"F \1"), s)              # F/4 -> F 4
-    s = re.sub(r"(\d)\s*[-–]\s*(?=(?:אף |F )?\d)", r"\1 %s " % ("עד" if he else "to"), s)  # 8-25 -> 8 to 25
+    s = re.sub(r"\bF/(\d+(?:\.\d+)?)", r"F \1", s)                                   # F/4 -> F 4
+    s = re.sub(r"(\d)\s*[-–]\s*(?=(?:F )?\d)", r"\1 %s " % ("עד" if he else "to"), s)  # 8-25 -> 8 to 25
     s = re.sub(r"(\d)\s*[x×]\s*(\d)", r"\1 %s \2" % ("על" if he else "by"), s)       # 640x512
     units = sorted(_UNITS, key=len, reverse=True)
     pat = r"(%s)\s*(%s)(?=[\s.,;:)/]|$)" % (_NUM, "|".join(re.escape(u) for u in units))
@@ -105,17 +107,14 @@ def speech(text, lang):
     s = s.replace(" · ", ", ").replace("·", ", ").replace(" - ", ", ").replace(" – ", ", ")
     s = re.sub(r"(?<![\w.])(\w|\d+(?:\.\d+)?)\s/\s(?=\d)", r"\1 %s " % ("חלקי" if he else "divided by"), s)
     s = s.replace(" = ", " שווה " if he else " equals ").replace(" / ", " או " if he else " or ")
-    s = re.sub(r"Ctrl\+(\w)", (r"קונטרול \1" if he else r"Control \1"), s)
+    s = re.sub(r"Ctrl\+(\w)", r"Control \1", s)
     s = re.sub(r"\s<\s*(?=\d)", " קטן מ-" if he else " less than ", s)
     s = re.sub(r"\s>\s*(?=\d)", " גדול מ-" if he else " greater than ", s)
     s = s.replace(" > ", ", ")                                                         # menu paths
     s = re.sub(r"[()\[\]{}\"“”]", " ", s) if not he else re.sub(r"[()\[\]{}“”]", " ", s)
     if he:
-        for w in sorted(_WORDS_HE, key=len, reverse=True):
-            s = re.sub(r"(?<![A-Za-z])%s(?![A-Za-z])" % re.escape(w), _WORDS_HE[w], s)
-        # other all-capital acronyms: letter by letter
-        s = re.sub(r"(?<![A-Za-z])([A-Z]{2,5})(?![a-z])",
-                   lambda m: " ".join(_LETTERS_HE.get(c, c) for c in m.group(1)), s)
+        for w in sorted(_HEBREW_OF, key=len, reverse=True):         # the few Latin names said as Hebrew words
+            s = re.sub(r"(?<![A-Za-z])%s(?![A-Za-z])" % re.escape(w), _HEBREW_OF[w], s)
         s = re.sub(r"(?<![\u0590-\u05ff])([\u05d1\u05d4\u05d5\u05dc\u05de\u05db\u05e9])-(?=[\u0590-\u05ff])", r"\1", s)   # "\u05d4-IFOV": one word
     else:
         s = re.sub(r"[\u0590-\u05ff\"]+", " ", s)                                     # no Hebrew in English speech
@@ -123,6 +122,63 @@ def speech(text, lang):
     s = re.sub(r"([.,;:])\1+", r"\1", s)
     s = re.sub(r"\s{2,}", " ", s).strip(" ,;")
     return s
+
+
+# Latin names that a Hebrew sentence says in Hebrew (the rest of the English stays English)
+_HEBREW_OF = {"TRM_HADMAA": "TRM הדמאה", "InSb": "אינדיום אנטימוניד", "e-": "אלקטרונים"}
+
+# --- English inside Hebrew.  A run of English: a letter with its number (F5, F 4), or words, acronyms and keys
+# (Camera profile, IFOV, NV-IPM).  A Hebrew prefix glued to it (ב-Summary, ו-Lab) is said by the Hebrew voice.
+LATIN = re.compile(r"(?<![A-Za-z])[A-Z] ?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9_+#]*(?:[ \-/][A-Za-z][A-Za-z0-9_+#]*)*")
+_PREFIX = {"ב": "בֶּ", "ה": "הַ", "ו": "וֶ", "ל": "לַ", "מ": "מֶ", "ש": "שֶׁ", "כ": "כְּ"}
+# the English voice of a Hebrew recording: the English male voice closest to he-IL-AvriNeural by pitch and tone
+# colour, lowered to his pitch and darkened (chosen by ear, 2026-11-10; tools/voice_mix.py)
+MIX_EN = {"voice": "en-US-ChristopherNeural", "pitch": "-10Hz", "tone": "treble=g=-3:f=2500"}
+
+
+def voice_parts(said):
+    """[(lang, text)] of a spoken Hebrew sentence (speech()): the Hebrew runs and the English runs, each run with the
+    punctuation after it (where the pause goes)."""
+    out, pos = [], 0
+
+    def tail(piece):                       # punctuation at the start of a piece belongs to the run before it
+        lead = re.match(r"\s*[,.;:!?]+", piece)
+        if lead and out:
+            out[-1] = (out[-1][0], out[-1][1] + lead.group(0).strip())
+            piece = piece[lead.end():]
+        return piece
+
+    for m in LATIN.finditer(said):
+        before = tail(said[pos:m.start()])
+        pm = re.search(r"(?:^|\s)([בהולמשכ])-?$", before)
+        if pm:
+            before = before[:pm.start(1)] + _PREFIX[pm.group(1)]
+        if before.strip(" ,.;:-"):
+            out.append(("he", before.strip()))
+        out.append(("en", m.group(0).replace("_", " ")))
+        pos = m.end()
+    rest = tail(said[pos:])
+    if rest.strip(" ,.;:!?-"):
+        out.append(("he", rest.strip()))
+    return out
+
+
+def is_mixed(lang, said):
+    return lang == "he" and bool(LATIN.search(said or ""))
+
+
+def live_text(said, lang):
+    """What the live Windows voice gets: in Hebrew, the English spelled the way a Hebrew voice can say it."""
+    if lang != "he":
+        return said
+    s = said.replace("Control ", "קונטרול ").replace("F lambda over d", "אף למדא חלקי די")
+    s = s.replace("F-number", "אף נאמבר").replace("C n squared", "סי-אן בריבוע").replace("delta T", "דלתא טי")
+    s = re.sub(r"(?<![A-Za-z])F (?=\d)", "אף ", s)
+    for w in sorted(_WORDS_HE, key=len, reverse=True):
+        s = re.sub(r"(?<![A-Za-z])%s(?![A-Za-z])" % re.escape(w), _WORDS_HE[w], s)
+    s = re.sub(r"(?<![A-Za-z])([A-Z]{2,5})(?![a-z])",
+               lambda m: " ".join(_LETTERS_HE.get(c, c) for c in m.group(1)), s)       # acronyms letter by letter
+    return re.sub(r"(?<![֐-׿])([בהולמכש])-(?=[֐-׿])", r"\1", s)
 
 
 _SENT = re.compile(r"(?<=[.!?])\s+(?=\S)")
@@ -548,15 +604,49 @@ def _ranges_en(r):
     return ", ".join("%s %s kilometers" % (t.lower(), GI._km(v)) for t, v in r.items())
 
 
+def lesson_welcome(lang, lesson_id):
+    """The opening of a lesson: welcome to the first (second ...) lesson, and what we do today (guide_teach.LEARN)."""
+    ids = [les["id"] for les in G.LESSONS]
+    if lesson_id not in ids:
+        return ""
+    i = ids.index(lesson_id)
+    n = _ORDINAL[lang][i] if i < len(_ORDINAL[lang]) else str(i + 1)
+    he, en = T.LEARN.get(lesson_id, ("", ""))
+    if lang == "he":
+        return "ברוכים הבאים לשיעור %s. היום %s" % (n, he)
+    return "Welcome to the %s lesson. Today we will %s" % (n, en)
+
+
+_ORDINAL = {"he": ("הראשון", "השני", "השלישי", "הרביעי", "החמישי", "השישי", "השביעי", "השמיני"),
+            "en": ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth")}
+
+
 def step_script(lang, lesson_id, step, field_args=None, labels=None):
     """Narration of a lesson step.  field_args: dict(path=..., value=..., project=..., label=..., impact=...)
     for a step that shows a field card; labels: {path: form label} for a group step of the tour."""
     out = []
+    if step.get("lesson_start"):
+        _add(out, lesson_welcome(lang, lesson_id), lang)
     key = (lesson_id, step["title"])
     spoken = T.HE_STEPS.get(key) if lang == "he" else (EN.STEPS.get(key) or (None, None))[1]
     if spoken:
         for para in spoken:
             _add(out, para, lang)
+    elif step.get("entry"):                             # lesson 4: page by page, the critical fields emphasised
+        page = step.get("page")
+        if step.get("page_intro"):
+            if lang == "he":
+                he, desc = G.PAGE_HE.get(page, (page, ""))
+                _add(out, "נעבור לעמוד %s. בעמוד הזה: %s" % (he, desc), lang)
+            else:
+                _add(out, "Let's move to the %s page. This page covers %s" % (page, EN.PAGES.get(page, "")), lang)
+        elif step.get("group"):
+            _add(out, ("נמשיך באותו עמוד, %s." % G.PAGE_HE.get(page, (page, ""))[0]) if lang == "he" else
+                 "We continue on the %s page." % page, lang)
+        if step.get("group"):
+            _add(out, CRIT_TEXT[lang]["low"], lang)
+        elif step.get("critical"):
+            _add(out, CRIT_TEXT[lang]["crit"], lang)
     elif step.get("group") and step.get("page"):
         page = step["page"]
         first = bool(step.get("blocks")) and step["blocks"][0][0] == "box"
@@ -580,6 +670,16 @@ def step_script(lang, lesson_id, step, field_args=None, labels=None):
     if lesson_id and lesson_id != "tour" and step.get("path") and not step.get("group"):
         _add(out, T.pick(lang, "next", step.get("path")), lang)
     return out
+
+
+CRIT_TEXT = {
+    "he": {"crit": "שימו לב: זה אחד הפרמטרים הקריטיים לטווח. ערך שגוי כאן משנה את הטווח מאוד.",
+           "low": "השדות האלה משפיעים מעט על הטווח. אפשר להשאיר אותם בברירת המחדל, אם אין לכם נתון טוב יותר."},
+    "en": {"crit": "Note: this is one of the parameters that are critical to the range. A wrong value here changes the "
+                   "range a lot.",
+           "low": "These fields have little effect on the range. You can leave them at their defaults if you have no "
+                  "better data."},
+}
 
 
 def group_script(lang, paths, labels, project, values):
@@ -663,19 +763,102 @@ def walk_script(lang, items, on_field, on_end, intro=()):
     return out
 
 
-def home_script(lang, lessons, done):
+# the opening screen, as the narrator says it (reports/מדריך_מסך_הפתיחה.docx): the welcome, a spoken introduction
+# of each of the six lessons, and the choice: the order, the controls of the guide, and off we go.  "…" is a pause
+# inside a sentence (the voice reads it as a stop, the caption keeps the sentence whole).
+HOME_OPEN_HE = (
+    "ברוכים הבאים לעולם של TRM_HADMAA! אז… מוכנים לגלות מה המערכת האופטית שלכם באמת מסוגלת לעשות? האם אי פעם "
+    "שאלתם את עצמכם עד לאיזה טווח המצלמה שלכם יכולה לגלות מטרה? מה גורם לטווח הזה להשתנות? והכי חשוב, מה אפשר "
+    "לעשות כדי לשפר אותו? בדיוק בשביל זה אנחנו כאן! במהלך ההדרכה שלנו נגלה יחד כיצד תוכנת TRM_HADMAA מאפשרת "
+    "לחזות ביצועים של מערכות אופטיות, לנתח את הגורמים המשפיעים עליהם, ולבחון דרכים לשיפור התכנון. וכדי להפוך את "
+    "הלמידה לפשוטה, מעניינת ובעיקר מעשית, הכנתי עבורכם שישה שיעורים, שבכל אחד מהם נחשוף יכולת נוספת של התוכנה. "
+    "אז בואו נראה מה מחכה לנו!")
+# {lesson id: (the heading, after "שיעור N: ", and what the narrator says about the lesson)}
+HOME_LESSON_HE = {
+    "intro": (
+        "מה רואים על המסך? בואו נכיר את התוכנה!",
+        "לפני שנתחיל לחשב טווחים, כדאי שנכיר את סביבת העבודה שלנו. מה כל הכפתורים האלה עושים? מה ההבדל בין Quick, "
+        "Engineering ו-Lab? ואיך בכלל יודעים אילו נתונים צריך להזין? בשיעור הראשון נעשה סיור מודרך בתוכנה, נכיר את "
+        "המסכים והכלים השונים, נגלה איך מקבלים הסבר על כל שדה באמצעות סימן השאלה שלצידו, ונלמד כיצד לקרוא את "
+        "התוצאות בלשוניות Summary, Range ו-Messages. בסוף השיעור, המסך שנראה בהתחלה קצת עמוס יהפוך לסביבת עבודה "
+        "מוכרת וברורה!"),
+    "first": (
+        "החישוב הראשון. בואו נגלה לאיזה טווח המצלמה מגיעה!",
+        "עכשיו, אחרי שהכרנו את התוכנה, הגיע הזמן לראות אותה בפעולה! דמיינו שיש לכם מצלמה אופטית, ואתם רוצים לדעת: "
+        "מאיזה מרחק היא תצליח לגלות אדם? מאיזה מרחק אפשר יהיה להכיר בסוג המטרה? ומתי ניתן יהיה לזהות אותה? בשיעור "
+        "הזה נגלה איך מקבלים תשובות לשאלות האלה. נבחר תבנית מצלמה מוכנה באזור Camera profile, נגדיר מטרה ותנאי "
+        "אטמוספרה, ונלחץ על Calculate, או פשוט על מקש F5. וזהו! התוכנה תבצע את החישוב ותציג לנו את טווחי הגילוי, "
+        "ההכרה והזיהוי החזויים של המערכת. הכול באמצעות תהליך Quick Prediction, בלי שנצטרך להגדיר כל פרמטר במערכת "
+        "בעצמנו."),
+    "results": (
+        "קיבלנו תוצאות… אבל מה הן באמת אומרות?",
+        "מצוין! הצלחנו לחשב את הטווחים של המצלמה שלנו. אבל רגע… האם הטווח שקיבלנו הוא באמת הטווח המקסימלי שהמערכת "
+        "מסוגלת להגיע אליו? ומה בעצם מונע ממנה להגיע רחוק יותר? בשיעור השלישי נהפוך מחישוב פשוט לניתוח הנדסי. "
+        "נצלול לתוך לשונית Summary, נבין מה המשמעות של הערכים המחושבים ונגלה אילו גורמים מגבילים את ביצועי "
+        "המערכת. האם זו האופטיקה? אולי הגלאי? ואולי דווקא תנאי האטמוספרה? בסיום השיעור תדעו לא רק לקרוא את "
+        "התוצאה, אלא גם להבין למה קיבלתם דווקא אותה."),
+    "engineering": (
+        "עכשיו תורכם! בואו נבנה את המערכת שלכם!",
+        "עד עכשיו עבדנו עם תבניות מוכנות. אבל מה קורה כשאנחנו רוצים לבדוק מצלמה אמיתית, עם הנתונים והמאפיינים "
+        "שלה? כאן הדברים מתחילים להיות מעניינים! בשיעור הרביעי נעבור למצב Engineering Analysis, שבו תוכלו להגדיר "
+        "את המערכת האופטית שלכם בעצמכם. נעבור יחד בין עמודי הטופס, נכיר את הפרמטרים השונים ונבין מה המשמעות של כל "
+        "אחד מהם. אל תדאגו, לא תצטרכו לזכור הכול! אני אדגיש עבורכם את השדות הרלוונטיים, אסביר מה צריך להזין בכל "
+        "אחד מהם ואבדוק את תקינות הערכים שתכניסו. ויש גם משהו שכדאי לשים לב אליו: במהלך השיעור אסמן באדום את "
+        "הפרמטרים הקריטיים ביותר לטווחי המערכת. בסיום נקבל רשימה מסודרת שלהם, כדי שנדע בדיוק על מה כדאי להתמקד."),
+    "improve": (
+        "רוצים להגיע רחוק יותר? בואו נשפר את הביצועים!",
+        "אז הגדרנו מערכת, חישבנו את הטווחים והבנו מה מגביל אותנו. עכשיו מגיעה השאלה המעניינת באמת: איך אפשר לשפר "
+        "את הביצועים? האם כדאי להגדיל את אורך המוקד? לשנות את קוטר המפתח? לבחור גלאי אחר? ואיזה שינוי ייתן לנו את "
+        "השיפור המשמעותי ביותר? בשיעור החמישי נלמד כיצד לבחון את השאלות האלה בצורה מסודרת. נשנה פרמטרים, נבדוק "
+        "כיצד כל שינוי משפיע על הטווח ונגלה כיצד ניתן להשוות בין אפשרויות שונות לשיפור המערכת. אבל יש עוד דבר "
+        "חשוב: בעולם האמיתי, לא כל נתון ידוע בדיוק מוחלט. לכן נכיר גם את ניתוח אי-הוודאות, ונלמד כיצד הוא משפיע "
+        "על תחזית הביצועים שלנו. ולקינוח? נפיק דוח ביצועים מקצועי בעברית, שירכז את הנתונים, החישובים והתוצאות "
+        "שלנו."),
+    "system": (
+        "לא רק טווח! בואו נחשוב כמו מהנדסי מערכת!",
+        "הגענו לשיעור האחרון, וכאן נגלה משהו חשוב: המערכת שמגיעה לטווח הרחוק ביותר היא לא בהכרח המערכת הטובה "
+        "ביותר. למה? כי במערכת אמיתית יש הרבה יותר שיקולים מטווח בלבד. מה קורה למשקל המצלמה כשמגדילים את קוטר "
+        "העדשה? איך שינוי באופטיקה משפיע על הממדים והעלות? האם ניתן בכלל לייצר את התכנון שבחרנו? ומה לגבי מגבלות "
+        "ייצוא? בשיעור השישי נלמד להסתכל על המערכת בצורה רחבה יותר. נבחן מה מגביל את חדות התמונה, נכיר את "
+        "המשמעות של היחס Fλ/d, ונבין כיצד החלטות תכנון משפיעות על ביצועים, משקל, ממדים, עלות ומורכבות ייצור. "
+        "ולבסוף, נלמד כיצד ניתן לאמת את הפרמטרים ואת ביצועי המערכת באמצעות מדידות וניסויים. המטרה שלנו היא לא רק "
+        "להגיע לתוצאה מרשימה על המסך, אלא להבין איך מתכננים מערכת שאפשר גם לממש בעולם האמיתי."),
+}
+HOME_DONE_HE = "את השיעור הזה כבר השלמתם."
+HOME_END_HE = (
+    "ועכשיו… הבחירה בידיים שלכם! אז אלה ששת השיעורים שמחכים לנו! כפי שאתם רואים בצד ימין של המסך, כל שיעור "
+    "מופיע בכרטיסייה משלו, עם תיאור קצר ומשך הדרכה משוער. אני ממליץ להתחיל מהשיעור הראשון ולהתקדם בהדרגה עד "
+    "לשיעור השישי, כי כל שיעור בונה את הידע שנצטרך בשיעור הבא. אבל אם אתם כבר מכירים את התוכנה ורוצים לקפוץ "
+    "ישירות לנושא מסוים, אין שום בעיה! תוכלו לבחור כל שיעור שמתאים לכם. וזכרו, אתם לא לבד בתהליך! ברגע שתבחרו "
+    "שיעור, אני אוביל אתכם דרך המסכים האמיתיים של התוכנה, אסמן את השדות והכפתורים שעליהם נדבר, אסביר מה כל אחד "
+    "מהם עושה, ואדריך אתכם כיצד להזין את הנתונים בצורה נכונה. במהלך ההדרכה תוכלו גם לבחור בין עברית לאנגלית, "
+    "לשנות את מהירות הקריינות ולהפעיל או לעצור את ההסברים הקוליים באמצעות האפשרויות שמופיעות בחלק העליון של "
+    "המדריך. אז… מוכנים להפוך מנתונים על המסך להבנה הנדסית אמיתית? בחרו את השיעור הראשון, ובואו נגלה יחד מה "
+    "תוכנת TRM_HADMAA מסוגלת לעשות! יוצאים לדרך!")
+
+
+def home_script(lang, lessons, done, intro=True):
+    """The opening screen: the welcome, every lesson by its number, and the choice (the order, the controls, off we
+    go).  intro=False says only the lessons (static_texts records the "completed" form of each one)."""
     out = []
-    if lang == "he":
-        _add(out, "שלום, אני המנחה של המדריך. בחרו שיעור: כל שיעור מוביל אתכם על המסכים האמיתיים, מסמן את השדה "
-                  "ובודק את הערך שהזנתם.", lang)
-        for les in lessons:
-            _add(out, "%s%s. %s" % (les["title"], ", הושלם" if les["id"] in done else "", les["summary"]), lang)
-        _add(out, "אפשר גם לבדוק את כל הערכים בבת אחת, וכשהמדריך פתוח, לחיצה על שדה בטופס מציגה כאן הסבר עליו.", lang)
-    else:
-        _add(out, "Hello, I am the narrator of the guide. " + EN.HOME, lang)
-        for les in lessons:
+    he = lang == "he"
+    if intro:
+        _add(out, HOME_OPEN_HE if he else EN.HOME_OPEN, lang)
+    for les in lessons:
+        n = next((i for i, x in enumerate(G.LESSONS, 1) if x["id"] == les["id"]), None)
+        if he:
+            head, said = HOME_LESSON_HE.get(les["id"], (les["title"] + ".", les["summary"]))
+        else:
             t, s = EN.LESSONS.get(les["id"], (les["id"], ""))
-            _add(out, "%s%s. %s" % (t, ", completed" if les["id"] in done else "", s), lang)
+            head, said = EN.HOME_LESSON.get(les["id"], (t + ".", s))
+        if n:
+            head = ("שיעור %d: %s" if he else "Lesson %d: %s") % (n, head)
+        _add(out, head, lang)
+        if les["id"] in done:
+            _add(out, HOME_DONE_HE if he else EN.HOME_DONE, lang)
+        _add(out, said, lang)
+    if intro:
+        _add(out, HOME_END_HE if he else EN.HOME_END, lang)
     return out
 
 
@@ -729,7 +912,15 @@ def static_texts(lang):
     for les in G.LESSONS:
         for st in les["steps"]:
             take(step_script(lang, les["id"], st))
+    for st in G.entry_steps([], {}, lambda *a: True):
+        take(step_script(lang, "engineering", st))
+    for page in G.PAGE_HE:
+        for kw in ({"page_intro": True, "critical": True}, {"group": True}, {"group": True, "page_intro": True}):
+            take(step_script(lang, "engineering", dict({"title": "", "entry": True, "page": page}, **kw)))
     take(home_script(lang, G.LESSONS, set()))
+    for les in G.LESSONS:
+        _add(welcome := [], lesson_welcome(lang, les["id"]), lang)
+        take(welcome)
     out.append(speech("אעבור איתכם על כל אחד מהם, ואסמן אותו בטופס כדי שתראו בדיוק על מה מדובר." if lang == "he" else
                       "I will go through each of them with you, and highlight it in the form so you can see exactly "
                       "what we are talking about.", lang))
@@ -738,7 +929,7 @@ def static_texts(lang):
             continue
         take(field_script(lang, path.replace(".N.", ".0."), None, None, brief=True))
     for les in G.LESSONS:
-        take(home_script(lang, [les], {les["id"]}))
+        take(home_script(lang, [les], {les["id"]}, intro=False))
     if lang == "en":
         for page in EN.PAGES:
             take(step_script(lang, "tour", {"title": "", "group": True, "page": page,
@@ -770,6 +961,8 @@ def en_sources():
     steps = {(les["id"], st["title"]): st for les in G.LESSONS for st in les["steps"]}
     for st in G.tour_steps([], {}, lambda *a: True):
         steps[("tour", st["title"])] = st
+    for st in G.entry_steps([], {}, lambda *a: True):
+        steps[("engineering", st["title"])] = st
     for (lid, title) in EN.STEPS:
         st = steps.get((lid, title))
         if st:
@@ -783,7 +976,26 @@ def en_sources():
 NEURAL = {"he": "he-IL-AvriNeural", "en": "en-US-AndrewNeural"}     # voices of the recordings
 
 
-def rec_key(lang, text):
+# The Hebrew recordings are read by a Gemini voice (tools/voice_gemini.py): warmer than the Microsoft voice, and it
+# says the English words inside the Hebrew sentence by itself.  The English recordings keep NEURAL["en"].  The model
+# gets the sentences only: given a style instruction ("read warmly ..."), gemini-3.8-flash-tts read it aloud in most
+# recordings.
+GEMINI = {"lang": "he", "model": "gemini-3.8-flash-tts", "voice": "Charon", "prompt": "text-only"}
+
+
+def is_gemini(lang, said):
+    """Is the recording of this sentence made by the Gemini voice (every Hebrew sentence)."""
+    return lang == GEMINI["lang"] and bool(said)
+
+
+def rec_key(lang, text, gemini=True):
+    """A Hebrew sentence is keyed with its Gemini model, voice and prompt (an English sentence inside a Hebrew one,
+    before Gemini, with its English voice): a new voice means a new recording.  gemini=False: the key of the
+    Microsoft recording, played until the Gemini one is made (legacy_key)."""
+    if gemini and is_gemini(lang, text):
+        lang = "he|gemini|%s|%s|%s" % (GEMINI["model"], GEMINI["voice"], GEMINI["prompt"])
+    elif is_mixed(lang, text):
+        lang = "he|mix|%s|%s|%s" % (MIX_EN["voice"], MIX_EN["pitch"], MIX_EN["tone"])
     return hashlib.sha1(("%s|%s" % (lang, text)).encode("utf-8")).hexdigest()[:16]
 
 
@@ -798,8 +1010,16 @@ def recording(lang, text):
             _rec_index[lang] = {f[:-4] for f in os.listdir(d) if f.endswith(".mp3")}
         except OSError:
             _rec_index[lang] = set()
-    k = rec_key(lang, text)
-    return os.path.join(VOICE_DIR, lang, k + ".mp3") if k in _rec_index[lang] else None
+    for k in (rec_key(lang, text), legacy_key(lang, text)):
+        if k and k in _rec_index[lang]:
+            return os.path.join(VOICE_DIR, lang, k + ".mp3")
+    return None
+
+
+def legacy_key(lang, text):
+    """The Microsoft recording of a Hebrew sentence (he-IL-AvriNeural), the fallback while its Gemini recording is
+    missing; None where there is no other voice."""
+    return rec_key(lang, text, gemini=False) if is_gemini(lang, text) else None
 
 
 def has_recordings(lang):
@@ -1000,7 +1220,7 @@ class Narrator:
 
         def work():
             if gen == self._gen:
-                synthesize(self.lang, [t for _i, t in items], self.rate, folder)
+                synthesize(self.lang, [live_text(t, self.lang) for _i, t in items], self.rate, folder)
                 for o in outs:                                  # failed sentences: mark as missing
                     if not os.path.exists(o):
                         open(o + ".fail", "w").close()

@@ -74,6 +74,29 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.21 - guide: the Hebrew narration in a Gemini voice
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Voice | Every Hebrew recording (`guide_voice.static_texts("he")`, 2,046 sentences) is made by Google Gemini TTS, `guide_voice.GEMINI` (`gemini-3.8-flash-tts`, voice `Charon`, the text only: a style instruction was read aloud); `is_gemini`. Until a sentence has its Gemini recording, `recording` plays its Microsoft one (`legacy_key`), which `--prune` keeps. English keeps `en-US-AndrewNeural`; sentences that depend on the project keep the live Windows voice. |
+| Key | `rec_key` keys a Hebrew sentence with the Gemini model, voice and prompt, so a change of any of them means new recordings. |
+| Tool | `tools/voice_gemini.py` (google-genai, ffmpeg; PCM 24 kHz to mp3 48k, silence trimmed) is called by `tools/make_guide_voice.py`: the opening screen first, `--batch` consecutive sentences per request (default 20; the daily limit of 100 counts requests), cut at the pauses by dynamic programming against each sentence's share of letters, `--gemini-jobs` requests at a time; a batch that does not fit is retried in batches of 4, then one by one, and the run stops cleanly when the daily quota is used up. Every new recording is checked by `gemini-3.8-flash` listening to it against its sentence (`voice_gemini.check`); a rejected one is deleted and made again on the next run. The API key comes from `GEMINI_API_KEY` or `~/.gemini_key`; the application never needs it. |
+
+## Version 2.20 - guide: lesson order for a new user, and a lesson that enters every parameter
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Order | `guide_he.LESSONS`: `intro`, `first`, `results`, `engineering`, `improve`, `system`, each with a `group` heading (beginners, working with the results, advanced) and a `short` title for the panel header. The home view numbers the lessons and lists the review of all values under "tools". |
+| Lesson 1 | `intro` (new): what the program calculates, the workflows, the form and pages, the result tabs, the source tag, the field card and the narrator. |
+| Lesson 4 | `engineering` is dynamic (`guide_he.entry_steps`): every shown field, page by page in the order of `ENTRY_CHAPTERS` (9 chapters). Impact 3 and 2 fields get a step each; impact 3 is critical: a red `crit` box (`critical_box`, with a warning while a numeric value is still preset / assumed, `is_guess`), a red highlight of the form label (`GuideCrit.TLabel`) and a spoken sentence (`guide_voice.CRIT_TEXT`). The impact 0-1 fields of a page are one group step. The last step lists the critical fields with value, check and source tag. Repeated titles (the three tasks, atmospheres) get the form label. |
+| Split / moved | The old `results` lesson is split into `results` and `improve`; `Fλ/d` moves to `system`; the source tag moves to `intro`; `first` ends with saving the project. |
+| Tour | `tour` is in `guide_he.HIDDEN_LESSONS`: not on the home page, still walked by *Explain page*. |
+| Voice | Hebrew (`guide_teach.HE_STEPS`) and English (`guide_voice_en`) narration of every new or changed step; recordings made and stamped with `tools/make_guide_voice.py`. |
+
 ## Version 2.19 - system considerations: the system-parameters research, checked
 
 The research "system parameters with system considerations" was checked against datasheets and the literature

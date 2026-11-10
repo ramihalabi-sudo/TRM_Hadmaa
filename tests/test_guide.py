@@ -283,7 +283,7 @@ class Lessons(unittest.TestCase):
                     continue
                 with self.subTest(template=name, lesson=les["id"]):
                     st = GH.steps(les["id"], p)
-                    self.assertGreater(len(st), 3)
+                    self.assertGreaterEqual(len(st), 3)
                     for s in st:
                         if s.get("path"):
                             self.assertIsNotNone(GH.param(s["path"]), s["path"])
@@ -301,6 +301,58 @@ class Lessons(unittest.TestCase):
             self.assertTrue(st[-1].get("review"))
             for s in st[1:-1]:
                 self.assertEqual(s["path"], s["fields"][0])
+
+    def test_lesson_order_for_a_new_user(self):
+        """Screen first, then a first calculation, the result, the whole system, improving, the advanced lesson; the
+        full tour is not a lesson any more but stays for the page walk."""
+        self.assertEqual([l["id"] for l in GH.LESSONS], ["intro", "first", "results", "engineering", "improve",
+                                                          "system"])
+        self.assertNotIn("tour", {l["id"] for l in GH.LESSONS})
+        self.assertIsNotNone(GH.lesson("tour"))
+        self.assertIn("Fλ/d - מי מגביל?", [s["title"] for s in GH.lesson("system")["steps"]])
+        self.assertIn("מקור הנתונים בכל שדה", [s["title"] for s in GH.lesson("intro")["steps"]])
+
+    @unittest.skipIf(G is None, "GUI not importable")
+    def test_entry_lesson_covers_every_field_and_emphasises_the_critical(self):
+        from trm4 import guide_voice as GV
+        for name in (LWIR, VIS):
+            p = merged(name)
+            st = GH.steps("engineering", p, tour_pages(), form_visible)
+            body = [s for s in st if s.get("entry")]
+            listed = [x for s in body for x in (s["fields"] if s.get("group") else [s["path"]])]
+            self.assertEqual(len(listed), len(set(listed)))
+            shown = {f["path"] for _n, fl, _w in tour_pages() for f in fl if f.get("path") and
+                     f.get("kind") not in ("header", "derived") and form_visible(f, None, p)}
+            self.assertEqual(set(listed), shown)
+            crit = [s["path"] for s in body if s.get("critical")]
+            self.assertTrue(crit)
+            for s in body:
+                imp = GH.param(s["path"])["impact"]
+                if s.get("group"):
+                    self.assertTrue(all(GH.param(q)["impact"] < 2 for q in s["fields"]))
+                else:
+                    self.assertGreaterEqual(imp, 2)
+                    self.assertEqual(s["critical"], imp == 3)
+                    self.assertEqual(any(b[0] == "box" and b[1] == "crit" for b in s["blocks"]), imp == 3)
+            self.assertEqual(st[-1]["fields"], crit)
+            self.assertTrue(st[-1].get("summary"))
+            pages = [s["page"] for s in body]                       # chapters in order, each page once
+            seen = [pg for i, pg in enumerate(pages) if i == 0 or pages[i - 1] != pg]
+            self.assertEqual(len(seen), len(set(seen)))
+            order = [n for _t, names in GH.ENTRY_CHAPTERS for n in names]
+            self.assertEqual(seen, [n for n in order if n in seen])
+            self.assertEqual(sum(1 for s in body if s.get("page_intro")), len(seen))
+            he = " ".join(t for _k, t in GV.step_script("he", "engineering", next(s for s in body if s.get("critical"))))
+            self.assertIn("קריטיים לטווח", he)
+        titles = [s["title"] for s in GH.steps("engineering", merged(LWIR), tour_pages(), form_visible)]
+        self.assertEqual(len(titles), len(set(titles)), "every step of lesson 4 has its own title")
+        guess = merged(LWIR)
+        self.assertFalse(GH.is_guess(guess, "category"))                 # a choice is not a guessed value
+        guess["provenance"] = {"optics.f_mm": "preset"}
+        self.assertTrue(GH.is_guess(guess, "optics.f_mm"))
+        self.assertIn("ניחוש", " ".join(GH.critical_box("optics.f_mm", guess)[2]))
+        guess["provenance"] = {"optics.f_mm": "manufacturer"}
+        self.assertNotIn("ניחוש", " ".join(GH.critical_box("optics.f_mm", guess)[2]))
 
     @unittest.skipIf(G is None, "GUI not importable")
     def test_review_sorts_the_warnings_by_impact(self):

@@ -6,8 +6,9 @@ The impact ratings come from the parameter-sensitivity study (reports/השפעת
 Table 2 and Table 5: elasticities over four representative systems).
 
 LESSONS are the guided tours shown by the guide panel of the GUI (gui.GuidePanel).  A step names the page and
-the parameter to highlight; its field card is taken from PARAMS.  The "tour" lesson is built from the form itself
-(tour_steps): one step per group of fields of every page, so that it covers every field the project shows.
+the parameter to highlight; its field card is taken from PARAMS.  Lesson 4 ("engineering") is built from the form
+itself (entry_steps): every field the project shows, page by page, the fields critical to the range emphasised.  The
+hidden "tour" (tour_steps: one step per group of fields of every page) is what "הסבר על העמוד" walks through.
 review() checks every shown field of a project at once.
 
 The cards of all other fields of the form are in guide_kb_he.MORE.
@@ -678,11 +679,63 @@ P_ = lambda t: ("p", t)
 LI = lambda t: ("li", t)
 H_ = lambda t: ("h", t)
 
+# The lessons in the order a new user meets the application: what is on the screen, a first calculation, what the
+# result says, entering the whole system (every field, the critical ones emphasised), improving the range, and the
+# advanced system considerations.  "group" is the heading the home page shows the lesson under.
 LESSONS = [
-    {"id": "first", "title": "החישוב הראשון", "minutes": 8,
+    {"id": "intro", "title": "מה רואים במסך", "short": "מה רואים במסך", "minutes": 4,
+     "group": "מתחילים",
+     "summary": "מה התוכנה מחשבת, מצבי העבודה, הטופס והעמודים, מקור הנתונים בכל שדה, איך מקבלים הסבר על שדה ואיך קוראים את התוצאות.",
+     "steps": [
+         _s("מה התוכנה מחשבת",
+            P_("TRM_HADMAA מחשבת עד איזה מרחק המצלמה יכולה לבצע משימת תצפית על מטרה: טווח הגילוי, טווח ההכרה וטווח "
+               "הזיהוי (DRI)."),
+            LI("גילוי: הבחנה בכך שקיימת מטרה. הכרה: הבחנה בין סוגי מטרות (רכב או אדם). זיהוי: קביעה מדויקת יותר של "
+               "סוג המטרה (סוג הרכב)."),
+            LI("כל טווח מחושב עבור הסתברות הצלחה של 50%, בהתאם לקריטריון המשימה שנבחר."),
+            LI("החישוב מתבסס על מאפייני המערכת (אופטיקה, גלאי, תצוגה, ייצוב), על מאפייני המטרה ועל תנאי האטמוספרה."),
+            workflow="quick", page="Quick setup"),
+         _s("שלושה מצבי עבודה",
+            P_("בסרגל הצד השמאלי, תחת WORKFLOW, בוחרים את מצב העבודה. הוא קובע אילו עמודים ואילו תוצאות מוצגים."),
+            LI("Quick Prediction - בעמוד אחד השדות המרכזיים. מתאים לחישוב ראשוני ולהערכה מהירה."),
+            LI("Engineering Analysis - כל עמודי הטופס, לפי נושאים. כאן מזינים את נתוני המערכת."),
+            LI("Laboratory & Image Evaluation - מוסיף נתוני מדידה מהמעבדה, להשוואה עם תחזית המודל."),
+            workflow="quick", page="Quick setup"),
+         _s("היכרות עם הטופס והעמודים",
+            P_("בסרגל הצד, תחת PARAMETERS, מופיעה רשימת העמודים. בחירה בעמוד מציגה את השדות שלו. כל עמוד מתמקד "
+               "בנושא אחר: אופטיקה, גלאי, מטרה, אטמוספרה ועוד."),
+            LI("שדות שאינם רלוונטיים להגדרות שבחרתם (למשל הארה במצלמה תרמית) מוסתרים."),
+            LI("'Show advanced parameters' בתחתית סרגל הצד מציג גם את השדות המתקדמים."),
+            LI("בתחתית כל עמוד מופיעים ערכים שהתוכנה מחשבת באופן אוטומטי (IFOV, שדה הראייה ועוד), לקריאה בלבד."),
+            workflow="engineering", page="Optics"),
+         _s("מקור הנתונים בכל שדה",
+            P_("ליד כל שדה יש תג קטן שמציין את מקור הנתון. לחיצה עליו משנה את הסיווג."),
+            LI("preset - ערך ברירת מחדל. datasheet - נתון ממפרט היצרן. measured - ערך שנמדד. assumed - ערך שהונח "
+               "לצורך החישוב."),
+            LI("הדוחות מציגים על אילו נתונים מתבסס כל טווח."),
+            LI("ערך preset אינו בהכרח מייצג את המערכת שלכם: עדכנו את הפרמטרים המשפיעים ביותר על הטווח, ככל שיש בידיכם "
+               "נתונים אמינים יותר."),
+            workflow="engineering", page="Optics"),
+         _s("איך מקבלים הסבר על שדה",
+            P_("כשהמדריך פתוח, לחיצה על שדה בטופס מציגה כאן כרטיס הסבר: מה משמעות השדה, כיצד הוא משפיע על התוצאה, "
+               "ערכים טיפוסיים, בדיקה של הערך שהזנתם וחישוב חי של ההשפעה."),
+            LI("המנחה הקולי מקריא את ההסבר: כפתור ההשמעה בחלק העליון של המדריך, או F9."),
+            LI("'הסבר על העמוד' מקריא ברצף את ההסברים על כל השדות בעמוד הפתוח."),
+            workflow="engineering", page="Optics"),
+         _s("ביצוע החישוב וקריאת התוצאות",
+            P_("מבצעים חישוב עם Calculate או F5. מימין לטופס נמצאות לשוניות התוצאות, והן מתעדכנות לאחר כל חישוב."),
+            LI("Summary - שלושת הטווחים, והגורם המרכזי המשפיע על כל אחד מהם."),
+            LI("Range - כיצד הסתברות ההצלחה במשימה משתנה ככל שהמרחק למטרה גדל."),
+            LI("Messages - האזהרות וההנחות ששימשו בחישוב. קוראים אותן לפני שמסתמכים על התוצאות."),
+            ("box", "ok", ["סיימתם", "הכרנו את מבנה המסך ואת שלבי העבודה המרכזיים. בשיעור הבא נזין נתונים ונחשב את "
+                                    "הטווח הראשון שלנו."], True),
+            workflow="quick", tab="Summary"),
+     ]},
+    {"id": "first", "title": "החישוב הראשון: מתבנית לטווח", "short": "החישוב הראשון", "minutes": 8,
+     "group": "מתחילים",
      "summary": "מתבנית מוכנה לטווחי גילוי, הכרה וזיהוי - בתהליך Quick Prediction.",
      "steps": [
-         _s("ברוכים הבאים",
+         _s("לפני שמתחילים",
             P_("המדריך יוביל אתכם בחישוב טווחים מלא: נעבור על השדות החשובים, נסביר מה כל אחד אומר ונבדוק שהערך "
                "שהזנתם סביר."),
             H_("שלושה כללים להזנה חכמה"),
@@ -740,68 +793,16 @@ LESSONS = [
          _s("לפני שמשתמשים במספר",
             P_("עברו על Messages: שם כל האזהרות וההנחות שעליהן נשען החישוב."),
             ("box", "warn", ["חשוב", "מספר שנראה טוב אינו בהכרח נכון. טווח בלי ההנחות שלו לא שווה הרבה."], True),
-            P_("סיימתם את השיעור הראשון. בשיעור הבא נזין מערכת אמיתית ברמה ההנדסית."),
             workflow="quick", tab="Messages"),
+         _s("שומרים את העבודה",
+            P_("File > Save (או Ctrl+S) שומר את הפרויקט כקובץ json, עם כל הערכים ותגי המקור. File > Open פותח אותו "
+               "שוב."),
+            ("box", "ok", ["סיימתם את השיעור", "בשיעור הבא נלמד מה אומרת התוצאה ומה מגביל אותה."], True),
+            workflow="quick", tab="Summary"),
      ]},
-    {"id": "engineering", "title": "הזנת מערכת אמיתית", "minutes": 12,
-     "summary": "אופטיקה, גלאי, תצוגה וייצוב - לפי סדר ההשפעה, בתהליך Engineering Analysis.",
-     "steps": [
-         _s("סדר העבודה",
-            P_("במצב Engineering מוצגים כל העמודים. לא צריך למלא הכול: ממלאים לפי סדר ההשפעה על הטווח."),
-            H_("מה באמת קובע את הטווח"),
-            ("chips", [("1. קריטריון המשימה", "high"), ("2. מידות המטרה", "high"), ("3. מוקד / IFOV", "high"),
-                       ("4. קוטר D", "high"), ("5. אטמוספרה", "high"), ("6. טורבולנציה", "mid"),
-                       ("7. ריצוד", "mid"), ("8. תצוגה וצופה", "mid"), ("NETD ורעש", "low")]),
-            P_("בכל מערכת כ-70 מתוך כ-100 פרמטרים כמעט לא משפיעים. אל תבזבזו זמן על הדיוק שלהם."),
-            workflow="engineering", page="General"),
-         _s("Fλ/d - מי מגביל?",
-            P_("היחס Fλ/d (F-number כפול אורך הגל, חלקי הפסיעה) אומר מה מגביל את המערכת:"),
-            LI("Fλ/d < 1: הגלאי מגביל (מוגבל-דגימה). מוקד ארוך יותר או פיקסל קטן יותר עוזרים מאוד."),
-            LI("Fλ/d > 1.5: האופטיקה מגבילה (עקיפה). קוטר גדול יותר עוזר; פיקסל קטן יותר כמעט לא."),
-            ("box", "info", ["הערך מוצג בפאנל הערכים המחושבים בתחתית עמוד Optics."]),
-            workflow="engineering", page="Optics"),
-         _s("איך מוגדר המפתח", workflow="engineering", page="Optics", path="optics.aperture"),
-         _s("קוטר המפתח", workflow="engineering", page="Optics", path="optics.D_mm",
-            cond=lambda p: p.get("optics", {}).get("aperture") == "circular"),
-         _s("F-number", workflow="engineering", page="Optics", path="optics.F_general",
-            cond=lambda p: p.get("optics", {}).get("aperture") != "circular"),
-         _s("אורך המוקד", workflow="engineering", page="Optics", path="optics.f_mm"),
-         _s("העברת האופטיקה", workflow="engineering", page="Optics", path="optics.tau_opt"),
-         _s("מספר הפיקסלים", workflow="engineering", page="Detector geometry", path="detector.n_h"),
-         _s("פסיעת הפיקסלים", P_("טיפ: Run > Detector lookup (Ctrl+D) ממלא את נתוני הגלאי מהקטלוג."),
-            workflow="engineering", page="Detector geometry", path="detector.pitch_h_um"),
-         _s("מקור נתוני הרעש", workflow="engineering", page="Detector sensitivity", path="detector.noise_mode",
-            cond=_thermal),
-         _s("NETD", workflow="engineering", page="Detector sensitivity", path="detector.netd_mK",
-            cond=lambda p: _thermal(p) and (p.get("imager_type") == "uncooled" or
-                                            p.get("detector", {}).get("noise_mode") == "measured")),
-         _s("זמן אינטגרציה", workflow="engineering", page="Detector sensitivity", path="detector.tint_ms",
-            cond=lambda p: p.get("imager_type") != "uncooled"),
-         _s("רעש קריאה", workflow="engineering", page="Detector sensitivity", path="detector.noise_floor_e",
-            cond=lambda p: not _thermal(p)),
-         _s("קצב פריימים", workflow="engineering", page="Basic imager", path="basic.frame_rate"),
-         _s("אופן הצפייה", workflow="engineering", page="Display & observer", path="display.observation"),
-         _s("מרחק הצפייה", workflow="engineering", page="Display & observer", path="display.distance_cm",
-            cond=lambda p: p.get("display", {}).get("observation") == "direct"),
-         _s("סף ה-SNR", workflow="engineering", page="Display & observer", path="display.snr_th"),
-         _s("ריצוד", workflow="engineering", page="Stabilization & MTFs", path="stab.jitter_preset"),
-         _s("ריצוד אקראי", workflow="engineering", page="Stabilization & MTFs", path="stab.rand_h_mrad"),
-         _s("גרסת הקריטריונים", workflow="engineering", page="Target & scenario", path="target.task_preset"),
-         _s("זווית הצפייה", workflow="engineering", page="Target & scenario", path="target.aspect"),
-         _s("מקדם ההנחתה", P_("כאן מזינים את האטמוספרה 1. אפשר להפעיל עד שלוש אטמוספרות להשוואה."),
-            workflow="engineering", page="Atmosphere & turbulence", path="atmosphere.atm.0.sigma",
-            cond=lambda p: _field(p) and p.get("atmosphere", {}).get("mode") == "extinction"),
-         _s("טווח הראות", workflow="engineering", page="Atmosphere & turbulence", path="atmosphere.atm.0.V_km",
-            cond=lambda p: _field(p) and p.get("atmosphere", {}).get("mode") in ("visibility", "weather")),
-         _s("תג המקור של כל ערך",
-            P_("ליד כל שדה יש תג קטן: preset, datasheet, measured, assumed ועוד. לחיצה עליו משנה אותו."),
-            LI("הדוחות מציגים לכל טווח על אילו נתונים הוא נשען."),
-            LI("ערך שנשאר preset הוא ניחוש כללי. עדכנו לפחות את הפרמטרים המשפיעים."),
-            ("box", "ok", ["סיכום", "הזנתם את כל מה שבאמת קובע את הטווח. חשבו (F5) ועברו לשיעור 3."], True),
-            workflow="engineering", page="Optics", action="calculate"),
-     ]},
-    {"id": "results", "title": "קריאת התוצאות ושיפור", "minutes": 7,
-     "summary": "מה מגביל את הטווח, מה הכי כדאי לשפר, אי-ודאות ודוח בעברית.",
+    {"id": "results", "title": "מה אומרת התוצאה ומה מגביל אותה", "short": "מה אומרת התוצאה", "minutes": 4,
+     "group": "מתחילים",
+     "summary": "Summary, הערכים המחושבים של המערכת, ואיך מוצאים את הגורם שמגביל את הטווח.",
      "steps": [
          _s("המסך Summary",
             P_("Summary מציג את טווחי ה-DRI לכל אטמוספרה, את רמת הביטחון ואת הסיבה העיקרית לכל טווח."),
@@ -815,7 +816,19 @@ LESSONS = [
             P_("Run > Limiting factors מראה לכל משימה מה מגביל אותה: אטמוספרה, עקיפה, דגימה, רעש או ריצוד."),
             ("box", "tip", ["למה זה חשוב", "שדרוג של גורם שאינו מגביל לא ישנה את הטווח. קודם מוצאים את "
                             "צוואר הבקבוק."], True),
+            ("box", "ok", ["סיימתם את השיעור", "בשיעור הבא נזין את המערכת שלכם, כל הפרמטרים, עם הדגשה של "
+                           "הקריטיים לטווח."], True),
             workflow="engineering", tab="Sensitivity"),
+     ]},
+    {"id": "engineering", "title": "הזנת המערכת שלכם: כל הפרמטרים, והקריטיים מודגשים", "short": "הזנת המערכת",
+     "minutes": 25, "group": "מתחילים", "dynamic": True,
+     "summary": "כל עמודי הטופס בתהליך Engineering Analysis, שדה אחר שדה. השדות הקריטיים לטווח מסומנים באדום, "
+                "ובסוף מקבלים רשימה שלהם.",
+     "steps": []},
+    {"id": "improve", "title": "שיפור הטווח, אי-ודאות ודוח", "short": "שיפור הטווח", "minutes": 4,
+     "group": "עבודה עם התוצאות",
+     "summary": "מה הכי כדאי לשפר, איך פרמטר אחד משנה את הטווח, טווח עם אי-ודאות, ודוח בעברית.",
+     "steps": [
          _s("יועץ השיפור",
             P_("Run > Improve performance (advisor) מדרג שינויים אפשריים לפי התועלת בטווח, עם כרטיס לכל פעולה."),
             LI("היועץ מייעץ בלבד - הוא לא משנה את הפרויקט."),
@@ -841,8 +854,10 @@ LESSONS = [
 # system considerations of the parameters: the research "חקר פרמטרי מערכת עם שיקולים מערכתיים", checked against
 # datasheets and the literature (research_notes/system_parameters_review_he.md).  Nothing here changes the ranges.
 LESSONS.append(
-    {"id": "system", "title": "שיקולים מערכתיים: משקל, עלות ובדיקות", "minutes": 10,
-     "summary": "מה כל פרמטר מחייב מהמערכת - משקל, נתונים, ייצור וייצוא - ואיך מאמתים אותו במדידה.",
+    {"id": "system", "title": "שיקולים מתקדמים: טווח מול משקל, עלות וייצור", "short": "שיקולים מתקדמים",
+     "minutes": 12, "group": "מתקדמים",
+     "summary": "מי מגביל את החדות (Fλ/d), ומה כל פרמטר מחייב מהמערכת - משקל, נתונים, ייצור וייצוא - ואיך מאמתים "
+                "אותו במדידה.",
      "steps": [
          _s("מה השיעור הזה מוסיף",
             P_("הטווח הוא רק חצי מהתמונה. כל פרמטר שמשפר את הטווח מחייב משהו מהמערכת: משקל, אורך, הספק, עלות או "
@@ -858,6 +873,12 @@ LESSONS.append(
             ("box", "info", ["חשוב לדעת", "שום דבר בשיעור הזה לא משנה את הטווח של TRM4. אלה שיקולים שמלווים את "
                              "הטווח: מה הוא עולה במשקל, בכסף ובמורכבות."], True),
             workflow="engineering", page="General"),
+         _s("Fλ/d - מי מגביל?",
+            P_("היחס Fλ/d (F-number כפול אורך הגל, חלקי הפסיעה) אומר מה מגביל את המערכת:"),
+            LI("Fλ/d < 1: הגלאי מגביל (מוגבל-דגימה). מוקד ארוך יותר או פיקסל קטן יותר עוזרים מאוד."),
+            LI("Fλ/d > 1.5: האופטיקה מגבילה (עקיפה). קוטר גדול יותר עוזר; פיקסל קטן יותר כמעט לא."),
+            ("box", "info", ["הערך מוצג בפאנל הערכים המחושבים בתחתית עמוד Optics."]),
+            workflow="engineering", page="Optics"),
          _s("מוקד ו-F: כללי הגדילה",
             P_("קוטר המפתח הוא D = f/F. למשל, עדשה של 50 mm ב-F/1.4 צריכה מפתח של כ-36 mm, וב-F/4 של כ-12.5 mm."),
             LI("באותו F, מוקד ארוך יותר הוא גם קוטר גדול יותר. משקל הזכוכית גדל בערך כמו D³ (שטח כפול עובי), ולכן "
@@ -925,8 +946,11 @@ LESSONS.append(
      ]})
 
 
-LESSONS.append(
-    {"id": "tour", "title": "סיור מלא באפליקציה", "minutes": 30, "dynamic": True,
+# The full tour is not a lesson of the home page any more (lesson 4 covers every field); it stays for "הסבר על העמוד",
+# which walks by voice through every field of the open page.
+HIDDEN_LESSONS = []
+HIDDEN_LESSONS.append(
+    {"id": "tour", "title": "הסבר על העמוד", "minutes": 30, "dynamic": True,
      "summary": "כל העמודים וכל השדות שהפרויקט שלכם מציג, קבוצה אחר קבוצה: מה כל שדה אומר, בדיקה של הערך שלכם "
                 "וההשפעה שלו על הטווח.",
      "steps": []})
@@ -1012,6 +1036,145 @@ def tour_steps(pages, project, visible):
     return out
 
 
+# lesson 4: the chapters (pages of the form in the order a new user fills them) and the tips of some fields
+ENTRY_CHAPTERS = [
+    ("החלטות ראשונות", ["General"]),
+    ("המטרה והמשימה", ["Target & scenario"]),
+    ("אופטיקה", ["Optics"]),
+    ("הגלאי", ["Detector geometry", "Detector sensitivity"]),
+    ("המצלמה ועיבוד האות", ["Basic imager", "Signal processing"]),
+    ("תצוגה וצופה", ["Display & observer"]),
+    ("ייצוב", ["Stabilization & MTFs"]),
+    ("הארה ואטמוספרה", ["Irradiance", "Atmosphere & turbulence"]),
+    ("תיעוד ואימות", ["Metadata", "Validation data"]),
+]
+ENTRY_TIPS = {
+    "detector.pitch_h_um": "טיפ: Run > Detector lookup (Ctrl+D) ממלא את נתוני הגלאי מהקטלוג.",
+    "atmosphere.atm.0.sigma": "כאן מזינים את האטמוספרה 1. אפשר להפעיל עד שלוש אטמוספרות להשוואה.",
+}
+GUESS_SOURCES = ("preset", "assumption")             # source tags that mean "not a datum of this system"
+CRITICAL = 3                                          # impact rating of a field critical to the range
+
+
+def _source_of(project, path):
+    return ((project or {}).get("provenance") or {}).get(path, "preset")
+
+
+def is_guess(project, path):
+    """A numeric value whose source tag is still preset / assumed (a choice, such as the category, is not data)."""
+    try:
+        v = project
+        for k in path.split("."):
+            v = v[int(k)] if isinstance(v, list) else v[k]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and _source_of(project, path) in GUESS_SOURCES
+
+
+def critical_box(path, project):
+    """The emphasis of a field critical to the range (lesson 4): why, and a warning when its value is still a guess."""
+    e = param(path) or {}
+    lines = ["קריטי לטווח", (e.get("impact_note") or "השפעה גבוהה על הטווח") + ". ערך שגוי כאן משנה את הטווח "
+             "מאוד, ולכן בדקו אותו מול דף הנתונים של המערכת."]
+    src = _source_of(project, path)
+    if is_guess(project, path):
+        lines.append("הערך עדיין מסומן %s - זה ניחוש כללי. הזינו את הנתון של המערכת שלכם, ושנו את התג (datasheet "
+                     "או measured)." % ("preset" if src == "preset" else "assumed"))
+    return ("box", "crit", lines, True)
+
+
+def _instance(path, labels):
+    """Which one of a repeated field: the task (detection / recognition / identification), the atmosphere 1-3."""
+    m = re.search(r"\.(\d+)\.", path)
+    if m and path.startswith("target.tasks."):
+        return ("גילוי", "הכרה", "זיהוי")[int(m.group(1))] if int(m.group(1)) < 3 else "משימה %d" % (int(m.group(1)) + 1)
+    if m and path.startswith("atmosphere.atm."):
+        return "אטמוספרה %d" % (int(m.group(1)) + 1)
+    if m:
+        return "%s %d" % (labels.get(path, "").strip(), int(m.group(1)) + 1)
+    return labels.get(path, path).strip()
+
+
+def entry_steps(pages, project, visible):
+    """Steps of lesson 4: every shown field of the form, page by page in the order of ENTRY_CHAPTERS.  A field of high
+    or medium impact gets its own step (a critical one is emphasised); the low-impact fields of a page are listed
+    together in one step.  The last step lists the critical fields.  pages / visible as in tour_steps."""
+    out = [_s("סדר העבודה",
+              P_("בשיעור הזה נעבור על כל עמודי הטופס במצב Engineering, עמוד אחר עמוד, ונזין את המערכת שלכם. בכל שדה "
+                 "המדריך מסמן אותו בטופס, מסביר אותו ובודק את הערך."),
+              H_("לא כל השדות שווים"),
+              ("chips", [("קריטי לטווח", "high"), ("השפעה בינונית", "mid"), ("השפעה קטנה", "low")]),
+              LI("שדה קריטי מסומן באדום, בטופס ובכרטיס. אותו בודקים מול דף הנתונים ומחליפים בנתון אמיתי."),
+              LI("שדה בהשפעה בינונית מקבל שלב משלו, כמו שדה קריטי."),
+              LI("השדות בהשפעה קטנה של כל עמוד מוצגים יחד בשלב אחד. אפשר להשאיר אותם בברירת המחדל אם אין נתון טוב "
+                 "יותר."),
+              ("box", "tip", ["אפשר לעצור", "השיעור ארוך ומחולק לפרקים. סגרו בכל רגע, ובפעם הבאה תמשיכו מאותו שלב."],
+               True),
+              workflow="engineering", page="General")]
+    by_name = {n: (fl, wf) for n, fl, wf in (pages or [])}
+    order = [n for _t, names in ENTRY_CHAPTERS for n in names]
+    chapters = [(t, [n for n in names if n in by_name]) for t, names in ENTRY_CHAPTERS]
+    rest = [n for n in by_name if n not in order]
+    if rest:
+        chapters[-1] = (chapters[-1][0], chapters[-1][1] + rest)
+    chapters = [(t, names) for t, names in chapters if names]
+    critical, labels = [], {}
+    for ci, (chapter, names) in enumerate(chapters):
+        for name in names:
+            fields, wf = by_name[name]
+            shown = []
+            for _h, fl in _visible_fields(fields, project, visible):
+                for f in fl:
+                    if param(f["path"]):
+                        shown.append(f["path"])
+                        labels[f["path"]] = f.get("label") or f["path"]
+            if not shown:
+                continue
+            imp = {p: param(p).get("impact", 1) for p in shown}
+            crit = [p for p in shown if imp[p] >= CRITICAL]
+            mid = [p for p in shown if imp[p] == 2]
+            low = [p for p in shown if imp[p] < 2]
+            critical += crit
+            he, desc = PAGE_HE.get(name, (name, ""))
+            chips = [("%d קריטיים לטווח" % len(crit), "high")] if crit else []
+            chips += [("%d בהשפעה בינונית" % len(mid), "mid")] if mid else []
+            chips += [("%d בהשפעה קטנה" % len(low), "low")] if low else []
+            intro = [("box", "info", ["פרק %d מתוך %d: %s · עמוד %s (%s)" % (ci + 1, len(chapters), chapter, he, name),
+                                      desc], True), ("chips", chips)]
+            first = True
+            for p in shown:
+                if imp[p] < 2:
+                    continue
+                blocks = list(intro) if first else []
+                if imp[p] >= CRITICAL:
+                    blocks.append(critical_box(p, project))
+                if ENTRY_TIPS.get(p):
+                    blocks.append(("box", "tip", [ENTRY_TIPS[p]]))
+                out.append(_s(param(p)["title"], *blocks, workflow=wf, page=name, path=p, entry=True,
+                              page_intro=first, critical=imp[p] >= CRITICAL))
+                first = False
+            if low:
+                blocks = list(intro) if first else [("chips", [("השפעה קטנה · אפשר להשאיר ברירת מחדל", "low")])]
+                blocks.append(("p", "השדות האלה משפיעים מעט על הטווח. עברו עליהם, ושנו רק את מה שידוע לכם."))
+                out.append(_s("%s · שדות בהשפעה קטנה" % he, *blocks, workflow=wf, page=name, path=low[0],
+                              fields=low, group=True, entry=True, page_intro=first))
+    count = {}
+    for st in out:                                  # the same card twice (the three tasks, atmospheres 1-3)
+        if st.get("entry") and not st.get("group"):
+            count[st["title"]] = count.get(st["title"], 0) + 1
+    for st in out:
+        if st.get("entry") and not st.get("group") and count.get(st["title"], 0) > 1:
+            st["title"] = "%s · %s" % (st["title"], _instance(st["path"], labels))
+    out.append(_s("סיכום: השדות הקריטיים",
+                  P_("אלה השדות שקובעים את הטווח של המערכת שלכם. ליד כל אחד: הערך, הבדיקה שלו ותג המקור."),
+                  LI("שדה שמסומן ⚠ דורש בדיקה."),
+                  LI("ערך שהמקור שלו עדיין preset או assumed נשען על ניחוש. כדאי להחליף אותו בנתון של המערכת."),
+                  workflow="engineering", page="General", fields=critical, summary=True, action="calculate",
+                  after=[("box", "ok", ["סיימתם את השיעור", "חשבו (F5). בשיעור הבא נשפר את הטווח ונוציא דוח."],
+                          True)]))
+    return out
+
+
 def field_summary(path, value, project):
     """(state 'warn' | 'ok' | 'info', title, text, meta) of a field for the lists of the tour and the review."""
     e = param(path)
@@ -1050,17 +1213,22 @@ def review(pages, project, visible, value):
 
 
 def lesson(lesson_id):
-    for les in LESSONS:
+    for les in LESSONS + HIDDEN_LESSONS:
         if les["id"] == lesson_id:
             return les
     return None
 
 
 def steps(lesson_id, project, pages=None, visible=None):
-    """Steps of a lesson that apply to the project (cond).  The tour needs the form (pages, visible)."""
+    """Steps of a lesson that apply to the project (cond).  Lesson 4 and the tour need the form (pages, visible)."""
     les = lesson(lesson_id)
     if les and les.get("dynamic"):
-        return tour_steps(pages, project, visible) if pages is not None and visible is not None else []
+        if pages is None or visible is None:
+            return []
+        out = (entry_steps if lesson_id == "engineering" else tour_steps)(pages, project, visible)
+        if out and lesson_id == "engineering":
+            out[0] = dict(out[0], lesson_start=True)
+        return out
     out = []
     for st in (les["steps"] if les else []):
         try:
@@ -1069,6 +1237,8 @@ def steps(lesson_id, project, pages=None, visible=None):
             ok = True
         if ok:
             out.append(st)
+    if out:
+        out[0] = dict(out[0], lesson_start=True)        # the narrator welcomes to the lesson here
     return out
 
 

@@ -78,7 +78,7 @@ class RtlCanvas(tk.Canvas):
     """
     BOX_STYLES = {"info": ("#eef4ff", "#1f6feb", "#1d2433"), "warn": ("#fff4e5", "#b54708", "#5a2d05"),
                   "ok": ("#ecfdf3", "#067647", "#05472b"), "tip": ("#f5f3ff", "#6d28d9", "#2e1065"),
-                  "plain": ("#f7f9fc", "#d7dde5", "#1d2433")}
+                  "plain": ("#f7f9fc", "#d7dde5", "#1d2433"), "crit": ("#fef3f2", "#d92d20", "#55160c")}
     CHIP_STYLES = {"high": ("#fee4e2", "#b42318"), "mid": ("#fef0c7", "#93370d"), "low": ("#e4e7ec", "#344054"),
                    "info": ("#e8f0fe", "#1f6feb"), "ok": ("#dcfae6", "#067647")}
 

@@ -48,14 +48,43 @@ class SpeechText(unittest.TestCase):
         s = GV.speech
         self.assertEqual(s("פסיעה 12-17 µm", "he"), "פסיעה 12 עד 17 מיקרון")
         self.assertEqual(s('גילוי 3.2 ק"מ · הכרה 1.1 ק"מ', "he"), "גילוי 3.2 קילומטר, הכרה 1.1 קילומטר")
-        self.assertIn("דלתא טי שווה 2 קלווין", s("ΔT = 2 K", "he"))
+        self.assertIn("delta T שווה 2 קלווין", s("ΔT = 2 K", "he"))     # English stays English
         self.assertIn("עשר בחזקת מינוס 14", s("Cn² = 1e-14", "he"))
-        self.assertIn("אף 4 עד אף 5.5", s("F/4-F/5.5", "he"))
+        self.assertIn("F 4 עד F 5.5", s("F/4-F/5.5", "he"))
         self.assertIn("f חלקי 4", s("D = f / 4", "he"))
         self.assertIn("640 על 512", s("640x512", "he"))
-        self.assertIn("אן אי טי די", s("NETD", "he"))             # an acronym letter by letter
-        self.assertIn("האיי-פוב", s("ה-IFOV", "he"))               # a known word, joined to its prefix
+        self.assertEqual(s("TRM_HADMAA!", "he"), "TRM הדמאה!")
         self.assertNotRegex(s("⚠ ★★ ערך", "he"), "[★⚠]")
+
+    def test_english_inside_hebrew(self):
+        """A recording says the English of a Hebrew sentence with an English voice; the live Windows voice gets it
+        spelled in Hebrew."""
+        said = GV.speech("נלמד לקרוא את התוצאות בלשוניות Summary, Range ו-Messages, או נלחץ F5.", "he")
+        self.assertEqual(GV.voice_parts(said), [
+            ("he", "נלמד לקרוא את התוצאות בלשוניות"), ("en", "Summary,"), ("en", "Range"), ("he", "וֶ"),
+            ("en", "Messages,"), ("he", "או נלחץ"), ("en", "F5.")])
+        self.assertEqual(GV.voice_parts(GV.speech("ה-IFOV", "he")), [("he", "הַ"), ("en", "IFOV")])
+        self.assertTrue(GV.is_mixed("he", said))
+        self.assertFalse(GV.is_mixed("he", "רק עברית כאן."))
+        self.assertFalse(GV.is_mixed("en", "Summary"))
+        live = GV.live_text
+        self.assertIn("אן אי טי די", live(GV.speech("NETD", "he"), "he"))            # acronyms letter by letter
+        self.assertIn("האיי-פוב", live(GV.speech("ה-IFOV", "he"), "he"))             # a known word, with its prefix
+        self.assertIn("אף 4 עד אף 5.5", live(GV.speech("F/4-F/5.5", "he"), "he"))
+        self.assertIn("דלתא טי", live(GV.speech("ΔT", "he"), "he"))
+        self.assertEqual(live("Summary", "en"), "Summary")
+
+    def test_hebrew_is_gemini(self):
+        """Every Hebrew recording is made by the Gemini voice, keyed by its model, voice and prompt; English is not."""
+        first = GV.speech(GV.sentences(GV.HOME_OPEN_HE)[1], "he")
+        self.assertTrue(GV.is_gemini("he", first))
+        self.assertTrue(GV.is_gemini("he", GV.speech("נלחץ על Calculate, או F5.", "he")))
+        self.assertFalse(GV.is_gemini("en", GV.speech(GV.sentences(GV.EN.HOME_OPEN)[0], "en")))
+        import hashlib
+        plain = lambda t: hashlib.sha1(("en|" + t).encode()).hexdigest()[:16]       # noqa: E731
+        self.assertEqual(GV.rec_key("en", "Only English."), plain("Only English."))
+        key = "he|gemini|%s|%s|%s|%s" % (GV.GEMINI["model"], GV.GEMINI["voice"], GV.GEMINI["prompt"], first)
+        self.assertEqual(GV.rec_key("he", first), hashlib.sha1(key.encode()).hexdigest()[:16])
 
     def test_english(self):
         s = GV.speech
@@ -127,6 +156,25 @@ class Scripts(unittest.TestCase):
         self.assertTrue(walk[0].startswith("בקבוצה הזו יש 2 שדות"))
         self.assertTrue(any(t.startswith("סיימנו עם") or t.startswith("זה היה") or t.startswith("אחרי") for t in walk))
 
+    def test_home_opening(self):
+        """The opening screen (reports/מדריך_מסך_הפתיחה.docx): the welcome, a spoken introduction of each of the six
+        lessons by number, and the choice; every sentence of it is recorded."""
+        for lang in GV.LANGS:
+            said = texts(GV.home_script(lang, GH.LESSONS, {"first"}))
+            joined = " ".join(said)
+            self.assertTrue(said[0].startswith("ברוכים הבאים לעולם של" if lang == "he" else "Welcome to the world of"))
+            for n in range(1, len(GH.LESSONS) + 1):
+                self.assertIn(("שיעור %d:" if lang == "he" else "Lesson %d:") % n, joined)
+            self.assertEqual(set(GV.HOME_LESSON_HE), {les["id"] for les in GH.LESSONS})
+            self.assertEqual(set(EN.HOME_LESSON), {les["id"] for les in GH.LESSONS})
+            self.assertIn(GV.HOME_DONE_HE if lang == "he" else EN.HOME_DONE, said)
+            self.assertIn("הבחירה בידיים שלכם" if lang == "he" else "the choice is yours", joined)
+            self.assertEqual(said[-1], "יוצאים לדרך!" if lang == "he" else "Let's go!")
+            self.assertEqual(len(GH.LESSONS), 6)
+            static = set(GV.static_texts(lang))
+            for t in said:
+                self.assertIn(GV.speech(t, lang), static, t)
+
     def test_lessons_home_review(self):
         for name in (LWIR, VIS):
             p = merged(name)
@@ -152,6 +200,7 @@ class Translation(unittest.TestCase):
                 self.assertEqual(len(e.get(f) or []), len(src.get(f) or []), (k, f))
         steps = {(les["id"], st["title"]) for les in GH.LESSONS for st in les["steps"]}
         steps |= {("tour", st["title"]) for st in GH.tour_steps([], {}, lambda *a: True)}
+        steps |= {("engineering", st["title"]) for st in GH.entry_steps([], {}, lambda *a: True)}
         for key in EN.STEPS:
             self.assertIn(key, steps, "translation of a step that no longer exists")
         for les in GH.LESSONS:
@@ -180,6 +229,44 @@ class Recordings(unittest.TestCase):
                              % (len(missing), lang))
 
 
+class RecordingTool(unittest.TestCase):
+    """tools/make_guide_voice.py: the parts the recordings are made by, and the pace of the Gemini requests."""
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+        try:
+            import make_guide_voice
+        except ImportError as e:
+            raise unittest.SkipTest("recording tool not importable: %s" % e)
+        cls.M = make_guide_voice
+
+    def test_parts_cover_every_sentence_once(self):
+        for lang in GV.LANGS:
+            parts = self.M.sections(lang)
+            names = [n for n, _t in parts]
+            self.assertEqual(names[:8], ["home"] + ["lesson%d" % i for i in range(1, 7)] + ["tour"])
+            self.assertNotIn("other", names, lang)
+            said = [t for _n, ts in parts for t in ts]
+            self.assertEqual(len(said), len(set(said)), lang)
+            self.assertEqual(set(said), set(GV.static_texts(lang)), lang)
+
+    def test_retry_waits_what_the_limit_asks(self):
+        err = "429 RESOURCE_EXHAUSTED {'@type': 'RetryInfo', 'retryDelay': '37s'}"
+        self.assertEqual(self.M.retry_delay(err, 0), 39.0)
+        self.assertEqual(self.M.retry_delay("network", 1), 40.0)
+
+    def test_pace_keeps_the_budget(self):
+        import asyncio
+
+        async def run():
+            pace = self.M.Pace(rpm=6000, budget=3)
+            return [await pace.take() for _ in range(5)], pace.used
+
+        self.assertEqual(asyncio.run(run()), ([True, True, True, False, False], 3))
+
+
 @unittest.skipIf(G is None, "no Tk")
 class Panel(unittest.TestCase):
     def setUp(self):
@@ -204,7 +291,7 @@ class Panel(unittest.TestCase):
         gp.start("first")
         gp.narrate()
         self.assertEqual(said[-1][0], "en")
-        self.assertIn("welcome", said[-1][1][0])
+        self.assertIn("welcome to the second lesson", said[-1][1][0].lower())
         gp.show_field("optics.f_mm")
         gp.narrate()
         self.assertTrue(any("focal length" in t.lower() for t in said[-1][1]))
@@ -238,7 +325,7 @@ class Panel(unittest.TestCase):
             app.goto_page("Optics")
             app.update()
             gp.walk_page()
-            end = time.time() + 60
+            end = time.time() + 120                                     # ~25 s alone; slower under a parallel run
             while time.time() < end:
                 app.update()
                 if gp.voice.state == "idle" and not gp._walk_page and seen:

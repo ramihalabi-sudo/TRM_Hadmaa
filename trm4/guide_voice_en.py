@@ -8,18 +8,23 @@ A field without an entry here is narrated in English from its form label, its im
 """
 
 LESSONS = {
-    "first": ("Your first calculation", "From a ready template to detection, recognition and identification "
-                                         "ranges, in the Quick Prediction workflow."),
-    "engineering": ("Entering a real system", "Optics, detector, display and stabilization, in order of impact, in "
-                                              "the Engineering Analysis workflow."),
-    "results": ("Reading the results and improving them", "What limits the range, what is most worth improving, "
-                                                           "uncertainty, and the Hebrew report."),
-    "system": ("System considerations: weight, cost and testing", "What each parameter asks of the system - weight, "
-                                                                  "data, manufacturing and export - and how to verify "
-                                                                  "it by measurement."),
-    "tour": ("A full tour of the application", "Every page and every field your project shows, group by group: "
-                                               "what each field means, a check of your value and its effect on "
-                                               "the range."),
+    "intro": ("What is on the screen", "What the program calculates, the working modes, the form and its pages, "
+                                     "the data source of each field, how to get the explanation of a field, and how "
+                                     "to read the results."),
+    "first": ("Your first calculation: from a template to a range", "From a ready template to detection, recognition "
+                                                                      "and identification ranges, in the Quick "
+                                                                      "Prediction workflow."),
+    "results": ("What the result says and what limits it", "Summary, the calculated values of the system, and how to "
+                                                            "find the factor that limits the range."),
+    "engineering": ("Entering your system: every parameter, the critical ones emphasized", "Every page of the form in "
+                    "the Engineering Analysis workflow, field by field. The fields critical to the range are marked in "
+                    "red, and at the end you get a list of them."),
+    "improve": ("Improving the range, uncertainty and the report", "What is most worth improving, how one parameter "
+                                                                   "changes the range, the range with its uncertainty, "
+                                                                   "and a report in Hebrew."),
+    "system": ("Advanced considerations: range against weight, cost and manufacturing", "What limits the sharpness, "
+               "F lambda over d, and what each parameter asks of the system - weight, data, manufacturing and export - "
+               "and how to verify it by measurement."),
 }
 
 IMPACT = {3: "High impact on the range", 2: "Medium impact on the range", 1: "Low impact on the range",
@@ -50,9 +55,88 @@ PAGES = {
     "Validation data": "laboratory measurements, such as MRTD, MTF and NETD, to compare with the prediction.",
 }
 
-HOME = ("Choose a lesson. Each lesson takes you through the real screens, highlights the field and checks the value "
-        "you entered. You can also run a check of all your values at once, and while the guide is open, clicking a "
-        "field of the form shows its explanation here.")
+# the opening screen (guide_voice.HOME_OPEN_HE, HOME_LESSON_HE, HOME_DONE_HE, HOME_END_HE)
+HOME_OPEN = (
+    "Welcome to the world of TRM_HADMAA! So… are you ready to find out what your optical system can really do? Have "
+    "you ever asked yourself how far your camera can detect a target? What makes that range change? And most "
+    "important, what can be done to improve it? That is exactly why we are here! During this training we will "
+    "discover together how TRM_HADMAA predicts the performance of optical systems, analyzes the factors that affect "
+    "it, and explores ways to improve the design. And to make the learning simple, interesting and above all "
+    "practical, I have prepared six lessons for you, each one revealing another capability of the software. So "
+    "let's see what is waiting for us!")
+HOME_LESSON = {
+    "intro": (
+        "What is on the screen? Let's get to know the software!",
+        "Before we start calculating ranges, let's get to know our workspace. What do all these buttons do? What is "
+        "the difference between Quick, Engineering and Lab? And how do you even know which data to enter? In the "
+        "first lesson we will take a guided tour of the software, get to know its screens and tools, find out how to "
+        "get the explanation of any field with the question mark next to it, and learn how to read the results in "
+        "the Summary, Range and Messages tabs. By the end of the lesson, the screen that looked a little crowded at "
+        "first will become a familiar and clear workspace!"),
+    "first": (
+        "The first calculation. Let's find out how far the camera can see!",
+        "Now that we know the software, it is time to see it in action! Imagine you have an optical camera, and you "
+        "want to know: from what distance will it detect a person? From what distance will it recognize the type of "
+        "target? And when will it identify it? In this lesson we will find out how to get answers to these "
+        "questions. We will choose a ready camera template in the Camera profile area, set a target and the "
+        "atmospheric conditions, and click Calculate, or simply press F5. And that's it! The software will run the "
+        "calculation and show the predicted detection, recognition and identification ranges of the system. All of "
+        "it in the Quick Prediction workflow, without having to set every parameter of the system ourselves."),
+    "results": (
+        "We have results… but what do they really say?",
+        "Excellent! We have calculated the ranges of our camera. But wait… is the range we got really the farthest "
+        "the system can reach? And what actually stops it from reaching farther? In the third lesson we will turn a "
+        "simple calculation into an engineering analysis. We will dive into the Summary tab, understand what the "
+        "calculated values mean, and find out which factors limit the performance of the system. Is it the optics? "
+        "Maybe the detector? Or maybe the atmosphere? By the end of the lesson you will know not only how to read "
+        "the result, but also why you got that result."),
+    "engineering": (
+        "Now it's your turn! Let's build your system!",
+        "Until now we worked with ready templates. But what happens when we want to check a real camera, with its "
+        "own data and characteristics? This is where things get interesting! In the fourth lesson we will move to "
+        "Engineering Analysis, where you can define your own optical system. We will go through the pages of the "
+        "form together, get to know the different parameters, and understand what each of them means. Don't worry, "
+        "you won't have to remember everything! I will highlight the relevant fields for you, explain what to enter "
+        "in each one, and check the values you enter. And there is one more thing to notice: during the lesson I "
+        "will mark in red the parameters most critical to the ranges of the system. At the end we will get a tidy "
+        "list of them, so we know exactly what to focus on."),
+    "improve": (
+        "Want to reach farther? Let's improve the performance!",
+        "So we have defined a system, calculated the ranges and understood what limits us. Now comes the really "
+        "interesting question: how can we improve the performance? Should we increase the focal length? Change the "
+        "aperture diameter? Choose a different detector? And which change will give us the most significant "
+        "improvement? In the fifth lesson we will learn how to examine these questions in an orderly way. We will "
+        "change parameters, check how each change affects the range, and find out how to compare different options "
+        "for improving the system. But there is one more important thing: in the real world, not every value is "
+        "known exactly. So we will also get to know the uncertainty analysis, and learn how it affects our "
+        "performance prediction. And for dessert? We will produce a professional performance report in Hebrew, "
+        "bringing together our data, calculations and results."),
+    "system": (
+        "Not just range! Let's think like system engineers!",
+        "We have reached the last lesson, and here we will discover something important: the system that reaches "
+        "the longest range is not necessarily the best system. Why? Because a real system has many more "
+        "considerations than range alone. What happens to the weight of the camera when the lens diameter grows? "
+        "How does a change in the optics affect the size and the cost? Can the design we chose be manufactured at "
+        "all? And what about export restrictions? In the sixth lesson we will learn to look at the system more "
+        "broadly. We will examine what limits the sharpness of the image, get to know the meaning of the ratio "
+        "F lambda over d, and understand how design decisions affect performance, weight, size, cost and "
+        "manufacturing complexity. And finally, we will learn how to verify the parameters and the performance of "
+        "the system through measurements and tests. Our goal is not only to reach an impressive result on the "
+        "screen, but to understand how to design a system that can also be built in the real world."),
+}
+HOME_DONE = "You have already completed this lesson."
+HOME_END = (
+    "And now… the choice is yours! So these are the six lessons waiting for us! As you can see on the right side of "
+    "the screen, each lesson has its own card, with a short description and an estimated duration. I recommend "
+    "starting with the first lesson and moving on gradually to the sixth, because each lesson builds the knowledge "
+    "we will need in the next one. But if you already know the software and want to jump straight to a certain "
+    "topic, no problem at all! You can choose any lesson that suits you. And remember, you are not alone in this! "
+    "Once you choose a lesson, I will lead you through the real screens of the software, highlight the fields and "
+    "buttons we talk about, explain what each of them does, and guide you in entering the data correctly. During "
+    "the training you can also choose between Hebrew and English, change the speed of the narration, and play or "
+    "stop the spoken explanations with the options at the top of the guide. So… are you ready to turn data on the "
+    "screen into real engineering understanding? Choose the first lesson, and let's discover together what "
+    "TRM_HADMAA can do! Let's go!")
 
 PARAMS = {
     "category": {
@@ -512,8 +596,8 @@ PARAMS = {
 
 # (lesson id, Hebrew step title) -> (English title, [English narration paragraphs])
 STEPS = {
-    ("first", "ברוכים הבאים"): ("Welcome", [
-        "Hello, and welcome. I will take you through a complete range calculation, step by step. At each step I will highlight the field, explain "
+    ("first", "לפני שמתחילים"): ("Before we start", [
+        "I will take you through a complete range calculation, step by step. At each step I will highlight the field, explain "
         "what it means, and check that the value you entered makes sense.",
         "Three rules for smart input. Start from a template close to your system, and replace only what you know. "
         "Do the influential parameters first: the task, the target, the optics and the atmosphere. The noise "
@@ -545,35 +629,26 @@ STEPS = {
     ("first", "לפני שמשתמשים במספר"): ("Before you use the number", [
         "Go over the Messages page: it lists all the warnings and the assumptions the calculation relies on.",
         "This is important: a number that looks good is not necessarily right. A range without its assumptions is "
-        "not worth much.",
-        "You have finished the first lesson. In the next lesson we will enter a real system, at the engineering "
-        "level."]),
+        "not worth much."]),
+    ("first", "שומרים את העבודה"): ("Saving your work", [
+        "File, Save, or Control S, saves the project as a json file, with all the values and the source tags. File, "
+        "Open, opens it again.",
+        "You have finished the lesson. In the next lesson we will learn what the result says and what limits it."]),
     ("engineering", "סדר העבודה"): ("The order of work", [
-        "In Engineering mode all the pages are shown. You do not need to fill in everything: fill them in the order "
-        "of their impact on the range.",
-        "What really sets the range: first the task criterion, then the target dimensions, the focal length and the "
-        "IFOV, the diameter, and the atmosphere. Then turbulence, jitter, and the display and observer. The NETD and "
-        "the noise come last.",
-        "In every system, about 70 of the roughly 100 parameters hardly matter. Do not spend time on their "
-        "accuracy."]),
-    ("engineering", "Fλ/d - מי מגביל?"): ("F lambda over d: what is the limit?", [
-        "The ratio F lambda over d, the F-number times the wavelength, divided by the pitch, tells you what limits "
-        "the system.",
-        "Below one, the detector is the limit: the system is sampling limited, and a longer focal length or a "
-        "smaller pixel helps a lot. Above 1.5, the optics are the limit, through diffraction: a larger diameter "
-        "helps, and a smaller pixel hardly does.",
-        "The value is shown in the panel of calculated values at the bottom of the Optics page."]),
-    ("engineering", "פסיעת הפיקסלים"): ("Pixel pitch", [
-        "A tip: Run, Detector lookup, or Control D, fills in the detector data from the catalog."]),
-    ("engineering", "מקדם ההנחתה"): ("Extinction coefficient", [
-        "Atmosphere one is entered here. You can turn on up to three atmospheres, to compare them."]),
-    ("engineering", "תג המקור של כל ערך"): ("The source tag of each value", [
-        "Next to each field there is a small tag: preset, datasheet, measured, assumed and more. Clicking it "
-        "changes it.",
-        "The reports show, for each range, which data it relies on. A value that is still a preset is a general "
-        "guess, so update at least the influential parameters.",
-        "To sum up: you have entered everything that really sets the range. Calculate with F5, and move on to "
-        "lesson three."]),
+        "At each field the guide highlights it in the form, explains it and checks the value.",
+        "Not all fields are equal. A field critical to the range is marked in red, in the form and on the card: check "
+        "it against the datasheet and replace it with real data. A field of medium impact gets a step of its own, "
+        "like a critical one. The low-impact fields of each page are shown together in one step, and can stay at "
+        "their defaults if there is no better data.",
+        "The lesson is long and divided into chapters. Close it at any moment, and next time you will continue from "
+        "the same step."]),
+    ("engineering", "סיכום: השדות הקריטיים"): ("Summary: the critical fields", [
+        "These are the fields that set the range of your system. Next to each one: the value, its check and the "
+        "source tag.",
+        "A field marked with a warning sign needs a check. A field whose source is still preset or assumed relies on "
+        "a guess, and is worth replacing with the data of your system.",
+        "You have finished the lesson. Calculate with F5. In the next lesson we will improve the range and produce a "
+        "report."]),
     ("results", "המסך Summary"): ("The Summary screen", [
         "Summary shows the DRI ranges for each atmosphere, the confidence level and the main reason for each "
         "range.",
@@ -587,25 +662,26 @@ STEPS = {
         "Run, Limiting factors, shows for each task what limits it: the atmosphere, diffraction, sampling, noise or "
         "jitter.",
         "Why this matters: upgrading a factor that is not the limit will not change the range. Find the bottleneck "
-        "first."]),
-    ("results", "יועץ השיפור"): ("The improvement advisor", [
+        "first.",
+        "You have finished the lesson. In the next lesson we will enter your system, every parameter, with the "
+        "critical ones emphasized."]),
+    ("improve", "יועץ השיפור"): ("The improvement advisor", [
         "Run, Improve performance, ranks the possible changes by their benefit to the range, with a card for each "
         "action.",
         "The advisor only advises; it does not change the project. Measure first marks parameters worth measuring "
         "before you invest in hardware."]),
-    ("results", "סריקת פרמטר ואי-ודאות"): ("Parameter sweep and uncertainty", [
+    ("improve", "סריקת פרמטר ואי-ודאות"): ("Parameter sweep and uncertainty", [
         "Parameter sweep shows how one parameter changes the range, as a curve and a table.",
         "Uncertainty study gives the range with its uncertainty, by RSS or Monte Carlo. Enter plus or minus values "
         "for the uncertain parameters: delta T, sigma and the task criterion.",
         "Scenario comparison shows several scenarios side by side."]),
-    ("results", "דוח ושמירה"): ("Report and saving", [
+    ("improve", "דוח ושמירה"): ("Report and saving", [
         "File, Export Hebrew DRI report, gives a full report in Hebrew, as a PDF. File, Export report, gives a text "
         "report with all the assumptions. And File, Save, saves the project with its source tags.",
         "You are done! You can open the guide again at any time from Help, Interactive guide, or keep it open: "
         "clicking a field shows its explanation card."]),
     ("system", "מה השיעור הזה מוסיף"): ("What this lesson adds", [
-        "In this lesson we step away from the range for a moment, and ask a system engineer's question: what does "
-        "each parameter cost us?",
+        "We start with a system engineer's question: what does each parameter cost us?",
         "Every gain in range asks something of the system: weight, length, power, money, or harder manufacturing.",
         "The lesson is based on the research on the system parameters, but every claim in it was checked against "
         "manufacturer datasheets and scientific sources.",
@@ -616,6 +692,13 @@ STEPS = {
         "standards.",
         "One important thing: nothing here changes the range the program calculates. These are considerations that "
         "come with it."]),
+    ("system", "Fλ/d - מי מגביל?"): ("F lambda over d: what is the limit?", [
+        "The ratio F lambda over d, the F-number times the wavelength, divided by the pitch, tells you what limits "
+        "the system.",
+        "Below one, the detector is the limit: the system is sampling limited, and a longer focal length or a "
+        "smaller pixel helps a lot. Above 1.5, the optics are the limit, through diffraction: a larger diameter "
+        "helps, and a smaller pixel hardly does.",
+        "The value is shown in the panel of calculated values at the bottom of the Optics page."]),
     ("system", "מוקד ו-F: כללי הגדילה"): ("Focal length and F-number: the scaling rules", [
         "The aperture diameter is the focal length divided by the F-number. A 50 millimeter lens at F 1.4 needs an "
         "aperture of about 36 millimeters, and at F 4, only about 12.5.",
@@ -682,6 +765,53 @@ STEPS = {
         "lens, and the frame rate you actually need.",
         "And most important: the numbers here are rules of thumb. The optical design, the datasheets and the "
         "measurements decide in the end. You have finished the lesson, well done."]),
+    ("intro", "מה התוכנה מחשבת"): ("What the program calculates", [
+        "We start with the central question: up to what distance can the camera perform an observation task on a "
+        "target?",
+        "The program shows three ranges: detection, noticing that a target is there; recognition, telling the "
+        "classes of target apart, for example a vehicle from a person; and identification, a more exact "
+        "determination of the target, for example the type of vehicle.",
+        "Each range is calculated for a 50 percent probability of success, according to the task criterion chosen.",
+        "The calculation is based on the properties of the system, the optics, the detector, the display and the "
+        "stabilization, and on the properties of the target and the atmospheric conditions."]),
+    ("intro", "שלושה מצבי עבודה"): ("Three working modes", [
+        "In the sidebar on the left, under the Workflow heading, you choose the working mode. The program has three "
+        "working modes.",
+        "In Quick mode the main fields are shown on one page, so it suits a first calculation and a quick estimate. "
+        "Engineering mode shows every page of the form, divided by topic, and lets you enter the data of a "
+        "specific system. Lab mode adds measurement data from the lab, to compare them with the model's "
+        "predictions."]),
+    ("intro", "היכרות עם הטופס והעמודים"): ("Getting to know the form and its pages", [
+        "Once we have chosen a working mode, we move to the data entry form. In the sidebar, under Parameters, is a "
+        "list of pages. Choosing one shows the fields that belong to it. Each page covers a different topic, such "
+        "as optics, detector, target or atmosphere.",
+        "The program hides fields that do not apply to the settings you chose. For example, when you choose a "
+        "thermal camera, fields related to illumination are not shown. At the bottom of each page there are also "
+        "values the program calculates automatically, such as the angle seen by one pixel, the IFOV, and the field "
+        "of view."]),
+    ("intro", "מקור הנתונים בכל שדה"): ("The data source of each field", [
+        "Before we change a value, let's look at the small tag next to each field. The tag shows where the value "
+        "comes from: preset, a default value; datasheet, a value from the manufacturer's specification; measured, "
+        "a value that was measured; and assumed, a value assumed for the calculation. Clicking the tag lets you "
+        "change the classification of the source.",
+        "This classification matters: the reports show which data each range is based on. A value marked preset "
+        "does not necessarily represent your system, so it is worth updating the defaults of the parameters that "
+        "affect the range most, as far as you have more reliable data."]),
+    ("intro", "איך מקבלים הסבר על שדה"): ("How to get an explanation of a field", [
+        "Now let's see how to get help while filling in the form. While the guide is open, clicking a field shows "
+        "an explanation card here: what the field means, how it affects the result, and what can be learned from "
+        "the value you entered.",
+        "To hear the explanation, click the play button at the top of the guide or press F9. The Explain page "
+        "option reads the explanations of all the fields of the open page, one after another."]),
+    ("intro", "ביצוע החישוב וקריאת התוצאות"): ("Calculating and reading the results", [
+        "Once we have entered the data, we calculate with F5. To the right of the form are the result tabs, and "
+        "they are updated after every calculation.",
+        "The Summary tab shows the three ranges and the main factor affecting each of them. The Range tab shows how "
+        "the probability of success of the task changes as the distance to the target grows. The Messages tab "
+        "lists the warnings and the assumptions used in the calculation. It is important to read it before relying "
+        "on the results.",
+        "That's it, we know the layout of the screen and the main stages of the work. In the next lesson we will "
+        "enter data and calculate our first range."]),
     ("tour", "איך עובד הסיור"): ("How the tour works", [
         "We will go over every page of the form in Engineering mode, group by group. Each step shows the fields of "
         "the group: your value, a check of it, and how much it affects the range.",

@@ -1,7 +1,8 @@
 """Interactive Hebrew guide panel of the GUI (optional: Help > Interactive guide, toolbar "Guide", Ctrl+G).
 
 The panel docks at the right of the main window.  It has four views:
-  home   - the lessons (guide_he.LESSONS) as cards, with progress, and the review of all values
+  home   - the lessons (guide_he.LESSONS) as cards under their headings, with progress, and the tools (the review
+           of all values)
   step   - one step of a lesson: it switches workflow / page / result tab, highlights the parameter in the form
            and shows its field card with a live check of the entered value; a step of the full tour lists the
            fields of one group of the form instead
@@ -472,7 +473,7 @@ class GuidePanel(tk.Frame):
             if not steps:
                 return []
             st = steps[min(self.index, len(steps) - 1)]
-            if st.get("fields"):
+            if st.get("fields") and not st.get("summary"):
                 paths = [q for q in st["fields"] if G.param(q)]
                 intro = GV.step_script(lang, self.lesson_id, dict(st, fields=None))
                 items = [{"path": q, "value": self._value(q), "project": self.app.project, "label": self._label(q)}
@@ -537,7 +538,7 @@ class GuidePanel(tk.Frame):
         if self.mode == "step" and self.lesson_id:
             les, steps = G.lesson(self.lesson_id), self._steps()
             n = max(len(steps), 1)
-            sub = "%s · שלב %d מתוך %d" % (les["title"], min(self.index + 1, n), n)
+            sub = "%s · שלב %d מתוך %d" % (les.get("short") or les["title"], min(self.index + 1, n), n)
             frac = (self.index + 1) / n
         elif self.mode == "field" and self._walk:
             i, n = self._walk
@@ -547,8 +548,9 @@ class GuidePanel(tk.Frame):
         elif self.mode == "review":
             sub, frac = "בדיקת כל הערכים", None
         else:
-            sub = "%d מתוך %d שיעורים הושלמו" % (len(self.done & {l["id"] for l in G.LESSONS}), len(G.LESSONS))
-            frac = len(self.done) / len(G.LESSONS)
+            n_done = len(self.done & {l["id"] for l in G.LESSONS})
+            sub = "%d מתוך %d שיעורים הושלמו" % (n_done, len(G.LESSONS))
+            frac = n_done / len(G.LESSONS)
         draw_line(c, sub, W - pad, int(44 * k), f_sub, HEAD_MUTED)
         # close button (left) and progress track (bottom)
         x0 = pad
@@ -582,16 +584,23 @@ class GuidePanel(tk.Frame):
         self.back = None
         self._unhilite()
         self.impact.cancel()
-        blocks = [("p", "בחרו שיעור. כל שיעור מוביל אתכם על המסכים האמיתיים, מסמן את השדה ובודק את "
-                        "הערך שהזנתם."),
-                  ("gap", 4),
-                  ("card", "בדיקת כל הערכים שלי", "כל השדות שהפרויקט שלכם מציג נבדקים בבת אחת. ההערות מסודרות לפי "
-                   "ההשפעה על הטווח, עם הסבר למה הערך חשוד ומה לעשות.", "בדיקה מיידית", self.show_review, False)]
-        for les in G.LESSONS:
+        blocks = [("p", "ההדרכה מחולקת לשישה שיעורים, מהיכרות בסיסית עם התוכנה ועד שיקולים מתקדמים. בחרו שיעור, "
+                        "ואלווה אתכם צעד אחר צעד על המסכים האמיתיים: אדגיש את השדות, אסביר אותם ואבדוק את הערכים "
+                        "שתזינו. מומלץ להתחיל בשיעור 1 ולהתקדם לפי הסדר, אבל אפשר לבחור כל שיעור.")]
+        group = None
+        for n, les in enumerate(G.LESSONS, 1):
+            if les.get("group") != group:
+                group = les.get("group")
+                blocks += [("gap", 4), ("h", group)] if group else []
             done = les["id"] in self.done
             meta = ("✓ הושלם" if done else "%d דקות · %d שלבים" % (les["minutes"], self._n_steps(les["id"])))
-            blocks.append(("card", les["title"], les["summary"], meta, lambda i=les["id"]: self.start(i), done))
-        blocks += [("h", "כרטיסי שדה"),
+            blocks.append(("card", "%d. %s" % (n, les["title"]), les["summary"], meta,
+                           lambda i=les["id"]: self.start(i), done))
+        blocks += [("gap", 4), ("h", "כלים"),
+                   ("card", "בדיקת כל הערכים שלי", "אחרי שהזנתם מערכת: כל השדות שהפרויקט שלכם מציג נבדקים בבת אחת. "
+                    "ההערות מסודרות לפי ההשפעה על הטווח, עם הסבר למה הערך חשוד ומה לעשות.", "בדיקה מיידית",
+                    self.show_review, False),
+                   ("h", "כרטיסי שדה"),
                    ("p", "כשהמדריך פתוח, לחיצה על שדה בטופס מציגה כאן הסבר עליו: מה הוא, כמה הוא משפיע על "
                          "הטווח, ערכים טיפוסיים, בדיקה של הערך שלכם וחישוב חי של ההשפעה שלו על טווחי התצפית."),
                    ("muted", "פותחים וסוגרים את המדריך: Help > Interactive guide, הכפתור Guide או Ctrl+G.")]
@@ -627,7 +636,7 @@ class GuidePanel(tk.Frame):
         self._unhilite()
         hidden = False
         if st.get("path"):
-            hidden = not self._hilite(st.get("page"), st["path"])
+            hidden = not self._hilite(st.get("page"), st["path"], crit=bool(st.get("critical")))
             if not hidden and not self._opening:        # opening the guide does not take the cursor away
                 self._focus_field(st.get("page"), st["path"])
         self.step_hidden = hidden
@@ -649,7 +658,8 @@ class GuidePanel(tk.Frame):
         if st.get("action") == "calculate":
             spec.append(("חשב עכשיו", self.app.calculate, False))
         elif st.get("path") and not getattr(self, "step_hidden", False):
-            spec.append(("הצג את השדה", lambda: self._hilite(st.get("page"), st["path"]), False))
+            spec.append(("הצג את השדה", lambda: self._hilite(st.get("page"), st["path"],
+                                                              crit=bool(st.get("critical"))), False))
         spec.append(("שיעורים", self.show_home, False))
         self._buttons(spec)
 
@@ -659,15 +669,16 @@ class GuidePanel(tk.Frame):
         if st.get("review"):
             blocks += self._review_blocks()
         elif st.get("fields"):
-            blocks += self._field_list(st["fields"])
+            blocks += self._field_list(st["fields"], sources=bool(st.get("summary")))
         elif path:
             e = G.param(path)
-            if e and not st.get("blocks"):
+            if e and not st.get("blocks") and not st.get("entry"):
                 blocks[0] = ("title", e["title"])
             if hidden:
                 blocks.append(("box", "plain", ["השדה לא מוצג כרגע בטופס - הוא לא רלוונטי לבחירות הנוכחיות "
                                                 "(קטגוריה, מצב או פרמטרים מתקדמים)."]))
             blocks += self._card(path)
+        blocks += list(st.get("after", []))
         self.doc.set_blocks(blocks, keep_scroll=keep_scroll)
 
     def finish(self):
@@ -802,12 +813,24 @@ class GuidePanel(tk.Frame):
             self._step_buttons()
 
     # ------------------------------------------------------------------ lists: tour group, review
-    def _field_list(self, paths):
+    def _field_list(self, paths, sources=False):
+        """Cards of fields (a tour group, the low-impact fields of a page, the critical fields of lesson 4).
+        sources: also show the source tag, and mark a value that is still a guess (preset / assumed)."""
         out = []
+        if sources and not paths:
+            out.append(("box", "plain", ["לא נמצאו שדות קריטיים שמוצגים בפרויקט הזה."]))
         for path in paths:
             s = G.field_summary(path, self._value(path), self.app.project)
             if s:
                 state, title, text, meta = s
+                v = self._value(path)
+                if sources and isinstance(v, (int, float)) and not isinstance(v, bool):   # a choice has no source
+                    src = G._source_of(self.app.project, path)
+                    guess = G.is_guess(self.app.project, path)
+                    meta += " · מקור: %s%s" % ("assumed" if src == "assumption" else src, " ⚠ ניחוש" if guess else "")
+                    if guess and state == "ok":
+                        state = "warn"
+                        title = "⚠ " + title
                 out.append(("card", title, text, meta, lambda p=path: self.open_field(p), state == "ok", state))
         out.append(("muted", "לחיצה על שדה פותחת את הכרטיס המלא עם חישוב ההשפעה על הטווח."))
         return out
@@ -876,7 +899,8 @@ class GuidePanel(tk.Frame):
         """Called by App.refresh: re-check the value of the shown parameter."""
         if self.mode == "step":
             steps = self._steps()
-            if self.index < len(steps) and (steps[self.index].get("path") or steps[self.index].get("review")):
+            if self.index < len(steps) and (steps[self.index].get("path") or steps[self.index].get("review") or
+                                            steps[self.index].get("fields")):
                 self._render_step(steps[self.index], getattr(self, "step_hidden", False), keep_scroll=True)
                 self._step_buttons()
         elif self.mode == "field":
@@ -931,7 +955,8 @@ class GuidePanel(tk.Frame):
                 return widgets
         return None
 
-    def _hilite(self, page, path):
+    def _hilite(self, page, path, crit=False):
+        """Mark the label of a field in the form (red for a field critical to the range) and scroll to it."""
         widgets = self._row(page, path)
         if not widgets:
             return False
@@ -941,7 +966,8 @@ class GuidePanel(tk.Frame):
             return False
         self._unhilite()
         self.hilited = lab
-        lab.configure(style="Guide.TLabel")
+        self._hstyle = ("GuideCrit.TLabel", "GuideCritFlash.TLabel") if crit else ("Guide.TLabel", "GuideFlash.TLabel")
+        lab.configure(style=self._hstyle[0])
         sf = self.app.pages.get(page)
         if sf is not None:
             h = max(sf.inner.winfo_height(), 1)
@@ -956,7 +982,8 @@ class GuidePanel(tk.Frame):
         if not self.hilited or n <= 0:
             return
         try:
-            self.hilited.configure(style="Guide.TLabel" if n % 2 == 0 else "GuideFlash.TLabel")
+            st = getattr(self, "_hstyle", ("Guide.TLabel", "GuideFlash.TLabel"))
+            self.hilited.configure(style=st[0] if n % 2 == 0 else st[1])
         except tk.TclError:
             return
         self._flash_job = self.after(220, lambda: self._flash(n - 1))
@@ -992,3 +1019,5 @@ class GuidePanel(tk.Frame):
 def configure_styles(style, font_semi):
     style.configure("Guide.TLabel", background=HILITE, foreground="#1d2433", font=font_semi)
     style.configure("GuideFlash.TLabel", background="#ffd666", foreground="#1d2433", font=font_semi)
+    style.configure("GuideCrit.TLabel", background="#fee4e2", foreground="#b42318", font=font_semi)
+    style.configure("GuideCritFlash.TLabel", background="#fda29b", foreground="#7a271a", font=font_semi)
