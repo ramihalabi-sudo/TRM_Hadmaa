@@ -621,9 +621,34 @@ _ORDINAL = {"he": ("הראשון", "השני", "השלישי", "הרביעי", "
             "en": ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth")}
 
 
-def step_script(lang, lesson_id, step, field_args=None, labels=None):
+def step_script(lang, lesson_id, step, field_args=None, labels=None, point=None):
     """Narration of a lesson step.  field_args: dict(path=..., value=..., project=..., label=..., impact=...)
-    for a step that shows a field card; labels: {path: form label} for a group step of the tour."""
+    for a step that shows a field card; labels: {path: form label} for a group step of the tour.  point(targets):
+    frames parts of the screen; with it, the step's "show" list frames each part when its sentence is said."""
+    out = _step_script(lang, lesson_id, step, field_args, labels)
+    if point is not None and step.get("show"):
+        out = show_actions(out, step["show"], point)
+    return out
+
+
+def show_actions(out, show, point):
+    """Insert, before the first sentence that names each part of the screen, the action that frames it."""
+    from .guide_point import keyword_re
+    pending = [(keyword_re(words if isinstance(words, (tuple, list)) else (words,)),
+                [targets] if isinstance(targets, str) else list(targets)) for words, targets in show]
+    res = []
+    for seg in out:
+        if pending and isinstance(seg, tuple):
+            hit = [t for rx, t in pending if rx.search(seg[0])]
+            if hit:
+                pending = [(rx, t) for rx, t in pending if not rx.search(seg[0])]
+                targets = [x for t in hit for x in t]
+                res.append({"do": lambda ts=targets: point(ts)})
+        res.append(seg)
+    return res
+
+
+def _step_script(lang, lesson_id, step, field_args=None, labels=None):
     out = []
     if step.get("lesson_start"):
         _add(out, lesson_welcome(lang, lesson_id), lang)

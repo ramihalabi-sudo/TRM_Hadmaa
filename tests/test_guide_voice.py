@@ -352,5 +352,73 @@ class Panel(unittest.TestCase):
         app.toggle_guide(False)
 
 
+def show_steps():
+    for les in GH.LESSONS:
+        for i, st in enumerate(les["steps"]):
+            if st.get("show"):
+                yield les["id"], i, st
+
+
+class PointAtScreen(unittest.TestCase):
+    """A step that talks about a part of the screen frames it while the sentence that names it is said."""
+
+    def test_every_part_is_named_in_both_languages(self):
+        n = 0
+        for lid, i, st in show_steps():
+            for lang in GV.LANGS:
+                out = GV.step_script(lang, lid, st, point=lambda ts: None)
+                self.assertEqual([s for s in out if not isinstance(s, dict)], GV.step_script(lang, lid, st),
+                                 "the actions change no sentence (the recordings stay)")
+                acts = [(j, s["do"].__defaults__[0]) for j, s in enumerate(out) if isinstance(s, dict)]
+                framed = [t for _j, ts in acts for t in ts]
+                for words, targets in st["show"]:
+                    for t in [targets] if isinstance(targets, str) else targets:
+                        self.assertIn(t, framed, (lid, i + 1, lang, words))
+                for j, _ts in acts:                                      # an action comes right before a sentence
+                    self.assertIsInstance(out[j + 1], tuple)
+                n += len(acts)
+        self.assertGreaterEqual(n, 60)
+
+    def test_keyword_is_a_whole_word(self):
+        from trm4.guide_point import keyword_re
+        rx = keyword_re(("Range",))
+        self.assertTrue(rx.search("The Range tab shows"))
+        self.assertFalse(rx.search("the three ranges"))
+        self.assertFalse(rx.search("Ranges"))
+        self.assertTrue(keyword_re(("עקומת הטווח",)).search("ועקומת הטווח מראה"))
+
+    @unittest.skipIf(G is None, "no tkinter")
+    def test_frames_in_the_window(self):
+        try:
+            app = G.App()
+        except tk.TclError as e:
+            self.skipTest("no display: %s" % e)
+        try:
+            app.geometry("1500x900")
+            app.update()
+            app.toggle_guide(True)
+            gp = app.guide
+            missing = []
+            for lid, i, st in show_steps():
+                gp.start(lid)
+                gp.show_step(next(k for k, s in enumerate(gp._steps()) if s["title"] == st["title"]))
+                app.update()
+                for _words, targets in st["show"]:
+                    for t in [targets] if isinstance(targets, str) else targets:
+                        if t == "derived":                      # only Quick setup and Camera profile carry it
+                            continue
+                        if gp.pointer.show([t]) < 1:
+                            missing.append((lid, i + 1, t))
+                        self.assertEqual(len(gp.pointer._frames), 4 * gp.pointer.shown)
+            self.assertEqual(missing, [])
+            gp.show_step(0)
+            self.assertEqual(gp.pointer.shown, 0, "a new step clears the frames of the last one")
+            gp.pointer.show(["tool:Calculate"])
+            app.toggle_guide(False)
+            self.assertEqual(gp.pointer.shown, 0, "closing the guide clears them")
+        finally:
+            app.destroy()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ from tkinter import ttk
 from . import guide_design_he as DS
 from . import guide_he as G
 from . import guide_impact as GI
+from . import guide_point as GP
 from . import guide_voice as GV
 from .rtl_tk import RtlCanvas, RtlButton, draw_line, line_width, wrap
 
@@ -256,6 +257,7 @@ class GuidePanel(tk.Frame):
         self.back = None                                # view the field card returns to ("review")
         self.hilited = None
         self._flash_job = None
+        self.pointer = GP.Pointer(app, self)            # frames the part of the screen a step talks about
         self.impact = GI.ImpactWorker(self)
         self._imp_key = None                            # (path, project state) of the shown impact result
         self._imp_res = None
@@ -475,7 +477,7 @@ class GuidePanel(tk.Frame):
             st = steps[min(self.index, len(steps) - 1)]
             if st.get("fields") and not st.get("summary"):
                 paths = [q for q in st["fields"] if G.param(q)]
-                intro = GV.step_script(lang, self.lesson_id, dict(st, fields=None))
+                intro = GV.step_script(lang, self.lesson_id, dict(st, fields=None), point=self.pointer.show)
                 items = [{"path": q, "value": self._value(q), "project": self.app.project, "label": self._label(q)}
                          for q in paths]
                 return GV.walk_script(lang, items, self._walk_field, self._walk_end, intro=intro)
@@ -484,7 +486,7 @@ class GuidePanel(tk.Frame):
                 p = st["path"]
                 args = {"path": p, "value": self._value(p), "project": self._project(), "label": self._label(p),
                         "impact": self._impact_of(p)}
-            return GV.step_script(lang, self.lesson_id, st, args)
+            return GV.step_script(lang, self.lesson_id, st, args, point=self.pointer.show)
         return []
 
     def _view_changed(self):
@@ -494,6 +496,8 @@ class GuidePanel(tk.Frame):
             return
         self._walk = None
         self._walk_page = None
+        if self.mode != "step":
+            self.pointer.clear()
         self.voice.stop()
         if self._voice_job:
             self.after_cancel(self._voice_job)
@@ -504,6 +508,12 @@ class GuidePanel(tk.Frame):
     def _auto_say(self):
         self._voice_job = None
         self.narrate()
+
+    @staticmethod
+    def _show_first(st):
+        """Targets of the first part of the screen a step names."""
+        t = st["show"][0][1]
+        return [t] if isinstance(t, str) else list(t)
 
     def _pages(self):
         """[(page, fields, workflow)] of the form for the tour and the review."""
@@ -634,6 +644,7 @@ class GuidePanel(tk.Frame):
             except tk.TclError:
                 pass
         self._unhilite()
+        self.pointer.clear()
         hidden = False
         if st.get("path"):
             hidden = not self._hilite(st.get("page"), st["path"], crit=bool(st.get("critical")))
@@ -642,6 +653,8 @@ class GuidePanel(tk.Frame):
         self.step_hidden = hidden
         self._render_step(st, hidden)
         self._step_buttons()
+        if st.get("show") and not self._opening:        # read without the voice: frame the first part at once
+            self.after_idle(lambda: self.pointer.show(self._show_first(st)))
         self._draw_head()
         self._view_changed()
 
@@ -1013,6 +1026,7 @@ class GuidePanel(tk.Frame):
             self.after_cancel(self._typing_job)
             self._typing_job = None
         self._unhilite()
+        self.pointer.clear()
         self._save()
 
 
