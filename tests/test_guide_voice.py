@@ -388,6 +388,24 @@ class PointAtScreen(unittest.TestCase):
                 n += len(acts)
         self.assertGreaterEqual(n, 60)
 
+    def test_highlight_stays_until_the_topic_changes(self):
+        """A step's last highlight is removed by its closing sentence ("that's it, you have finished"), not before;
+        a sentence that names nothing keeps what the one before showed."""
+        for lid, i, st in show_steps():
+            for lang in GV.LANGS:
+                out = GV.step_script(lang, lid, st, point=lambda ts: None)
+                acts = [j for j, s in enumerate(out) if isinstance(s, dict)]
+                clears = [j for j in acts if out[j]["do"].__defaults__[0] == ["clear"]]
+                for j in clears:
+                    self.assertTrue(any(w in out[j + 1][0] for w in ("זהו", "סיימתם", "That's it", "finished",
+                                                                       "done")), (lid, i + 1, lang, out[j + 1][0]))
+        st = next(s for _l, _i, s in show_steps() if s["title"] == "בחרו תבנית")
+        out = GV.step_script("he", "first", st, point=lambda ts: None)
+        moves = [s["do"].__defaults__[0] for s in out if isinstance(s, dict)]
+        self.assertTrue(moves[0][0].startswith("menu:File>New from template>"))
+        self.assertEqual([m[0].split(":")[0] for m in moves[1:-1]], ["menuitem"] * 4)   # the list stays open
+        self.assertEqual(moves[-1], ["profile"])
+
     def test_keyword_is_a_whole_word(self):
         from trm4.guide_point import keyword_re
         rx = keyword_re(("Range",))
@@ -473,6 +491,8 @@ class PointAtScreen(unittest.TestCase):
                 wf, page, adv = app.workflow, app.current_page, app.show_adv.get()
                 for _words, targets in st["show"]:
                     for t in [targets] if isinstance(targets, str) else targets:
+                        if t.startswith("menuitem:"):           # moves inside a real open menu: the narrated run
+                            continue
                         if gp.pointer.show([t]) < 1:
                             missing.append((lid, i + 1, t))
                         self.assertEqual(len(gp.pointer._frames), 4 * gp.pointer.shown)

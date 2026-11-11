@@ -296,7 +296,7 @@ class GuidePanel(tk.Frame):
         self.bar = NarratorBar(self, self)
         self.bar.pack(fill="x", before=body)
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", before=body)
-        self.voice = GV.Narrator(self, self.bar.set_state)
+        self.voice = GV.Narrator(self, self._voice_state)
         self._check_voices()
         try:
             app.bind_all("<F9>", lambda e: (self.voice_play(), "break")[1])
@@ -434,6 +434,11 @@ class GuidePanel(tk.Frame):
             self.show_step(self.index) if self.lesson_id else None
         finally:
             self._quiet = False
+
+    def _voice_state(self, state, caption):
+        self.bar.set_state(state, caption)
+        if state == "idle" and getattr(self, "pointer", None) is not None:
+            self.pointer.clear()                    # the explanation is over: nothing stays highlighted
 
     def voice_stop(self):
         self.voice.stop()

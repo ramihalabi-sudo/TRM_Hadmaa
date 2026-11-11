@@ -627,7 +627,8 @@ def step_script(lang, lesson_id, step, field_args=None, labels=None, point=None)
     frames parts of the screen; with it, the step's "show" list frames each part when its sentence is said."""
     out = _step_script(lang, lesson_id, step, field_args, labels)
     if point is not None and step.get("show"):
-        out = show_actions(out, step["show"], point)
+        from .guide_point import END_WORDS
+        out = show_actions(out, list(step["show"]) + [(END_WORDS, "clear")], point)
     return out
 
 

@@ -24,7 +24,7 @@ python run_trm4.py --cli 0 --ttp                                       -> incl. 
 python run_trm4.py --cli 0 --quick                                     -> geometric quick estimate, no model run
 python run_trm4.py --sfr edge.png --out sfr.txt                        -> slanted-edge SFR of an edge image
 packaging\build_exe.bat                                                -> Windows EXE (dist\TRM_HADMAAv1\)
-packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.26.exe
+packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.27.exe
 python run_trm4.py --cli 4 --cn2-stats Arid:summer --overcast         -> ranges for the Cn2 statistics (Table C.2)
 python run_trm4.py --cli 4 --cn2-stats Arid:winter --overcast --neutral-day   -> the same, overcast / winter noon h^-2/3
 python run_trm4.py --r0-frames seq.npy --lam 0.55 --focal 500 --pitch 5 --aperture 100 --path-km 2 --out r0.txt
@@ -73,6 +73,17 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `python tools/version_report.py` writes the report `reports/version_history.html`. `tests/test_version.py` checks that
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
+
+## Version 2.27 - guide: what is explained stays shown until the next topic
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Rule | What a demonstration shows (frame, open menu, list, bubble, card) stays until the next part of the screen is named, the step's closing sentence (`guide_point.END_WORDS`, added to every step's `show` by `step_script` as a `clear`), or the end of the narration (`GuidePanel._voice_state` clears on idle). A menu that is only shown no longer closes by itself. |
+| In-menu moves | `menuitem:<label>` moves the highlight inside the menu still open (`MenuWalk.move_to`, up / down arrows, several in one sentence 1.6 s apart); `Pointer.show` keeps the menu open for them. *Choose a template*: File > New from template stays open while LWIR uncooled, the cooled ones, CMOS and SWIR are explained, the profile bar (`profile`) closes it; no template is loaded there any more. |
+| Closing | `MenuWalk.close`: `EndMenu`, then `WM_CANCELMODE`, then Escape while the open menu is still this window's, up to 4 times 150 ms apart; a new walk (`MenuWalk._gen`) stops the checks of the one before, which used to close the next menu (File > Open after Save, Uncertainty after Parameter sweep). |
+| Checked | All 17 demonstrating steps narrated end to end in Hebrew and English: no menu cut short, every choice in time, nothing open or framed at the end of a step, the project back. |
 
 ## Version 2.26 - guide: every lesson narrated end to end, timing fixes
 

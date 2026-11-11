@@ -41,6 +41,9 @@ def keyword_re(words):
     return re.compile(r"(?<![\w])[ובלמהשכ]{0,2}(?:%s)(?![\w])" % alts)
 
 
+# The closing sentence of a step ("that's it, you have finished..."): everything shown is removed.
+END_WORDS = ("וזהו", "זהו", "סיימתם", "That's it", "You have finished", "You are done", "You're done")
+
 # The opening screen of the guide: what its lesson previews name.
 HOME_SHOW = [(("סימן השאלה", "question mark"), "help:"), (("Calculate", "F5"), "tool:Calculate"),
              ("Summary", "tab:Summary"), (("בין עברית לאנגלית", "Hebrew and English"), ["guide:lang", "guide:rate", "guide:auto"])]
@@ -82,8 +85,9 @@ class MenuWalk:
     timers in the Windows menu loop)."""
 
     STEP_MS = 330
+    _gen = 0                    # a new menu walk: the close checks of the one before stop
     HOLD_MS = 1300              # on the item before the guide chooses it
-    SHOW_MS = 2500              # on the item before a menu that is only shown closes again
+
 
     def __init__(self, app, path, run=None):
         self.app, self.path, self.run = app, path, run
@@ -159,6 +163,7 @@ class MenuWalk:
         keys = self.keys()
         if not self.ok or keys is None:
             return False
+        MenuWalk._gen += 1
         u = self._u32()
         u.SetForegroundWindow(self._hwnd())
         u.PostMessageW(self._hwnd(), 0x0112, 0xF100, ord(self.path[0][0].lower()))   # WM_SYSCOMMAND, SC_KEYMENU
@@ -169,9 +174,26 @@ class MenuWalk:
         self._jobs.append(self.app.after(t + 60, self._reached))
         if self.run is not None:
             self._jobs.append(self.app.after(t + self.HOLD_MS, self._choose))
-        else:                                       # shown, not chosen: closed again, as a lecturer does
-            self._jobs.append(self.app.after(t + self.SHOW_MS, self.close))
+        # a menu that is only shown stays open while it is being explained: the next part of the screen, the
+        # closing sentence or the end of the narration closes it
         return True
+
+    def move_to(self, label, delay=0):
+        """Walk the highlight, in the open menu, to another item of it (the explanation moved on to it)."""
+        def go():
+            if not self.walked:                     # still walking to the first item: after it
+                self._jobs.append(self.app.after(150, go))
+                return
+            idx = self._index(self.menu, label)
+            if idx is None or not self.in_menu():
+                return
+            lo, hi = sorted((self.index, idx))
+            steps = sum(1 for i in range(lo, hi) if self.menu.type(i) != "separator")
+            vk = 0x28 if idx > self.index else 0x26                     # down / up
+            self.index = idx
+            for k in range(steps):
+                self._jobs.append(self.app.after(k * self.STEP_MS, lambda: self._key(vk)))
+        self._jobs.append(self.app.after(delay, go))
 
     def _reached(self):
         self.walked = True
@@ -203,7 +225,23 @@ class MenuWalk:
     def close(self):
         self.cancel()
         if self.ok:
-            self._u32().EndMenu()                   # closes only this thread's menus
+            u = self._u32()
+            u.EndMenu()                             # closes only this thread's menus
+            if self.in_menu():                      # not always enough: cancel the menu mode of our window too
+                u.PostMessageW(self._hwnd(), 0x001F, 0, 0)          # WM_CANCELMODE
+            gen = MenuWalk._gen
+            self.app.after(150, lambda: self._make_sure_closed(4, gen))
+
+    def _make_sure_closed(self, n, gen):
+        """Still open (it happens): Escape, only while the open menu is our window's, until it is gone - and never
+        once the next menu has been opened."""
+        if n <= 0 or gen != MenuWalk._gen or not self.in_menu():
+            return
+        u = self._u32()
+        u.keybd_event(0x1B, 0, 0, 0)
+        u.keybd_event(0x1B, 0, 2, 0)
+        u.EndMenu()
+        self.app.after(150, lambda: self._make_sure_closed(n - 1, gen))
 
 
 def _walk(w):
@@ -262,6 +300,7 @@ class Pointer:
         self._frames = []
         self._job = None
         self._acted = 0            # demonstrations with nothing to frame (an open menu)
+        self.menu = None           # the menu walk still open (menuitem moves inside it)
         self._undo = []            # what a demonstration opened, closed before the next one (a tip, a list, a card)
         self._keep = {}            # what a demonstration changed for the whole step (workflow, advanced), restored
         #                            when the step ends
@@ -384,6 +423,7 @@ class Pointer:
             walk = MenuWalk(app, path, run)
             if not walk.start():
                 return None
+            self.menu = walk
             self._undo.append(walk.finish)
             self._acted += 1
             return None
@@ -395,6 +435,8 @@ class Pointer:
             app.after(60, lambda: app._source_menu(arg, b))
             self._undo.append(lambda: MenuWalk(app, []).close())
             return b
+        if kind == "profile":                               # the camera-profile bar at the top of the page
+            return next((pb for pb in getattr(app, "profile_bars", []) if _mapped(pb)), None)
         if kind == "calculate":                             # run the model, as the Calculate button does
             btn = getattr(app, "calc_btn", None) or self._tool("Calculate")   # its label changes while it runs
             app.calculate()
@@ -449,7 +491,7 @@ class Pointer:
         return None
 
     DEMOS = ("help", "card", "pick", "page", "workflow", "show_advanced", "calculate", "menu", "menudo",
-             "badgemenu")
+             "badgemenu", "profile")
 
     def boxes(self, target):
         """Root boxes of a target (opening the tab or mode it is in); [] when it is not on the screen."""
@@ -529,7 +571,16 @@ class Pointer:
 
     # ---- drawing
     def show(self, targets):
-        """Frame every target that is on the screen; returns how many were framed."""
+        """Frame every target that is on the screen; returns how many were framed.  What the last demonstration
+        opened stays until this one: `menuitem:<label>` moves the highlight inside the menu that is still open
+        (several, one after the other); `clear` only removes everything (the closing sentence of a step)."""
+        items = [t for t in targets if t.startswith("menuitem:")]
+        if items and len(items) == len(targets):
+            if self.menu is None or not self.menu.in_menu():
+                return 0
+            for k, t in enumerate(items):
+                self.menu.move_to(t.partition(":")[2], delay=k * 1600)
+            return len(items)
         self.clear()
         self._acted = 0
         boxes = []
@@ -575,6 +626,7 @@ class Pointer:
         self._run(reversed(keep))
 
     def clear(self):
+        self.menu = None
         undo, self._undo = self._undo, []
         self._run(reversed(undo))
         if self._job:

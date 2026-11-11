@@ -767,7 +767,15 @@ LESSONS = [
             LI("Visible CMOS - מצלמת יום; Visible/SWIR InGaAs - מצלמת לילה."),
             ("box", "info", ["יש לכם פרופיל מצלמה שמור? בחרו אותו בראש העמוד Quick setup."]),
             workflow="quick", page="Quick setup",
-            show=[("New", "menudo:File>New from template>Thermal - LWIR uncooled microbolometer 640x480")]),
+            # the template list stays open while every kind of camera is explained, the highlight on the template
+            # of the sentence; the profile closes it
+            show=[("New", "menu:File>New from template>Thermal - LWIR cooled staring 640x512 (CMT)"),
+                  ("LWIR uncooled", "menuitem:Thermal - LWIR uncooled microbolometer 640x480"),
+                  ("LWIR cooled", ["menuitem:Thermal - MWIR cooled staring 640x512 (InSb)",
+                                   "menuitem:Thermal - LWIR cooled staring 640x512 (CMT)"]),
+                  ("CMOS", "menuitem:Visible - CMOS daylight camera 1920x1080"),
+                  ("SWIR", "menuitem:Visible/SWIR - InGaAs night camera 640x512"),
+                  (("פרופיל", "profile"), "profile")]),
          _s("קטגוריית החיישן", workflow="quick", page="Quick setup", path="category"),
          _s("סוג הגלאי", workflow="quick", page="Quick setup", path="imager_type", cond=_thermal),
          _s("אורך המוקד", workflow="quick", page="Quick setup", path="optics.f_mm"),
