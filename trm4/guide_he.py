@@ -701,8 +701,8 @@ LESSONS = [
             LI("Engineering Analysis - כל עמודי הטופס, לפי נושאים. כאן מזינים את נתוני המערכת."),
             LI("Laboratory & Image Evaluation - מוסיף נתוני מדידה מהמעבדה, להשוואה עם תחזית המודל."),
             workflow="quick", page="Quick setup",
-            show=[(("WORKFLOW", "Workflow"), "wf"), ("Quick", "wf:quick"), ("Engineering", "wf:engineering"),
-                  ("Lab", "wf:lab")]),
+            show=[(("WORKFLOW", "Workflow"), "wf"), ("Quick", "workflow:quick"), ("Engineering", "workflow:engineering"),
+                  ("Lab", "workflow:lab")]),
          _s("היכרות עם הטופס והעמודים",
             P_("בסרגל הצד, תחת PARAMETERS, מופיעה רשימת העמודים. בחירה בעמוד מציגה את השדות שלו. כל עמוד מתמקד "
                "בנושא אחר: אופטיקה, גלאי, מטרה, אטמוספרה ועוד."),
@@ -711,7 +711,7 @@ LESSONS = [
             LI("בתחתית העמודים Camera profile ו-Quick setup מופיעים ערכים שהתוכנה מחשבת באופן אוטומטי (IFOV, שדה "
                "הראייה ועוד), לקריאה בלבד."),
             workflow="engineering", page="Optics",
-            show=[(("PARAMETERS", "Parameters"), "pages"), (("בחירה באחד", "Choosing one"), "field:optics.f_mm"),
+            show=[(("PARAMETERS", "Parameters"), "pages"), (("בחירה באחד", "Choosing one"), "page:Detector geometry"),
                   (("מסתירה שדות", "hides fields"), "advanced"), (("ערכים שהתוכנה מחשבת", "calculates automatically"), "derived")]),
          _s("מקור הנתונים בכל שדה",
             P_("ליד כל שדה יש תג קטן שמציין את מקור הנתון. לחיצה עליו משנה את הסיווג."),
@@ -721,14 +721,16 @@ LESSONS = [
             LI("ערך preset אינו בהכרח מייצג את המערכת שלכם: עדכנו את הפרמטרים המשפיעים ביותר על הטווח, ככל שיש בידיכם "
                "נתונים אמינים יותר."),
             workflow="engineering", page="Optics",
-            show=[(("התג", "tag"), "badge:optics.f_mm")]),
+            show=[(("התג", "tag"), "badge:optics.f_mm"), (("לחיצה על התג", "Clicking the tag"), "badge:optics.f_mm")]),
          _s("איך מקבלים הסבר על שדה",
             P_("כשהמדריך פתוח, לחיצה על שדה בטופס מציגה כאן כרטיס הסבר: מה משמעות השדה, כיצד הוא משפיע על התוצאה, "
                "ערכים טיפוסיים, בדיקה של הערך שהזנתם וחישוב חי של ההשפעה."),
+            LI("סימן השאלה שליד כל שדה מציג הסבר קצר עליו, גם כשהמדריך סגור."),
             LI("המנחה הקולי מקריא את ההסבר: כפתור ההשמעה בחלק העליון של המדריך, או F9."),
             LI("'הסבר על העמוד' מקריא ברצף את ההסברים על כל השדות בעמוד הפתוח."),
             workflow="engineering", page="Optics",
-            show=[(("לחיצה על שדה", "clicking a field"), "field:optics.f_mm"),
+            show=[(("לחיצה על שדה", "clicking a field"), "card:optics.f_mm"),
+                  (("סימן השאלה", "question mark"), "help:optics.f_mm"),
                   (("כפתור ההשמעה", "play button"), "guide:play"), (("הסבר על העמוד", "Explain page"), "guide:walk")]),
          _s("ביצוע החישוב וקריאת התוצאות",
             P_("מבצעים חישוב עם Calculate או F5. מימין לטופס נמצאות לשוניות התוצאות, והן מתעדכנות לאחר כל חישוב."),
@@ -738,7 +740,7 @@ LESSONS = [
             ("box", "ok", ["סיימתם", "הכרנו את מבנה המסך ואת שלבי העבודה המרכזיים. בשיעור הבא נזין נתונים ונחשב את "
                                     "הטווח הראשון שלנו."], True),
             workflow="quick", tab="Summary",
-            show=[("F5", "tool:Calculate"), (("לשוניות התוצאות", "result tabs"), "tabs"), ("Summary", "tab:Summary"),
+            show=[("F5", "calculate"), (("לשוניות התוצאות", "result tabs"), "tabs"), ("Summary", "tab:Summary"),
                   ("Range", "tab:Range"), ("Messages", "tab:Messages")]),
      ]},
     {"id": "first", "title": "החישוב הראשון: מתבנית לטווח", "short": "החישוב הראשון", "minutes": 8,
@@ -796,7 +798,7 @@ LESSONS = [
             P_("לחצו Calculate בסרגל הכלים (או F5), או השתמשו בכפתור 'חשב עכשיו' כאן. החישוב לוקח כמה שניות."),
             ("box", "info", ["אם מופיעה הודעת Calculation error - היא אומרת איזה ערך לא תקין. תקנו וחשבו שוב."]),
             workflow="quick", page="Quick setup", action="calculate",
-            show=[(("Calculate", "F5"), ["tool:Calculate", "gbtn:חשב עכשיו"])]),
+            show=[(("Calculate", "F5"), ["calculate", "gbtn:חשב עכשיו"])]),
          _s("קוראים את התוצאה",
             P_("בעמוד Summary מופיעים טווחי הגילוי, ההכרה והזיהוי בק\"מ."),
             LI("גילוי: יש משהו שם. הכרה: סוג (רכב / אדם). זיהוי: איזה רכב."),
@@ -828,7 +830,8 @@ LESSONS = [
          _s("System data", P_("כל הערכים המחושבים: IFOV, FOV, Fλ/d, NETD אפקטיבי, מילוי באר ועוד. כאן בודקים "
                               "שהמערכת שהזנתם היא באמת המערכת שהתכוונתם אליה."),
             LI("IFOV ו-FOV תואמים לדף הנתונים?"), LI("מילוי הבאר סביר (לא 0% ולא 100%)?"),
-            workflow="engineering", tab="System data"),
+            workflow="engineering", tab="System data",
+            show=[(("System data", "All the calculated values"), "tab:System data")]),
          _s("מה מגביל את הטווח",
             P_("Run > Limiting factors מראה לכל משימה מה מגביל אותה: אטמוספרה, עקיפה, דגימה, רעש או ריצוד."),
             ("box", "tip", ["למה זה חשוב", "שדרוג של גורם שאינו מגביל לא ישנה את הטווח. קודם מוצאים את "

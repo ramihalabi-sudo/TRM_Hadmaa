@@ -462,11 +462,13 @@ class GuidePanel(tk.Frame):
         return (f or {}).get("label")
 
     def _script(self, lang):
+        point = self.pointer.show
         if self.mode == "home":
-            return GV.home_script(lang, G.LESSONS, self.done)
+            return GV.show_actions(GV.home_script(lang, G.LESSONS, self.done), GP.HOME_SHOW, point)
         if self.mode == "field" and self.field_path:
             p = self.field_path
-            return GV.field_script(lang, p, self._value(p), self._project(), self._label(p), self._impact_of(p))
+            return GV.show_actions(GV.field_script(lang, p, self._value(p), self._project(), self._label(p),
+                                                   self._impact_of(p)), GP.card_show(self.app, p), point)
         if self.mode == "review":
             r = G.review(self._pages(), self.app.project, self.app._row_visible, self._value)
             return GV.review_script(lang, r, self._review_ranges)
@@ -477,7 +479,7 @@ class GuidePanel(tk.Frame):
             st = steps[min(self.index, len(steps) - 1)]
             if st.get("fields") and not st.get("summary"):
                 paths = [q for q in st["fields"] if G.param(q)]
-                intro = GV.step_script(lang, self.lesson_id, dict(st, fields=None), point=self.pointer.show)
+                intro = GV.step_script(lang, self.lesson_id, dict(st, fields=None), point=point)
                 items = [{"path": q, "value": self._value(q), "project": self.app.project, "label": self._label(q)}
                          for q in paths]
                 return GV.walk_script(lang, items, self._walk_field, self._walk_end, intro=intro)
@@ -486,7 +488,10 @@ class GuidePanel(tk.Frame):
                 p = st["path"]
                 args = {"path": p, "value": self._value(p), "project": self._project(), "label": self._label(p),
                         "impact": self._impact_of(p)}
-            return GV.step_script(lang, self.lesson_id, st, args, point=self.pointer.show)
+            out = GV.step_script(lang, self.lesson_id, st, args, point=point)
+            if args:                                    # the field card of the step: its options, what it names
+                out = GV.show_actions(out, GP.card_show(self.app, args["path"]), point)
+            return out
         return []
 
     def _view_changed(self):
@@ -497,7 +502,7 @@ class GuidePanel(tk.Frame):
         self._walk = None
         self._walk_page = None
         if self.mode != "step":
-            self.pointer.clear()
+            self.pointer.reset()
         self.voice.stop()
         if self._voice_job:
             self.after_cancel(self._voice_job)
@@ -511,9 +516,10 @@ class GuidePanel(tk.Frame):
 
     @staticmethod
     def _show_first(st):
-        """Targets of the first part of the screen a step names."""
+        """Targets of the first part of the screen a step names, framed only: the demonstrations (pressing, opening,
+        calculating) wait for the narration."""
         t = st["show"][0][1]
-        return [t] if isinstance(t, str) else list(t)
+        return [x for x in ([t] if isinstance(t, str) else t) if x.partition(":")[0] not in GP.Pointer.DEMOS]
 
     def _pages(self):
         """[(page, fields, workflow)] of the form for the tour and the review."""
@@ -644,7 +650,8 @@ class GuidePanel(tk.Frame):
             except tk.TclError:
                 pass
         self._unhilite()
-        self.pointer.clear()
+        if not self._quiet:                             # a view the narration opened keeps the step's changes
+            self.pointer.reset()
         hidden = False
         if st.get("path"):
             hidden = not self._hilite(st.get("page"), st["path"], crit=bool(st.get("critical")))
@@ -653,8 +660,10 @@ class GuidePanel(tk.Frame):
         self.step_hidden = hidden
         self._render_step(st, hidden)
         self._step_buttons()
-        if st.get("show") and not self._opening:        # read without the voice: frame the first part at once
-            self.after_idle(lambda: self.pointer.show(self._show_first(st)))
+        if st.get("show") and not self._opening and not self._quiet:
+            first = self._show_first(st)                # read without the voice: frame the first part at once
+            if first:
+                self.after_idle(lambda: self.pointer.show(first))
         self._draw_head()
         self._view_changed()
 
@@ -1026,7 +1035,7 @@ class GuidePanel(tk.Frame):
             self.after_cancel(self._typing_job)
             self._typing_job = None
         self._unhilite()
-        self.pointer.clear()
+        self.pointer.reset()
         self._save()
 
 

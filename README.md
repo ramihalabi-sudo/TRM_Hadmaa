@@ -24,7 +24,7 @@ python run_trm4.py --cli 0 --ttp                                       -> incl. 
 python run_trm4.py --cli 0 --quick                                     -> geometric quick estimate, no model run
 python run_trm4.py --sfr edge.png --out sfr.txt                        -> slanted-edge SFR of an edge image
 packaging\build_exe.bat                                                -> Windows EXE (dist\TRM_HADMAAv1\)
-packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.23.exe
+packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.24.exe
 python run_trm4.py --cli 4 --cn2-stats Arid:summer --overcast         -> ranges for the Cn2 statistics (Table C.2)
 python run_trm4.py --cli 4 --cn2-stats Arid:winter --overcast --neutral-day   -> the same, overcast / winter noon h^-2/3
 python run_trm4.py --r0-frames seq.npy --lam 0.55 --focal 500 --pitch 5 --aperture 100 --path-km 2 --out r0.txt
@@ -73,6 +73,18 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `python tools/version_report.py` writes the report `reports/version_history.html`. `tests/test_version.py` checks that
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
+
+## Version 2.24 - guide: it demonstrates what it explains
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Demonstrations | `guide_point.Pointer` targets that act while their sentence is said: `help:<path>` presses the field's "?" (its explanation bubble opens; `help:` = the first field of the open page), `card:<path>` opens the field card in the guide, `pick:<path>=<option>` posts the field's list and selects the option in it without choosing it (`ttk::combobox::Post`), `page:<name>`, `workflow:<mode>`, `show_advanced`, `calculate` (runs the model, so the result tabs shown next are filled). |
+| Undo | What a demonstration opens (bubble, list, card) is closed before the next sentence (`Pointer.clear`); what it changes for the step (workflow, page, *Show advanced*) is restored when the step ends (`Pointer.reset`, called by `show_step`, by any other view and on closing). No project value changes. A step shown without narration only frames its first part, without acting. |
+| Lessons | intro 2 switches Quick / Engineering / Lab, intro 3 opens a page, intro 5 opens the focal-length card and presses its "?" (a new sentence in the screen text, `guide_teach` and `guide_voice_en`), intro 6 and *first* 14 calculate; *System data* frames its tab; "Clicking the tag" frames the tag. |
+| Field cards | `guide_point.card_show`: every option a card names (by its label or its first word) opens the list at it - 68 sentences; Detector lookup, System data, Credit sharpening and Messages are framed when a card names them. The opening screen frames the "?", Calculate, Summary and the narrator's language / speed / auto-play controls (`HOME_SHOW`). |
+| Tests | `PointAtScreen`: the "?" bubble opens and closes, the card opens and the step comes back, the list opens at the option and closes with the value untouched, workflow / page / *Show advanced* restored after every step, a card sentence opens its option. |
 
 ## Version 2.23 - guide: where the calculated values really are
 

@@ -800,7 +800,8 @@ STEPS = {
     ("intro", "איך מקבלים הסבר על שדה"): ("How to get an explanation of a field", [
         "Now let's see how to get help while filling in the form. While the guide is open, clicking a field shows "
         "an explanation card here: what the field means, how it affects the result, and what can be learned from "
-        "the value you entered.",
+        "the value you entered. There is also a quicker way: the question mark next to every field shows a short "
+        "explanation of it, even when the guide is closed.",
         "To hear the explanation, click the play button at the top of the guide or press F9. The Explain page "
         "option reads the explanations of all the fields of the open page, one after another."]),
     ("intro", "ביצוע החישוב וקריאת התוצאות"): ("Calculating and reading the results", [

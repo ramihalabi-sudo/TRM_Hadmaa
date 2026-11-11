@@ -639,10 +639,18 @@ def show_actions(out, show, point):
     res = []
     for seg in out:
         if pending and isinstance(seg, tuple):
-            hit = [t for rx, t in pending if rx.search(seg[0])]
-            if hit:
-                pending = [(rx, t) for rx, t in pending if not rx.search(seg[0])]
-                targets = [x for t in hit for x in t]
+            found = sorted((m.start(), k) for k, (rx, _t) in enumerate(pending) for m in [rx.search(seg[0])] if m)
+            if found:
+                hit = [pending[k][1] for _pos, k in found]           # in the order the sentence says them
+                pending = [x for k, x in enumerate(pending) if k not in {k for _p, k in found}]
+                targets, lists = [], set()
+                for x in (x for t in hit for x in t):
+                    if x.startswith("pick:"):                        # one open list per field: the first option
+                        key = x.partition("=")[0]
+                        if key in lists:
+                            continue
+                        lists.add(key)
+                    targets.append(x)
                 res.append({"do": lambda ts=targets: point(ts)})
         res.append(seg)
     return res

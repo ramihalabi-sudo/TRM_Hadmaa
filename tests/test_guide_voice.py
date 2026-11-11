@@ -388,6 +388,23 @@ class PointAtScreen(unittest.TestCase):
         self.assertTrue(keyword_re(("עקומת הטווח",)).search("ועקומת הטווח מראה"))
 
     @unittest.skipIf(G is None, "no tkinter")
+    def test_card_opens_the_option_it_names(self):
+        try:
+            app = G.App()
+        except tk.TclError as e:
+            self.skipTest("no display: %s" % e)
+        try:
+            app.withdraw()
+            from trm4 import guide_point as GP
+            out = GV.show_actions(GV.field_script("he", "mode.environment", None, app.project, None, None),
+                                  GP.card_show(app, "mode.environment"), lambda ts: None)
+            picks = [(s["do"].__defaults__[0], out[j + 1][0]) for j, s in enumerate(out) if isinstance(s, dict)]
+            self.assertIn((["pick:mode.environment=Field performance"], "עכשיו, למה זה משנה? כי לחיזוי טווחי DRI "
+                                                                         "בוחרים Field."), picks)
+        finally:
+            app.destroy()
+
+    @unittest.skipIf(G is None, "no tkinter")
     def test_frames_in_the_window(self):
         try:
             app = G.App()
@@ -396,19 +413,58 @@ class PointAtScreen(unittest.TestCase):
         try:
             app.geometry("1500x900")
             app.update()
+            app.calculate = lambda: None                        # the demonstration presses Calculate: no model run
             app.toggle_guide(True)
             gp = app.guide
             missing = []
             for lid, i, st in show_steps():
                 gp.start(lid)
-                gp.show_step(next(k for k, s in enumerate(gp._steps()) if s["title"] == st["title"]))
+                k = next(k for k, s in enumerate(gp._steps()) if s["title"] == st["title"])
+                gp.show_step(k)
                 app.update()
+                wf, page, adv = app.workflow, app.current_page, app.show_adv.get()
                 for _words, targets in st["show"]:
                     for t in [targets] if isinstance(targets, str) else targets:
                         if gp.pointer.show([t]) < 1:
                             missing.append((lid, i + 1, t))
                         self.assertEqual(len(gp.pointer._frames), 4 * gp.pointer.shown)
+                gp.show_step(k)                                 # the step again: what was demonstrated is put back
+                app.update()
+                self.assertEqual((app.workflow, app.current_page, app.show_adv.get()), (wf, page, adv), (lid, i + 1))
             self.assertEqual(missing, [])
+
+            def tips():
+                out = []
+
+                def walk(w):
+                    for c in w.winfo_children():
+                        if isinstance(c, tk.Toplevel) and c.winfo_ismapped():
+                            out.append(c)
+                        walk(c)
+                walk(app)
+                return out
+            gp.start("intro")
+            gp.show_step(4)
+            gp.pointer.show(["help:optics.f_mm"])                # press the "?": its explanation opens
+            app.update()
+            self.assertEqual(len(tips()), 1)
+            gp.pointer.show(["card:optics.f_mm"])                # the next sentence closes it; the card opens
+            app.update()
+            self.assertEqual(tips(), [])
+            self.assertEqual((gp.mode, gp.field_path), ("field", "optics.f_mm"))
+            gp.pointer.show(["guide:play"])                      # and the step comes back
+            self.assertEqual(gp.mode, "step")
+            gp.show_field("mode.environment")
+            gp.pointer.show(["pick:mode.environment=Field performance"])  # the list opens at the option
+            w = gp.pointer._combo("mode.environment")
+            lb = "%s.f.l" % w.tk.call("ttk::combobox::PopdownWindow", w)
+            self.assertEqual(str(w.tk.call("winfo", "ismapped", w.tk.call("ttk::combobox::PopdownWindow", w))), "1")
+            self.assertEqual(w.cget("values")[int(w.tk.call(lb, "curselection")[0])], "Field performance")
+            before = w.get()
+            gp.pointer.clear()                                   # closed again, the value untouched
+            app.update()
+            self.assertEqual(str(w.tk.call("winfo", "ismapped", w.tk.call("ttk::combobox::PopdownWindow", w))), "0")
+            self.assertEqual(w.get(), before)
             gp.show_step(0)
             self.assertEqual(gp.pointer.shown, 0, "a new step clears the frames of the last one")
             gp.pointer.show(["tool:Calculate"])

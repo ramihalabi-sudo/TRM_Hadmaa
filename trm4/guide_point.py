@@ -37,6 +37,39 @@ def keyword_re(words):
     return re.compile(r"(?<![\w])[ובלמהשכ]{0,2}(?:%s)(?![\w])" % alts)
 
 
+# The opening screen of the guide: what its lesson previews name.
+HOME_SHOW = [(("סימן השאלה", "question mark"), "help:"), (("Calculate", "F5"), "tool:Calculate"),
+             ("Summary", "tab:Summary"), (("בין עברית לאנגלית", "Hebrew and English"), ["guide:lang", "guide:rate", "guide:auto"])]
+
+# Parts of the screen named inside the field cards (any field): framed when the card's sentence says them.
+CARD_SHOW = [("Detector lookup", "tool:Detector lookup"), ("System data", "tab:System data"),
+             ("Credit sharpening", "field:dsp.credit_boost"), ("Messages", "tab:Messages")]
+
+_GENERIC = {"None", "Other", "Custom", "Yes", "No", "On", "Off", "User", "Default"}
+
+
+def option_show(app, path):
+    """For a field with a list: the options its card names ("תבחרו Measured"), each opening the list at that
+    option while its sentence is said.  An option is named by its whole label or by its first word."""
+    out = []
+    for _f, _var, w in app.vars.get(path, []):
+        if not isinstance(w, ttk.Combobox):
+            continue
+        for label in [str(v) for v in w.cget("values")]:
+            first = re.split(r"[\s(:/,-]+", label.strip())[0]
+            words = {label}
+            if len(first) >= 3 and first not in _GENERIC and re.match(r"[A-Za-z0-9]", first):
+                words.add(first)
+            out.append((tuple(sorted(words, key=len, reverse=True)), "pick:%s=%s" % (path, label)))
+        break
+    return out
+
+
+def card_show(app, path):
+    """Everything a field card can demonstrate: its own options, and the parts of the screen it names."""
+    return option_show(app, path) + [s for s in CARD_SHOW if s[1] != "field:" + path]
+
+
 def _walk(w):
     yield w
     for c in w.winfo_children():
@@ -92,6 +125,9 @@ class Pointer:
         self.app, self.panel = app, panel
         self._frames = []
         self._job = None
+        self._undo = []            # what a demonstration opened, closed before the next one (a tip, a list, a card)
+        self._keep = {}            # what a demonstration changed for the whole step (workflow, advanced), restored
+        #                            when the step ends
 
     # ---- finding the parts
     def _find_text(self, root, cls, text):
@@ -104,13 +140,131 @@ class Pointer:
                     pass
         return None
 
+    # ---- demonstrations: the guide does what it explains, and undoes it
+    def _row_widgets(self, path):
+        p = self.panel
+        page = p._page_of(path) or self.app.current_page
+        if page and page != self.app.current_page:
+            self.app.goto_page(page)
+        if not p._hilite(page, path):
+            return None
+        return p._row(page, path)
+
+    def _combo(self, path):
+        for _f, _var, w in self.app.vars.get(path, []):
+            if isinstance(w, ttk.Combobox) and _mapped(w):
+                return w
+        return None
+
+    def _demo(self, kind, arg):
+        """Perform a demonstration; returns the widget to frame (or None)."""
+        app, p = self.app, self.panel
+        if kind == "help":                                  # press the "?" of a field: its explanation opens
+            if not arg:                                     # no field named: the first one of the open page
+                inner = getattr(app.pages.get(app.current_page), "inner", None)
+                arg = next((f["path"] for f, ws, _v, _g in app.rows if f.get("path") and ws and inner is not None
+                            and str(ws[0]).startswith(str(inner) + ".") and _mapped(ws[0])
+                            and any(isinstance(w, tk.Label) and str(w.cget("text")) == "?" for w in ws)), None)
+                if arg is None:
+                    return None
+            row = self._row_widgets(arg) or []
+            q = next((w for w in row if isinstance(w, tk.Label) and str(w.cget("text")) == "?"), None)
+            if q is None:
+                return None
+            app.update_idletasks()
+            q.event_generate("<ButtonPress-1>")
+            self._undo.append(lambda: q.event_generate("<Leave>"))
+            return q
+        if kind == "card":                                  # click a field: its card opens in the guide
+            row = self._row_widgets(arg)
+            if not row:
+                return None
+            back = p.index
+            p._quiet = True
+            try:
+                p.show_field(arg)
+            finally:
+                p._quiet = False
+
+            def undo():
+                if p.mode == "field" and p.field_path == arg and p.lesson_id:
+                    p._quiet = True
+                    try:
+                        p.show_step(back)
+                    finally:
+                        p._quiet = False
+            self._undo.append(undo)
+            return row[0]
+        if kind == "pick":                                  # open the list of a field and point at an option
+            path, _, label = arg.partition("=")
+            self._row_widgets(path)
+            w = self._combo(path)
+            if w is None:
+                return None
+            values = [str(v) for v in w.cget("values")]
+            i = next((k for k, v in enumerate(values) if v == label), None)
+            if i is None:
+                return w
+            try:
+                self.panel._own_focus = path                # the guide's move, not the user choosing a field
+                w.focus_set()
+                w.tk.call("ttk::combobox::Post", w)
+                lb = "%s.f.l" % w.tk.call("ttk::combobox::PopdownWindow", w)
+                w.tk.call(lb, "selection", "clear", 0, "end")
+                w.tk.call(lb, "selection", "set", i)
+                w.tk.call(lb, "activate", i)
+                w.tk.call(lb, "see", i)
+            except tk.TclError:
+                return w
+            self._undo.append(lambda: w.tk.call("ttk::combobox::Unpost", w))
+            return w
+        if kind == "workflow":                              # switch the working mode (back at the end of the step)
+            if arg not in app.wf_buttons:
+                return None
+            if "workflow" not in self._keep:
+                orig, page = app.workflow, app.current_page
+                self._keep["workflow"] = lambda: (app.set_workflow(orig), app.goto_page(page))
+            app.set_workflow(arg)
+            app.update_idletasks()
+            return app.wf_buttons[arg]
+        if kind == "page":                                  # open a page of the form (back at the end of the step)
+            if "page" not in self._keep:
+                orig = app.current_page
+                self._keep["page"] = lambda: app.goto_page(orig)
+            app.goto_page(arg)
+            app.update_idletasks()
+            return app.side_items.get(arg)
+        if kind == "show_advanced":                         # tick "Show advanced parameters" (back at the end)
+            if not app.show_adv.get() and "advanced" not in self._keep:
+                app.show_adv.set(True)
+                app._toggle_adv()
+                self._keep["advanced"] = lambda: (app.show_adv.set(False), app._toggle_adv())
+            app.update_idletasks()
+            return app.adv_check
+        if kind == "calculate":                             # run the model, as the Calculate button does
+            btn = getattr(app, "calc_btn", None) or self._tool("Calculate")   # its label changes while it runs
+            app.calculate()
+            return btn
+        return None
+
+    def _tool(self, text):
+        for c in _walk(self.app):
+            lab = getattr(c, "label", None)
+            if getattr(c, "parts", None) is not None and lab is not None and lab.cget("text") == text:
+                return c
+        return None
+
+    DEMOS = ("help", "card", "pick", "page", "workflow", "show_advanced", "calculate")
+
     def boxes(self, target):
         """Root boxes of a target (opening the tab or mode it is in); [] when it is not on the screen."""
         app, p = self.app, self.panel
         kind, _, arg = target.partition(":")
         w = None
         try:
-            if kind == "wf":
+            if kind in self.DEMOS:
+                w = self._demo(kind, arg)
+            elif kind == "wf":
                 w = app.wf_buttons.get(arg) if arg else next(iter(app.wf_buttons.values())).master
             elif kind == "pages":
                 w = app.side_list
@@ -137,11 +291,7 @@ class Pointer:
             elif kind == "field":
                 return [] if not p._hilite(p._page_of(arg) or app.current_page, arg) else [_box(p.hilited)]
             elif kind == "tool":
-                for c in _walk(app):
-                    lab = getattr(c, "label", None)
-                    if getattr(c, "parts", None) is not None and lab is not None and lab.cget("text") == arg:
-                        w = c
-                        break
+                w = self._tool(arg)
             elif kind == "tabs":
                 b = _tab_box(app.right)
                 return [b] if b else []
@@ -215,7 +365,22 @@ class Pointer:
         if n > 0:
             self._job = self.app.after(BLINK_MS, lambda: self._blink(n - 1))
 
+    def _run(self, fns):
+        for fn in fns:
+            try:
+                fn()
+            except (tk.TclError, AttributeError):
+                pass
+
+    def reset(self):
+        """The step ends: clear the frames and put back everything the demonstrations changed."""
+        self.clear()
+        keep, self._keep = list(self._keep.values()), {}
+        self._run(reversed(keep))
+
     def clear(self):
+        undo, self._undo = self._undo, []
+        self._run(reversed(undo))
         if self._job:
             try:
                 self.app.after_cancel(self._job)
