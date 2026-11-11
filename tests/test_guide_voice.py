@@ -388,6 +388,41 @@ class PointAtScreen(unittest.TestCase):
         self.assertTrue(keyword_re(("עקומת הטווח",)).search("ועקומת הטווח מראה"))
 
     @unittest.skipIf(G is None, "no tkinter")
+    def test_menus_walk_and_come_back(self):
+        """Every menu a lesson opens exists; the walk is the keys a person presses (separators skipped); choosing a
+        template loads it and the user's project comes back when the step ends."""
+        try:
+            app = G.App()
+        except tk.TclError as e:
+            self.skipTest("no display: %s" % e)
+        try:
+            app.withdraw()
+            from trm4 import guide_point as GP
+            down, right = 0x28, 0x27
+            self.assertEqual(GP.MenuWalk(app, ["File", "New from template",
+                                               "Thermal - LWIR uncooled microbolometer 640x480"]).keys(),
+                             [down, right, down, down, down])
+            self.assertEqual(GP.MenuWalk(app, ["Run", "Limiting factors"]).keys(), [down] * 3)
+            self.assertIsNone(GP.MenuWalk(app, ["File", "No such item"]).keys())
+            for _lid, _i, st in show_steps():
+                for _w, t in st["show"]:
+                    for x in [t] if isinstance(t, str) else t:
+                        kind, _, arg = x.partition(":")
+                        if kind in ("menu", "menudo"):
+                            self.assertIsNotNone(GP.MenuWalk(app, arg.split(">")).keys(), x)
+            app.toggle_guide(True)
+            gp = app.guide
+            before = app._state_of(app.collect())
+            load = gp.pointer._menu_action(["File", "New from template", "Visible - CMOS daylight camera 1920x1080"])
+            load()
+            self.assertEqual(app.project["category"], "Visible")
+            load()                                               # twice: the first project is the one kept
+            gp.pointer.reset()
+            self.assertEqual(app._state_of(app.collect()), before)
+        finally:
+            app.destroy()
+
+    @unittest.skipIf(G is None, "no tkinter")
     def test_card_opens_the_option_it_names(self):
         try:
             app = G.App()
@@ -411,9 +446,13 @@ class PointAtScreen(unittest.TestCase):
         except tk.TclError as e:
             self.skipTest("no display: %s" % e)
         try:
+            from trm4 import guide_point as GP
             app.geometry("1500x900")
             app.update()
             app.calculate = lambda: None                        # the demonstration presses Calculate: no model run
+            app._source_menu = lambda *a: None                  # a real menu runs its own loop: not in a test
+            start, GP.MenuWalk.start = GP.MenuWalk.start, lambda self: self.keys() is not None
+            self.addCleanup(setattr, GP.MenuWalk, "start", start)
             app.toggle_guide(True)
             gp = app.guide
             missing = []

@@ -24,7 +24,7 @@ python run_trm4.py --cli 0 --ttp                                       -> incl. 
 python run_trm4.py --cli 0 --quick                                     -> geometric quick estimate, no model run
 python run_trm4.py --sfr edge.png --out sfr.txt                        -> slanted-edge SFR of an edge image
 packaging\build_exe.bat                                                -> Windows EXE (dist\TRM_HADMAAv1\)
-packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.24.exe
+packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.25.exe
 python run_trm4.py --cli 4 --cn2-stats Arid:summer --overcast         -> ranges for the Cn2 statistics (Table C.2)
 python run_trm4.py --cli 4 --cn2-stats Arid:winter --overcast --neutral-day   -> the same, overcast / winter noon h^-2/3
 python run_trm4.py --r0-frames seq.npy --lam 0.55 --focal 500 --pitch 5 --aperture 100 --path-km 2 --out r0.txt
@@ -73,6 +73,18 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `python tools/version_report.py` writes the report `reports/version_history.html`. `tests/test_version.py` checks that
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
+
+## Version 2.25 - guide: a lecturer that opens the real menus
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Menus | `guide_point.MenuWalk`: `menu:<Top>><Item>[><Sub>]` opens the real menu-bar menu (Windows: `WM_SYSCOMMAND` / `SC_KEYMENU` with the menu's letter) and walks the highlight down to the item with arrow keys, separators skipped, opening a sub-menu with the right arrow, one key every 330 ms. A key is sent only while this window's own menu is open (`GetGUIThreadInfo`: `GUI_INMENUMODE` and the menu owner), never Enter; `EndMenu` closes it at the next sentence. Tk serves its timers inside the Windows menu loop, so the narration goes on. |
+| Doing the item | `menudo:` also does the item: *File > New from template > X* is loaded by the guide (`_load_into_form`, no "save changes?" question) and the user's project, file name and saved state come back when the step ends; other items are invoked as the menu invokes them (analysis modes, *Limiting factors*), and any project change they make (the uncertainty defaults) is put back too. Items that open a file dialog are only shown. When the next sentence comes first, the menu is closed and the item done at once (`MenuWalk.finish`). |
+| Tag menu | `badgemenu:<path>` opens the data-source menu of a field's tag, after the action returns (the menu runs its own loop), closed at the next sentence. |
+| Lessons | *first* "choose a template" (File > New from template, loaded), "save" (File > Save, File > Open project), *results* "what limits" (Run > Limiting factors, run), *improve* (Run > Improve performance; Run > Parameter sweep / Uncertainty study / Scenario comparison, opened; File > Export report / Export Hebrew DRI report / Save), intro "the tag" (its menu); field cards: Run > Detector lookup. |
+| Tests | `PointAtScreen.test_menus_walk_and_come_back`: every menu path of the lessons exists, the walk keys, a template loaded and the project restored. Checked in the real window with its event loop: 9 steps, project / workflow / page / file identical before and after each. |
 
 ## Version 2.24 - guide: it demonstrates what it explains
 

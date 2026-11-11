@@ -721,7 +721,7 @@ LESSONS = [
             LI("ערך preset אינו בהכרח מייצג את המערכת שלכם: עדכנו את הפרמטרים המשפיעים ביותר על הטווח, ככל שיש בידיכם "
                "נתונים אמינים יותר."),
             workflow="engineering", page="Optics",
-            show=[(("התג", "tag"), "badge:optics.f_mm"), (("לחיצה על התג", "Clicking the tag"), "badge:optics.f_mm")]),
+            show=[(("התג", "tag"), "badge:optics.f_mm"), (("לחיצה על התג", "Clicking the tag"), "badgemenu:optics.f_mm")]),
          _s("איך מקבלים הסבר על שדה",
             P_("כשהמדריך פתוח, לחיצה על שדה בטופס מציגה כאן כרטיס הסבר: מה משמעות השדה, כיצד הוא משפיע על התוצאה, "
                "ערכים טיפוסיים, בדיקה של הערך שהזנתם וחישוב חי של ההשפעה."),
@@ -767,7 +767,7 @@ LESSONS = [
             LI("Visible CMOS - מצלמת יום; Visible/SWIR InGaAs - מצלמת לילה."),
             ("box", "info", ["יש לכם פרופיל מצלמה שמור? בחרו אותו בראש העמוד Quick setup."]),
             workflow="quick", page="Quick setup",
-            show=[("New", "tool:New")]),
+            show=[("New", "menudo:File>New from template>Thermal - LWIR uncooled microbolometer 640x480")]),
          _s("קטגוריית החיישן", workflow="quick", page="Quick setup", path="category"),
          _s("סוג הגלאי", workflow="quick", page="Quick setup", path="imager_type", cond=_thermal),
          _s("אורך המוקד", workflow="quick", page="Quick setup", path="optics.f_mm"),
@@ -816,7 +816,7 @@ LESSONS = [
                "שוב."),
             ("box", "ok", ["סיימתם את השיעור", "בשיעור הבא נלמד מה אומרת התוצאה ומה מגביל אותה."], True),
             workflow="quick", tab="Summary",
-            show=[("Save", "tool:Save"), ("Open", "tool:Open")]),
+            show=[("Save", ["menu:File>Save", "tool:Save"]), ("Open", ["menu:File>Open project...", "tool:Open"])]),
      ]},
     {"id": "results", "title": "מה אומרת התוצאה ומה מגביל אותה", "short": "מה אומרת התוצאה", "minutes": 4,
      "group": "מתחילים",
@@ -839,7 +839,8 @@ LESSONS = [
             ("box", "ok", ["סיימתם את השיעור", "בשיעור הבא נזין את המערכת שלכם, כל הפרמטרים, עם הדגשה של "
                            "הקריטיים לטווח."], True),
             workflow="engineering", tab="Sensitivity",
-            show=[("Limiting factors", ["sens:limiting", "sensbtn:Run analysis"])]),
+            show=[("Limiting factors", "menudo:Run>Limiting factors"),
+                  (("צוואר הבקבוק", "bottleneck"), "sens:limiting")]),
      ]},
     {"id": "engineering", "title": "הזנת המערכת שלכם: כל הפרמטרים, והקריטיים מודגשים", "short": "הזנת המערכת",
      "minutes": 25, "group": "מתחילים", "dynamic": True,
@@ -855,15 +856,17 @@ LESSONS = [
             LI("היועץ מייעץ בלבד - הוא לא משנה את הפרויקט."),
             LI("'Measure first' מסמן פרמטרים שכדאי למדוד לפני שמשקיעים בחומרה."),
             workflow="engineering", tab="Sensitivity",
-            show=[("Improve performance", ["sens:advisor", "sensbtn:Run analysis"])]),
+            show=[("Improve performance", "menu:Run>Improve performance (advisor)"),
+                  (("רק מייעץ", "only advises"), ["sens:advisor", "sensbtn:Run analysis"]),
+                  ("Measure first", "sens:advisor")]),
          _s("סריקת פרמטר ואי-ודאות",
             LI("Parameter sweep: איך פרמטר אחד משנה את הטווח - עקומה וטבלה."),
             LI("Uncertainty study: טווח עם אי-ודאות (RSS או Monte Carlo). הזינו ± לפרמטרים הלא-ודאיים: "
                "ΔT, σ וקריטריון המשימה."),
             LI("Scenario comparison: כמה תרחישים זה לצד זה."),
             workflow="engineering", tab="Sensitivity",
-            show=[("Parameter sweep", "sens:sweep"), ("Uncertainty", "sens:uncertainty"),
-                  (("Scenario comparison", "Scenarios"), "sens:scenarios")]),
+            show=[("Parameter sweep", "menudo:Run>Parameter sweep..."), ("Uncertainty", "menudo:Run>Uncertainty study..."),
+                  (("Scenario comparison", "Scenarios"), "menudo:Run>Scenario comparison...")]),
          _s("דוח ושמירה",
             LI("File > Export Hebrew DRI report (PDF) - דוח מלא בעברית."),
             LI("File > Export report - דוח טקסט עם כל ההנחות."),
@@ -871,8 +874,8 @@ LESSONS = [
             ("box", "ok", ["סיימתם!", "אפשר לפתוח את המדריך שוב בכל עת מ-Help > Interactive guide, או "
                            "להשאיר אותו פתוח: בלחיצה על שדה מוצג כרטיס הסבר שלו."], True),
             workflow="engineering", tab="Summary",
-            show=[("Export Hebrew DRI report", "sensbtn:Hebrew PDF report..."), ("Export report", "tool:Report"),
-                  ("Save", "tool:Save")]),
+            show=[("Export Hebrew DRI report", "menu:File>Export Hebrew DRI report (PDF)..."),
+                  ("Export report", ["menu:File>Export report...", "tool:Report"]), ("Save", ["menu:File>Save", "tool:Save"])]),
      ]},
 ]
 

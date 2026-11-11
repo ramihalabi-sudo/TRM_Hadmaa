@@ -18,9 +18,13 @@ Targets (strings):
     guide:<play|walk>                   the play button / "Explain page" of the narrator strip
     gbtn:<text>                         a button at the foot of the guide panel ("חשב עכשיו")
 """
+import copy
 import re
+import sys
 import tkinter as tk
 from tkinter import ttk
+
+from . import presets as P
 
 COLOR = "#ff7a1a"
 DIM = "#ffc59a"
@@ -42,7 +46,7 @@ HOME_SHOW = [(("סימן השאלה", "question mark"), "help:"), (("Calculate",
              ("Summary", "tab:Summary"), (("בין עברית לאנגלית", "Hebrew and English"), ["guide:lang", "guide:rate", "guide:auto"])]
 
 # Parts of the screen named inside the field cards (any field): framed when the card's sentence says them.
-CARD_SHOW = [("Detector lookup", "tool:Detector lookup"), ("System data", "tab:System data"),
+CARD_SHOW = [("Detector lookup", ["menu:Run>Detector lookup...", "tool:Detector lookup"]), ("System data", "tab:System data"),
              ("Credit sharpening", "field:dsp.credit_boost"), ("Messages", "tab:Messages")]
 
 _GENERIC = {"None", "Other", "Custom", "Yes", "No", "On", "Off", "User", "Default"}
@@ -68,6 +72,130 @@ def option_show(app, path):
 def card_show(app, path):
     """Everything a field card can demonstrate: its own options, and the parts of the screen it names."""
     return option_show(app, path) + [s for s in CARD_SHOW if s[1] != "field:" + path]
+
+
+class MenuWalk:
+    """Open a real menu of the window's menu bar, the way a person does (Windows): the menu drops down, the
+    highlight walks down to the item, a sub-menu opens and the highlight walks on.  The keys are pressed only while
+    this window's own menu is open (GetGUIThreadInfo), never Enter: when the step asks for it, the guide closes
+    the menu and does the item itself (`run`).  The narration keeps running while the menu is open (Tk serves its
+    timers in the Windows menu loop)."""
+
+    STEP_MS = 330
+    HOLD_MS = 1300
+
+    def __init__(self, app, path, run=None):
+        self.app, self.path, self.run = app, path, run
+        self._jobs = []
+        self.ok = sys.platform == "win32"
+
+    # ---- Windows
+    @staticmethod
+    def _u32():
+        import ctypes
+        return ctypes.windll.user32
+
+    def _hwnd(self):
+        return int(self.app.wm_frame(), 16)
+
+    def in_menu(self):
+        if not self.ok:
+            return False
+        import ctypes
+        from ctypes import wintypes
+
+        class GUITHREADINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("flags", wintypes.DWORD), ("hwndActive", wintypes.HWND),
+                        ("hwndFocus", wintypes.HWND), ("hwndCapture", wintypes.HWND),
+                        ("hwndMenuOwner", wintypes.HWND), ("hwndMoveSize", wintypes.HWND),
+                        ("hwndCaret", wintypes.HWND), ("rcCaret", wintypes.RECT)]
+        u = self._u32()
+        tid = u.GetWindowThreadProcessId(self._hwnd(), None)
+        gi = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+        if not u.GetGUIThreadInfo(tid, ctypes.byref(gi)):
+            return False
+        return bool(gi.flags & 0x4) and gi.hwndMenuOwner == self._hwnd()      # GUI_INMENUMODE, our window
+
+    def _key(self, vk):
+        if not self.in_menu():                      # the menu is gone (or never ours): press nothing
+            self.cancel()
+            return
+        u = self._u32()
+        u.keybd_event(vk, 0, 0, 0)
+        u.keybd_event(vk, 0, 2, 0)
+
+    # ---- the walk
+    def keys(self):
+        """[(vk)] that walk from the first item of the dropped-down menu to the last item of the path."""
+        bar = self.app.nametowidget(self.app["menu"])
+        menu, keys = bar, []
+        for depth, label in enumerate(self.path):
+            idx = self._index(menu, label)
+            if idx is None:
+                return None
+            if depth == 0:
+                menu = self.app.nametowidget(menu.entrycget(idx, "menu"))
+                continue
+            steps = sum(1 for i in range(idx) if menu.type(i) != "separator")
+            keys += [0x28] * steps                                  # down
+            if depth < len(self.path) - 1:
+                keys.append(0x27)                                   # right: open the sub-menu
+                menu = self.app.nametowidget(menu.entrycget(idx, "menu"))
+        self.menu, self.index = menu, idx
+        return keys
+
+    @staticmethod
+    def _index(menu, label):
+        end = menu.index("end")
+        for i in range(0 if end is None else end + 1):
+            if menu.type(i) in ("command", "cascade", "checkbutton", "radiobutton") and \
+                    str(menu.entrycget(i, "label")) == label:
+                return i
+        return None
+
+    def start(self):
+        keys = self.keys()
+        if not self.ok or keys is None:
+            return False
+        u = self._u32()
+        u.SetForegroundWindow(self._hwnd())
+        u.PostMessageW(self._hwnd(), 0x0112, 0xF100, ord(self.path[0][0].lower()))   # WM_SYSCOMMAND, SC_KEYMENU
+        t = 350
+        for vk in keys:
+            t += self.STEP_MS
+            self._jobs.append(self.app.after(t, lambda vk=vk: self._key(vk)))
+        if self.run is not None:
+            self._jobs.append(self.app.after(t + self.HOLD_MS, self._choose))
+        return True
+
+    def _choose(self):
+        run, self.run = self.run, None
+        self.close()
+        if run is not None:
+            try:
+                run()
+            except Exception:                       # a demonstration never breaks the guide
+                pass
+
+    def finish(self):
+        """The next sentence: close the menu, and when the item was to be chosen and is not yet, choose it now."""
+        if self.run is not None:
+            self._choose()
+        else:
+            self.close()
+
+    def cancel(self):
+        for j in self._jobs:
+            try:
+                self.app.after_cancel(j)
+            except tk.TclError:
+                pass
+        self._jobs = []
+
+    def close(self):
+        self.cancel()
+        if self.ok:
+            self._u32().EndMenu()                   # closes only this thread's menus
 
 
 def _walk(w):
@@ -125,6 +253,7 @@ class Pointer:
         self.app, self.panel = app, panel
         self._frames = []
         self._job = None
+        self._acted = 0            # demonstrations with nothing to frame (an open menu)
         self._undo = []            # what a demonstration opened, closed before the next one (a tip, a list, a card)
         self._keep = {}            # what a demonstration changed for the whole step (workflow, advanced), restored
         #                            when the step ends
@@ -241,11 +370,68 @@ class Pointer:
                 self._keep["advanced"] = lambda: (app.show_adv.set(False), app._toggle_adv())
             app.update_idletasks()
             return app.adv_check
+        if kind in ("menu", "menudo"):                     # open a real menu and walk to the item (menudo: do it)
+            path = arg.split(">")
+            run = self._menu_action(path) if kind == "menudo" else None
+            walk = MenuWalk(app, path, run)
+            if not walk.start():
+                return None
+            self._undo.append(walk.finish)
+            self._acted += 1
+            return None
+        if kind == "badgemenu":                             # click a source tag: its menu of sources opens
+            b = next((x for x in app.badges.get(arg, []) if _mapped(x)), None)
+            if b is None:
+                return None
+            # the menu runs its own loop (Windows): open it after this action returns, close it at the next sentence
+            app.after(60, lambda: app._source_menu(arg, b))
+            self._undo.append(lambda: MenuWalk(app, []).close())
+            return b
         if kind == "calculate":                             # run the model, as the Calculate button does
             btn = getattr(app, "calc_btn", None) or self._tool("Calculate")   # its label changes while it runs
             app.calculate()
             return btn
         return None
+
+    def _menu_action(self, path):
+        """What choosing a menu item does, done by the guide: a template is loaded without the "save changes?"
+        question, and the project the user had comes back when the step ends; other items run as the menu runs
+        them."""
+        app = self.app
+        if path[:2] == ["File", "New from template"] and len(path) == 3:
+            def load():
+                if "project" not in self._keep:
+                    snap = copy.deepcopy(app.collect())
+                    fp, saved = app.file_path, app.saved_state
+
+                    def back():
+                        app._load_into_form(snap, saved=False)
+                        app.file_path, app.saved_state = fp, saved
+                        app._set_dirty(app._state_of(app.project) != saved)
+                        app._clear_results()
+                    self._keep["project"] = back
+                app.file_path = None
+                app._load_into_form(P.make_template(path[2]))
+                app._clear_results()
+                app.status.set("New project from template: %s  (guide demonstration - your project comes back)"
+                               % path[2])
+            return load
+        walk = MenuWalk(app, path)
+        if walk.keys() is None:
+            return None
+
+        def do():
+            if "project" not in self._keep:          # an analysis mode may store its defaults in the project
+                snap, saved = copy.deepcopy(app.project), app.saved_state
+
+                def back():
+                    if app._state_of(app.project) != app._state_of(snap):
+                        app._load_into_form(snap, saved=False)
+                        app.saved_state = saved
+                        app._set_dirty(app._state_of(app.project) != saved)
+                self._keep["project"] = back
+            walk.menu.invoke(walk.index)
+        return do
 
     def _tool(self, text):
         for c in _walk(self.app):
@@ -254,7 +440,8 @@ class Pointer:
                 return c
         return None
 
-    DEMOS = ("help", "card", "pick", "page", "workflow", "show_advanced", "calculate")
+    DEMOS = ("help", "card", "pick", "page", "workflow", "show_advanced", "calculate", "menu", "menudo",
+             "badgemenu")
 
     def boxes(self, target):
         """Root boxes of a target (opening the tab or mode it is in); [] when it is not on the screen."""
@@ -336,6 +523,7 @@ class Pointer:
     def show(self, targets):
         """Frame every target that is on the screen; returns how many were framed."""
         self.clear()
+        self._acted = 0
         boxes = []
         for t in targets:
             boxes += self.boxes(t)
@@ -351,7 +539,7 @@ class Pointer:
                 self._frames.append(f)
         if self._frames:
             self._blink(BLINKS)
-        return len(boxes)
+        return len(boxes) + self._acted
 
     def _blink(self, n):
         self._job = None
