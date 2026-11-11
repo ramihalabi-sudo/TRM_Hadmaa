@@ -708,10 +708,11 @@ LESSONS = [
                "בנושא אחר: אופטיקה, גלאי, מטרה, אטמוספרה ועוד."),
             LI("שדות שאינם רלוונטיים להגדרות שבחרתם (למשל הארה במצלמה תרמית) מוסתרים."),
             LI("'Show advanced parameters' בתחתית סרגל הצד מציג גם את השדות המתקדמים."),
-            LI("בתחתית כל עמוד מופיעים ערכים שהתוכנה מחשבת באופן אוטומטי (IFOV, שדה הראייה ועוד), לקריאה בלבד."),
+            LI("בתחתית העמודים Camera profile ו-Quick setup מופיעים ערכים שהתוכנה מחשבת באופן אוטומטי (IFOV, שדה "
+               "הראייה ועוד), לקריאה בלבד."),
             workflow="engineering", page="Optics",
             show=[(("PARAMETERS", "Parameters"), "pages"), (("בחירה באחד", "Choosing one"), "field:optics.f_mm"),
-                  (("מסתירה שדות", "hides fields"), "advanced"), (("בתחתית כל עמוד", "At the bottom"), "derived")]),
+                  (("מסתירה שדות", "hides fields"), "advanced"), (("ערכים שהתוכנה מחשבת", "calculates automatically"), "derived")]),
          _s("מקור הנתונים בכל שדה",
             P_("ליד כל שדה יש תג קטן שמציין את מקור הנתון. לחיצה עליו משנה את הסיווג."),
             LI("preset - ערך ברירת מחדל. datasheet - נתון ממפרט היצרן. measured - ערך שנמדד. assumed - ערך שהונח "

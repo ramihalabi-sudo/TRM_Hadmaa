@@ -117,13 +117,20 @@ class Pointer:
             elif kind == "advanced":
                 w = app.adv_check
             elif kind == "derived":
-                page = app.pages.get(app.current_page)
-                inner = page.inner if page is not None else None
-                for dp in getattr(app, "derived_panels", []):
-                    if inner is not None and str(dp).startswith(str(inner) + ".") and _mapped(dp):
-                        w = dp
-                        page.canvas.yview_moveto(1.0)
+                # only Quick setup and Camera profile carry the panel: go to the one of the workflow when needed
+                for name in (app.current_page, "Quick setup" if app.workflow == "quick" else "Camera profile"):
+                    if name != app.current_page:
+                        app.goto_page(name)
                         app.update_idletasks()
+                    page = app.pages.get(app.current_page)
+                    inner = page.inner if page is not None else None
+                    for dp in getattr(app, "derived_panels", []):
+                        if inner is not None and str(dp).startswith(str(inner) + ".") and _mapped(dp):
+                            w = dp
+                            page.canvas.yview_moveto(1.0)
+                            app.update_idletasks()
+                            break
+                    if w is not None:
                         break
             elif kind == "badge":
                 w = next((b for b in app.badges.get(arg, []) if _mapped(b)), None)

@@ -786,9 +786,9 @@ STEPS = {
         "list of pages. Choosing one shows the fields that belong to it. Each page covers a different topic, such "
         "as optics, detector, target or atmosphere.",
         "The program hides fields that do not apply to the settings you chose. For example, when you choose a "
-        "thermal camera, fields related to illumination are not shown. At the bottom of each page there are also "
-        "values the program calculates automatically, such as the angle seen by one pixel, the IFOV, and the field "
-        "of view."]),
+        "thermal camera, fields related to illumination are not shown. At the bottom of the Camera profile page, "
+        "and of the Quick setup page, there are values the program calculates automatically, such as the angle "
+        "seen by one pixel, the IFOV, and the field of view."]),
     ("intro", "מקור הנתונים בכל שדה"): ("The data source of each field", [
         "Before we change a value, let's look at the small tag next to each field. The tag shows where the value "
         "comes from: preset, a default value; datasheet, a value from the manufacturer's specification; measured, "

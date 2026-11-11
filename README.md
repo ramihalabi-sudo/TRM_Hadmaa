@@ -24,7 +24,7 @@ python run_trm4.py --cli 0 --ttp                                       -> incl. 
 python run_trm4.py --cli 0 --quick                                     -> geometric quick estimate, no model run
 python run_trm4.py --sfr edge.png --out sfr.txt                        -> slanted-edge SFR of an edge image
 packaging\build_exe.bat                                                -> Windows EXE (dist\TRM_HADMAAv1\)
-packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.22.exe
+packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.23.exe
 python run_trm4.py --cli 4 --cn2-stats Arid:summer --overcast         -> ranges for the Cn2 statistics (Table C.2)
 python run_trm4.py --cli 4 --cn2-stats Arid:winter --overcast --neutral-day   -> the same, overcast / winter noon h^-2/3
 python run_trm4.py --r0-frames seq.npy --lam 0.55 --focal 500 --pitch 5 --aperture 100 --path-km 2 --out r0.txt
@@ -73,6 +73,16 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `python tools/version_report.py` writes the report `reports/version_history.html`. `tests/test_version.py` checks that
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
+
+## Version 2.23 - guide: where the calculated values really are
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Text | Lesson *intro*, step 3 said the calculated values are at the bottom of every page; the `D()` panel exists on *Camera profile* and *Quick setup* only. The screen text (`guide_he`), the Hebrew narration (`guide_teach.HE_STEPS`) and the English one (`guide_voice_en.STEPS`, re-stamped) now name those pages. |
+| Pointer | The `derived` target goes to *Camera profile* (*Quick setup* in the Quick workflow) when the open page has no panel, scrolls to it and frames it; `PointAtScreen.test_frames_in_the_window` now checks it too. |
+| Recordings | The English sentence is recorded; the Hebrew one waits for the next Gemini run (the live Windows voice says it until then). |
 
 ## Version 2.22 - guide: it frames on the screen what it talks about
 

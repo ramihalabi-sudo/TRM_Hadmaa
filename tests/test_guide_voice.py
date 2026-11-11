@@ -405,8 +405,6 @@ class PointAtScreen(unittest.TestCase):
                 app.update()
                 for _words, targets in st["show"]:
                     for t in [targets] if isinstance(targets, str) else targets:
-                        if t == "derived":                      # only Quick setup and Camera profile carry it
-                            continue
                         if gp.pointer.show([t]) < 1:
                             missing.append((lid, i + 1, t))
                         self.assertEqual(len(gp.pointer._frames), 4 * gp.pointer.shown)
