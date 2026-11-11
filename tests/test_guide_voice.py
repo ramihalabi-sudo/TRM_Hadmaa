@@ -308,6 +308,12 @@ class Panel(unittest.TestCase):
         app = self.app
         app.toggle_guide(True)
         gp = app.guide
+        # the user's auto-play would start the narration of the last step half a second after the guide opens, in
+        # the middle of this walk: off for this test (not saved)
+        gp.voice_cfg["auto"] = False
+        if gp._voice_job:
+            gp.after_cancel(gp._voice_job)
+            gp._voice_job = None
         orig = GV.recording
         GV.recording = lambda lang, text: "fake.mp3"                     # every sentence "plays" at once
         try:
@@ -325,13 +331,16 @@ class Panel(unittest.TestCase):
             app.goto_page("Optics")
             app.update()
             gp.walk_page()
-            end = time.time() + 120                                     # ~25 s alone; slower under a parallel run
+            # the first group of the page only (aperture and focal length): the whole page is ~100 fields and
+            # ~1,400 sentences since the cards grew (2.13-2.17), over two minutes even with instant "playback"
+            gp._walk_page = None
+            end = time.time() + 120
             while time.time() < end:
                 app.update()
                 if gp.voice.state == "idle" and not gp._walk_page and seen:
                     break
                 time.sleep(0.02)
-            self.assertGreater(len(seen), 5)
+            self.assertGreaterEqual(len(seen), 3)                        # the group: aperture via, D, f
             self.assertIn("optics.D_mm", [x[0] for x in seen])
             for path, card, cursor, lit in seen:
                 self.assertEqual((card, cursor, lit), (path, path, True))

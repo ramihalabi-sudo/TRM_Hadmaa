@@ -82,11 +82,13 @@ class MenuWalk:
     timers in the Windows menu loop)."""
 
     STEP_MS = 330
-    HOLD_MS = 1300
+    HOLD_MS = 1300              # on the item before the guide chooses it
+    SHOW_MS = 2500              # on the item before a menu that is only shown closes again
 
     def __init__(self, app, path, run=None):
         self.app, self.path, self.run = app, path, run
         self._jobs = []
+        self.walked = False         # the highlight has reached the item
         self.ok = sys.platform == "win32"
 
     # ---- Windows
@@ -164,9 +166,15 @@ class MenuWalk:
         for vk in keys:
             t += self.STEP_MS
             self._jobs.append(self.app.after(t, lambda vk=vk: self._key(vk)))
+        self._jobs.append(self.app.after(t + 60, self._reached))
         if self.run is not None:
             self._jobs.append(self.app.after(t + self.HOLD_MS, self._choose))
+        else:                                       # shown, not chosen: closed again, as a lecturer does
+            self._jobs.append(self.app.after(t + self.SHOW_MS, self.close))
         return True
+
+    def _reached(self):
+        self.walked = True
 
     def _choose(self):
         run, self.run = self.run, None

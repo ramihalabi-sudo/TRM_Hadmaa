@@ -24,7 +24,7 @@ python run_trm4.py --cli 0 --ttp                                       -> incl. 
 python run_trm4.py --cli 0 --quick                                     -> geometric quick estimate, no model run
 python run_trm4.py --sfr edge.png --out sfr.txt                        -> slanted-edge SFR of an edge image
 packaging\build_exe.bat                                                -> Windows EXE (dist\TRM_HADMAAv1\)
-packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.25.exe
+packaging\build_installer.bat                                          -> installer dist\installer\TRM_HADMAAv1_Setup_2.26.exe
 python run_trm4.py --cli 4 --cn2-stats Arid:summer --overcast         -> ranges for the Cn2 statistics (Table C.2)
 python run_trm4.py --cli 4 --cn2-stats Arid:winter --overcast --neutral-day   -> the same, overcast / winter noon h^-2/3
 python run_trm4.py --r0-frames seq.npy --lam 0.55 --focal 500 --pitch 5 --aperture 100 --path-km 2 --out r0.txt
@@ -73,6 +73,17 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `python tools/version_report.py` writes the report `reports/version_history.html`. `tests/test_version.py` checks that
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
+
+## Version 2.26 - guide: every lesson narrated end to end, timing fixes
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| End-to-end check | Every lesson step with demonstrations (17) narrated start to end in the real window with its event loop, the player timed by each recording's length: Hebrew 110 sentences (8.6 min), English 94 (7.8 min); every demonstration with its sentence, every menu choice in time, no menu cut short, project / workflow / page back after every step. |
+| Shown menus close | `MenuWalk.SHOW_MS`: a menu that is only shown closes 2.5 s after the highlight reaches the item (before: open until the next demonstration, ~20 s over the closing sentences of the last lesson). `MenuWalk.walked` marks the item reached. |
+| Step-open frame | The frame a step shows when it opens is skipped while the narration speaks (its first English sentence names Save and closed the File > Save menu the voice had just opened) and when another step is already shown. |
+| Flaky test | `Panel.test_walk_follows_fields_and_cursor` failed now and then: the user's auto-play started the last step's narration 450 ms after the guide opened, in the middle of the walk; and the whole Optics page is now ~100 fields / ~1,400 sentences. The test turns auto-play off for its run (not saved) and walks the first group of the page. |
 
 ## Version 2.25 - guide: a lecturer that opens the real menus
 

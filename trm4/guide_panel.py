@@ -663,7 +663,9 @@ class GuidePanel(tk.Frame):
         if st.get("show") and not self._opening and not self._quiet:
             first = self._show_first(st)                # read without the voice: frame the first part at once
             if first:
-                self.after_idle(lambda: self.pointer.show(first))
+                key = (self.lesson_id, self.index)
+                self.after_idle(lambda: (self.mode, self.lesson_id, self.index) == ("step",) + key and
+                                self.voice.state == "idle" and self.pointer.show(first))   # the voice shows its own
         self._draw_head()
         self._view_changed()
 
