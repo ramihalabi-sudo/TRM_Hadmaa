@@ -74,6 +74,16 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.28 - guide: every sentence recorded with the Gemini voice, old recordings removed
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Recordings | All 2,044 Hebrew and 742 English guide sentences have a Gemini recording (`py tools/make_guide_voice.py --plan`: 0 missing); the 1,090 made since 2.27 are packaged for the first time. |
+| Two sentences | `stab.jitter_mode` (`guide_kb_he.py`) reworded so it reads as a sentence; `guide_voice.speech` says a PSD unit without a number (`urad²/Hz`, `mrad²/Hz`) in words ("מיקרורדיאן בריבוע להרץ"). Both were rejected by the batch cut ("the pauses did not fit"). |
+| Size | `--prune` removed 2,753 Microsoft recordings (he-IL-AvriNeural) no longer played: `trm4/assets/voice/he` 152 MB -> 55 MB, and the installer with it. |
+
 ## Version 2.27 - guide: what is explained stays shown until the next topic
 
 The model is not touched: template ranges are unchanged; the run IDs change with the version number.

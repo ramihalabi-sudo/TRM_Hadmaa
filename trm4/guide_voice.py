@@ -66,7 +66,10 @@ _SYMBOLS = [  # (pattern, hebrew, english) - applied before the units
     (r"Cn²", "C n squared", "C n squared"), (r"m\^-2/3", "מטר בחזקת מינוס שתיים שליש", "meters to the minus two thirds"),
     (r"ΔT", "delta T", "delta T"), (r"σ", "סיגמה", "sigma"), (r"τ0", "טאו אפס", "tau zero"), (r"τ", "טאו", "tau"),
     (r"λ", "למדא", "lambda"), (r"±", "פלוס מינוס ", "plus or minus "), (r"≤", " עד ", " at most "),
-    (r"≈", " בערך ", " about "), (r"~", "בערך ", "about "), (r"²", " בריבוע", " squared"),
+    (r"≈", " בערך ", " about "), (r"~", "בערך ", "about "),
+    (r"[uµ]rad²/Hz", "מיקרורדיאן בריבוע להרץ", "microradians squared per hertz"),          # a PSD unit, no number
+    (r"mrad²/Hz", "מילירדיאן בריבוע להרץ", "milliradians squared per hertz"),
+    (r"²", " בריבוע", " squared"),
     (r"³", " בשלישית", " cubed"), (r'לק"ג', "לקילוגרם", "per kilogram"), (r'ק"ג', "קילוגרם", "kilograms"),
     (r'ק"מ', "קילומטר", "kilometers"), (r'מ"מ', "מילימטר", "millimeters"), (r'ס"מ', "סנטימטר", "centimeters"),
 ]
