@@ -74,6 +74,15 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.29 - guide: the derived-values panel is framed after a page switch
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Fix | `guide_point.Pointer.boxes("derived")` goes to Camera profile / Quick setup when the panel is not on the current page; it now runs `app.update()` after `goto_page`, because the page's canvas maps its form and takes its width only on the Map / Configure events, which `update_idletasks` does not run. Before, nothing was framed in intro step 3 unless the last page opened was Camera profile. |
+| Checked | `test_frames_in_the_window` passes; `test_guide` and `test_guide_voice` (63 tests) pass. |
+
 ## Version 2.28 - guide: every sentence recorded with the Gemini voice, old recordings removed
 
 The model is not touched: template ranges are unchanged; the run IDs change with the version number.
