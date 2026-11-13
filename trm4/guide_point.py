@@ -512,7 +512,9 @@ class Pointer:
                 for name in (app.current_page, "Quick setup" if app.workflow == "quick" else "Camera profile"):
                     if name != app.current_page:
                         app.goto_page(name)
-                        app.update_idletasks()
+                        # the page's canvas maps its form and takes its width only on the Map / Configure events,
+                        # which update_idletasks does not run: without them the panel is not on the screen yet
+                        app.update()
                     page = app.pages.get(app.current_page)
                     inner = page.inner if page is not None else None
                     for dp in getattr(app, "derived_panels", []):
