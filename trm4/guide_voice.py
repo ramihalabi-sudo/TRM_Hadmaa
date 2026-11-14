@@ -7,8 +7,11 @@ sentence is shown as a caption by the narrator strip of the panel while it is sa
 Where the voice comes from, per sentence:
   1. a recording made in advance with a natural (neural) voice - assets/voice/<lang>/<hash>.mp3, made by
      tools/make_guide_voice.py for every fixed text of the guide;
-  2. otherwise the voice built into Windows, said live (assets/tts_windows.ps1, Windows.Media.SpeechSynthesis or
-     System.Speech) - the sentences that depend on the project: the check of the value, the ranges.
+     (template_texts: also what is said of the values of every template);
+  2. a sentence built from the user's own project (the check of the value, the ranges): recorded by the same Gemini
+     voice while the guide runs, and kept (voice_live; needs google-genai and a Gemini API key);
+  3. otherwise, and until that recording arrives, the voice built into Windows, said live (assets/tts_windows.ps1,
+     Windows.Media.SpeechSynthesis or System.Speech).
 Playback goes through the Windows MCI player (winmm), so no Python package is needed; on other systems the narrator
 reports that no voice is available.
 
@@ -25,10 +28,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 from . import guide_he as G
 from . import guide_teach as T
 from . import guide_voice_en as EN
+from . import voice_live as VL
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
@@ -978,12 +983,65 @@ def static_texts(lang):
                                                                                        desc], True)]}))
     for st in G.tour_steps([], {}, lambda *a: True):
         take(step_script(lang, "tour", st))
+    out += template_texts(lang)
     seen, uniq = set(), []
     for s in out:
         if s and s not in seen:
             seen.add(s)
             uniq.append(s)
     return uniq
+
+
+_template_texts = {}
+
+
+def _project_value(project, path):
+    try:
+        d = project
+        for k in path.split("."):
+            d = d[int(k)] if isinstance(d, list) else d[k]
+        return d
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
+def template_texts(lang):
+    """The sentences the guide builds from the project (the check of each value, the suggestion, weight / cost and
+    sensitivity), for every template as it is loaded: every lesson step, the walks of lesson 4 and every field card.
+    Recorded in advance by the Gemini voice, so a template sounds the same as the fixed text; a value the user
+    changes is recorded while the guide runs (voice_live).  The effect on the ranges needs a model run: live only.
+    Hebrew only (the Gemini voice)."""
+    if not is_gemini(lang, "x"):
+        return []
+    if lang not in _template_texts:
+        from . import presets as P
+        out = []
+
+        def take(script):
+            for seg in script:
+                if isinstance(seg, tuple):
+                    out.append(speech(seg[1], lang))
+
+        for name in P.TEMPLATES:
+            p = P.make_template(name)
+            for les in G.LESSONS:
+                steps = list(les["steps"])
+                if les["id"] == "engineering":
+                    steps += G.entry_steps([], {}, lambda *a: True)
+                for st in steps:
+                    if st.get("fields"):
+                        items = [{"path": q, "value": _project_value(p, q), "project": p, "label": None}
+                                 for q in st["fields"] if G.param(q)]
+                        take(walk_script(lang, items, lambda *a: None, lambda *a: None,
+                                         intro=step_script(lang, les["id"], dict(st, fields=None))))
+                    elif st.get("path"):
+                        take(step_script(lang, les["id"], st, {"path": st["path"], "project": p, "label": None,
+                                                               "value": _project_value(p, st["path"])}))
+            for path in G.PARAMS:
+                q = path.replace(".N.", ".0.")
+                take(field_script(lang, q, _project_value(p, q), p))
+        _template_texts[lang] = [s for s in dict.fromkeys(out) if s]
+    return list(_template_texts[lang])
 
 
 def en_sources():
@@ -1050,7 +1108,20 @@ def recording(lang, text):
     for k in (rec_key(lang, text), legacy_key(lang, text)):
         if k and k in _rec_index[lang]:
             return os.path.join(VOICE_DIR, lang, k + ".mp3")
+    if text and is_gemini(lang, text):                  # recorded by Gemini while the guide ran (voice_live)
+        return VL.cached(lang, rec_key(lang, text))
     return None
+
+
+_live = None
+
+
+def live():
+    """The Gemini voice for the sentences built from the user's project (voice_live.Live), one per application."""
+    global _live
+    if _live is None:
+        _live = VL.Live(GEMINI["voice"], GEMINI["model"], GEMINI["lang"])
+    return _live
 
 
 def legacy_key(lang, text):
@@ -1177,6 +1248,7 @@ class Narrator:
     state 'idle' | 'loading' | 'playing' | 'paused'."""
 
     POLL_MS = 90
+    GEMINI_WAIT_S = 8.0        # how long a sentence waits for its Gemini recording before the Windows voice says it
 
     def __init__(self, widget, on_change):
         self.w = widget
@@ -1189,6 +1261,8 @@ class Narrator:
         self._gen = 0
         self._job = None
         self._live = {}            # sentence index -> wav path (being synthesized)
+        self._gem = {}             # sentence index -> key of its Gemini recording, asked for while the guide runs
+        self._wait = None          # (index, time) the narration started waiting for that recording
         self._tmp = None
         self.rate = 1.0
 
@@ -1221,7 +1295,7 @@ class Narrator:
                 pass
             self._job = None
         self.mci.close()
-        self._queue, self._live = [], {}
+        self._queue, self._live, self._gem, self._wait = [], {}, {}, None
         if self.state != "idle":
             self._set("idle", "")
 
@@ -1249,6 +1323,10 @@ class Narrator:
                 items.append((i, text))
         if not items:
             return
+        if live().available(self.lang):                 # the Gemini voice; the Windows one until it arrives
+            keys = [(i, rec_key(self.lang, t), t) for i, t in items if i not in self._gem]
+            live().request([(k, t) for _i, k, t in keys])
+            self._gem.update({i: k for i, k, _t in keys})
         gen, folder = self._gen, os.path.join(self._tmp, "b%d" % start)
         os.makedirs(folder, exist_ok=True)
         outs = [os.path.join(folder, "s%03d.wav" % n) for n in range(len(items))]
@@ -1275,6 +1353,7 @@ class Narrator:
         segs = segs or []
         self._queue[i:i + 1] = segs
         self._live = {j if j < i else j + len(segs) - 1: p for j, p in self._live.items()}
+        self._gem = {j if j < i else j + len(segs) - 1: k for j, k in self._gem.items()}
         if segs:
             self._prefetch(i)
 
@@ -1300,6 +1379,14 @@ class Narrator:
         cap, text = self._queue[self._pos]
         said = speech(text, self.lang)
         path = recording(self.lang, said) if said else None
+        key = self._gem.get(self._pos)
+        if path is None and said and key and live().pending(key):   # its Gemini recording is on its way
+            if not self._wait or self._wait[0] != self._pos:
+                self._wait = (self._pos, time.time())
+            if time.time() - self._wait[1] < self.GEMINI_WAIT_S:
+                self._set("loading", cap)
+                self._job = self.w.after(self.POLL_MS, lambda: gen == self._gen and self._next())
+                return
         if path is None and said:
             path = self._live.get(self._pos)
             if path is None:
@@ -1315,7 +1402,8 @@ class Narrator:
         if not said:
             self._pos += 1
             return self._next()
-        speed = self.rate if path.endswith(".mp3") else 1.0      # live speech is synthesized at the rate
+        windows = bool(self._tmp) and path.startswith(self._tmp)
+        speed = 1.0 if windows else self.rate                  # the Windows voice is synthesized at the rate
         if not self.mci.play(path, speed):
             self._pos += 1
             return self._next()

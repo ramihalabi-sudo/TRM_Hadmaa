@@ -74,6 +74,17 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.30 - guide: the sentences built from the project in the Gemini voice too
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| In advance | `guide_voice.template_texts`: what the guide says of the values of every template (`presets.TEMPLATES`) in every lesson step, the walks of lesson 4 and every field card (the check, the suggestion, weight / cost, sensitivity), Hebrew; part of `static_texts`, recorded as the part `templates` of `tools/make_guide_voice.py` (223 sentences). |
+| While running | `trm4/voice_live.py`: the narrator asks Gemini (`GEMINI` model and voice) for the sentences without a recording, one request per batch of up to 12, at most one every 6.5 s; the audio is cut at the pauses (`split`, shared with `tools/voice_gemini.py`) into WAV files in `%APPDATA%\TRM4\voice_cache\he`, which `recording()` finds next time. A sentence waits up to `Narrator.GEMINI_WAIT_S` (8 s) for its recording, then the Windows voice says it. Needs `google-genai` and a key (`GEMINI_API_KEY` or `%USERPROFILE%\.gemini_key`); a used-up daily quota turns it off until 10:00. The sentences sent include the project's values. |
+| Packaging | `google.genai` submodules are hidden imports of `packaging/TRM_HADMAAv1.spec`. |
+| Checked | `LiveVoice` tests (cutting, cache, quota, template sentences); every template sentence recorded. |
+
 ## Version 2.29 - guide: the derived-values panel is framed after a page switch
 
 The model is not touched: template ranges are unchanged; the run IDs change with the version number.

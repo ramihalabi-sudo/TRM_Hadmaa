@@ -117,6 +117,9 @@ def sections(lang):
         part("fields-" + page, scripts)
         fields.append(out.pop())
     out += sorted(fields, key=lambda nt: -len(nt[1]))
+    part("templates", [], GV.template_texts(lang))        # what the guide says of each template's values (Hebrew)
+    if not out[-1][1]:
+        out.pop()
     rest = [t for t in GV.static_texts(lang) if t not in seen]
     if rest:
         out.append(("other", rest))
@@ -250,7 +253,8 @@ def main():
     ap.add_argument("--max-requests", type=int, default=75, help="Gemini requests of this run, retries included "
                                                                  "(the daily limit is 100)")
     ap.add_argument("--only", help="record only these parts, by comma: home, lesson1..lesson6, tour, "
-                                   "fields-<page> or fields (every field card); --plan lists them")
+                                   "fields-<page>, fields (every field card) or templates (what is said of each template's values); "
+                                   "--plan lists them")
     ap.add_argument("--plan", action="store_true", help="list the parts: missing sentences and about how many "
                                                         "Gemini requests each takes (no internet)")
     a = ap.parse_args()

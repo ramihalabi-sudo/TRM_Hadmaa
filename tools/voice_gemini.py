@@ -14,7 +14,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from trm4 import guide_voice as GV  # noqa: E402
 
-SR = 24000                                   # Gemini returns 16-bit mono PCM at 24 kHz
+from trm4.voice_live import SR  # noqa: E402  (Gemini returns 16-bit mono PCM at 24 kHz)
 KEY_FILE = os.path.join(os.path.expanduser("~"), ".gemini_key")
 _client = None
 
@@ -37,9 +37,7 @@ def client():
     return _client
 
 
-def say(said):
-    """The text Gemini reads: the name of the program in Hebrew letters, so it is said the same way everywhere."""
-    return said.replace("TRM", "טי אר אם")
+from trm4.voice_live import say  # noqa: E402  (the name of the program in Hebrew letters)
 
 
 class DailyQuota(RuntimeError):
@@ -128,95 +126,8 @@ def check(mp3, said):
 
 
 # ------------------------------------------------------------------------------------------------- batches
-FRAME = 0.01                    # s, frame of the silence detection
-MIN_GAP = 0.15                  # s, shortest pause that may end a sentence
-RATIO = (0.6, 1.7)              # a sentence may last 0.6-1.7 times its share of the batch (by letters)
-
-
-def _weight(text):
-    """How long a sentence takes to say, in letters (spaces and punctuation are short)."""
-    t = say(text)
-    return sum(1 for c in t if c.isalnum()) + 2 * sum(1 for c in t if c in ",;:") + 3
-
-
-def _gaps(x):
-    """Pauses in the audio: [(start s, end s)] of every run of silence of at least MIN_GAP, and (begin, end) of the
-    speech."""
-    n = int(SR * FRAME)
-    f = x[: len(x) // n * n].astype(np.float32).reshape(-1, n)
-    db = 20 * np.log10(np.sqrt(np.mean(f ** 2, axis=1)) / 32768 + 1e-9)
-    loud = db > max(-45.0, float(np.percentile(db, 98)) - 40)
-    idx = np.flatnonzero(loud)
-    if not len(idx):
-        return [], (0.0, 0.0)
-    b, e = idx[0], idx[-1] + 1
-    gaps, run = [], None
-    for i in range(b, e):
-        if not loud[i]:
-            run = i if run is None else run
-        elif run is not None:
-            if (i - run) * FRAME >= MIN_GAP:
-                gaps.append((run * FRAME, i * FRAME))
-            run = None
-    return gaps, (b * FRAME, e * FRAME)
-
-
-def split(x, texts):
-    """Cut the audio of a batch into one piece per sentence: [(start s, end s)], or None when the pauses do not fit
-    the sentences.  The cuts are chosen among the pauses (dynamic programming) so that every sentence lasts close to
-    its share of the batch by letters, preferring long pauses; every piece is then checked against RATIO."""
-    n = len(texts)
-    gaps, (b, e) = _gaps(x)
-    if n == 1:
-        return [(b, e)]
-    if len(gaps) < n - 1:
-        return None
-    w = np.array([_weight(t) for t in texts], float)
-    pause = sum(g1 - g0 for g0, g1 in sorted(gaps, key=lambda g: g[0] - g[1])[: n - 1])
-    rate = (e - b - pause) / w.sum()                                     # s per letter
-    exp = w * rate
-    starts = [b] + [g1 for _g0, g1 in gaps]
-    ends = [g0 for g0, _g1 in gaps] + [e]
-    glen = [g1 - g0 for g0, g1 in gaps]
-    m = len(gaps)
-    INF = float("inf")
-
-    def cost(i, s, t):                                   # sentence i spoken from s to t
-        d = t - s
-        return INF if d <= 0 else float(np.log(d / exp[i]) ** 2)
-
-    # best[k][j]: sentences 0..k, sentence k ends at gap j (j = m: at the end)
-    best = np.full((n, m + 1), INF)
-    back = np.zeros((n, m + 1), int)
-    for j in range(m):
-        best[0][j] = cost(0, b, ends[j]) - 0.5 * min(glen[j], 1.2)
-    for k in range(1, n):
-        for j in range(k, m + 1):
-            if k == n - 1 and j != m or k < n - 1 and j == m:
-                continue
-            bonus = 0.5 * min(glen[j], 1.2) if j < m else 0.0
-            for i in range(k - 1, j):
-                if best[k - 1][i] == INF:
-                    continue
-                c = best[k - 1][i] + cost(k, starts[i + 1], ends[j]) - bonus
-                if c < best[k][j]:
-                    best[k][j], back[k][j] = c, i
-    if best[n - 1][m] == INF:
-        return None
-    cut, j = [m], m
-    for k in range(n - 1, 0, -1):
-        j = back[k][j]
-        cut.append(j)
-    cut = cut[::-1]                                      # gap index that ends each sentence (m = end)
-    pieces, s = [], b
-    for k, j in enumerate(cut):
-        t = ends[j]
-        r = (t - s) / exp[k]
-        if not RATIO[0] <= r <= RATIO[1]:
-            return None
-        pieces.append((s, t))
-        s = starts[j + 1] if j < m else e
-    return pieces
+# the cutting of a batch into sentences is shared with the live voice of the application
+from trm4.voice_live import split  # noqa: E402
 
 
 async def make_batch(texts, outs, model=None):

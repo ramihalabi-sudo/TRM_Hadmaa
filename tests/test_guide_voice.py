@@ -229,6 +229,80 @@ class Recordings(unittest.TestCase):
                              % (len(missing), lang))
 
 
+class LiveVoice(unittest.TestCase):
+    """voice_live: the sentences built from the user's project, recorded by Gemini while the guide runs."""
+
+    def setUp(self):
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("no numpy")
+        import tempfile
+        from trm4 import voice_live as VL
+        self.VL = VL
+        self.tmp = tempfile.mkdtemp(prefix="trm_live_")
+        self._cache, VL.CACHE = VL.CACHE, self.tmp
+        self._gap, VL.GAP_S = VL.GAP_S, 0.0
+        self.addCleanup(setattr, VL, "CACHE", self._cache)
+        self.addCleanup(setattr, VL, "GAP_S", self._gap)
+
+    def speech_pcm(self, texts):
+        """Stand-in for Gemini: a tone per sentence, as long as its share by letters, with pauses between them."""
+        import numpy as np
+        sr, out = self.VL.SR, []
+        for t in texts:
+            n = int(0.06 * sr * self.VL._weight(t))
+            out += [(8000 * np.sin(np.arange(n) * 0.05)).astype(np.int16), np.zeros(int(0.4 * sr), np.int16)]
+        return np.concatenate([np.zeros(int(0.2 * sr), np.int16)] + out).tobytes()
+
+    def test_split_finds_every_sentence(self):
+        import numpy as np
+        texts = ["הזנתם 2.3, וזה ערך סביר.", "בעקבות זה, ההצעה שלי היא 0.07.", "זה בסדר גמור."]
+        x = np.frombuffer(self.speech_pcm(texts), dtype=np.int16)
+        pieces = self.VL.split(x, texts)
+        self.assertEqual(len(pieces), 3)
+        self.assertTrue(all(t > s for s, t in pieces))
+
+    def test_request_records_into_the_cache(self):
+        live = self.VL.Live("Charon", "model", "he", pcm=self.speech_pcm)
+        self.assertTrue(live.available("he"))
+        self.assertFalse(live.available("en"))
+        items = [("k%d" % i, t) for i, t in enumerate(["הזנתם 150, וזה ערך סביר.", "עכשיו לערך שלכם."])]
+        live.request(items)
+        deadline = time.time() + 10
+        while any(live.pending(k) for k, _t in items) and time.time() < deadline:
+            time.sleep(0.05)
+        for k, _t in items:
+            self.assertFalse(live.pending(k))
+            path = self.VL.cached("he", k)
+            self.assertTrue(path and os.path.getsize(path) > 1000, k)
+        said = "הזנתם 123.456, וזה ערך סביר."               # no template has it: not recorded in advance
+        live.request([(GV.rec_key("he", said), said)])
+        deadline = time.time() + 10
+        while live.pending(GV.rec_key("he", said)) and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(GV.recording("he", said), self.VL.cached("he", GV.rec_key("he", said)))
+
+    def test_daily_quota_stops_until_it_starts_again(self):
+        def used_up(texts):
+            raise self.VL.DailyQuota("429 ... PerDay")
+        live = self.VL.Live("Charon", "model", "he", pcm=used_up)
+        live.request([("q1", "זה בסדר גמור.")])
+        deadline = time.time() + 10
+        while live.pending("q1") and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(live.off, "daily quota")
+        self.assertFalse(live.available("he"))
+        self.assertTrue(live._quota_over())                 # also for the next start of the application, until 10:00
+
+    def test_template_sentences_are_fixed(self):
+        """What the guide says of a template's values is recorded in advance (Hebrew), and is part of static_texts."""
+        he = GV.template_texts("he")
+        self.assertTrue(any(t.startswith("הזנתם") for t in he))
+        self.assertTrue(set(he) <= set(GV.static_texts("he")))
+        self.assertEqual(GV.template_texts("en"), [])
+
+
 class RecordingTool(unittest.TestCase):
     """tools/make_guide_voice.py: the parts the recordings are made by, and the pace of the Gemini requests."""
 
