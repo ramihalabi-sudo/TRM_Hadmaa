@@ -141,6 +141,9 @@ HELP = {
     "detector.noise_mode": "Noise / sensitivity source - which data are the truth for the temporal noise.\n"
                            "Physics model: shot, dark, read and quantization noise from the detector data.\n"
                            "Measured camera NETD: replaces the noise model; no read noise is added on top.\n"
+                           "Measured camera NETD, converted to the scenario F-number (uncooled, extension): the same "
+                           "NETD multiplied by (F / test F-number)^2, so a change of the lens changes the sensitivity "
+                           "in sweeps and in the advisor; needs the test F-number.\n"
                            "Detector-level NETD (uncooled): converted to the project optics (Eq. 3.142).",
     "detector.netd_F": "F-number at which the camera NETD was measured. NETD scales roughly with F^2: a mismatch "
                        "with the project optics is flagged, the value is not converted silently.",

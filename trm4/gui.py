@@ -250,7 +250,7 @@ JIT_PSD = lambda p: p["stab"].get("jitter_mode") == "psd" and not p["stab"]["neg
 JIT_MODEL = lambda p: p["stab"].get("jitter_mode", "model") == "model" and not p["stab"]["neglect"]
 SPEC_ATM = lambda p: p["atmosphere"]["mode"] == "spectral"
 CAM_NETD = lambda p: THERMAL(p) and (p["detector"]["noise_mode"] == "measured" and p["imager_type"] == "cooled" or
-                                     UNCOOLED(p) and p["detector"]["noise_mode"] == "device")
+                                     UNCOOLED(p) and p["detector"]["noise_mode"] in ("device", "device_scaled"))
 ALGO = lambda p: p["display"].get("observer", "legacy") == "algorithm"
 POT = lambda p: ALGO(p) and p["display"].get("algo_criterion", "lp") == "pot"
 TTP = lambda p: bool(p["target"].get("ttp")) and not POT(p)
@@ -506,10 +506,12 @@ TABS = [
           [("calculated", "Physics model (detector noise sources)"), ("measured", "Measured camera NETD")],
           cond=lambda p: THERMAL(p) and p["imager_type"] == "cooled"),
         F("detector.noise_mode", "Noise / sensitivity source", "choice",
-          [("device", "Measured camera NETD"), ("detector", "Detector-level NETD (scaled to this optics)")], UNCOOLED),
+          [("device", "Measured camera NETD"),
+           ("device_scaled", "Measured camera NETD, converted to the scenario F-number (needs the test F-number)"),
+           ("detector", "Detector-level NETD (scaled to this optics)")], UNCOOLED),
         F("detector.netd_mK", "NETD", cond=lambda p: THERMAL(p) and (UNCOOLED(p) or p["detector"]["noise_mode"] == "measured"), unit="mK"),
         F("detector.netd_TB_K", "NETD test temperature (0 = not documented)", unit="K",
-          cond=lambda p: THERMAL(p) and (p["detector"]["noise_mode"] in ("measured", "device"))),
+          cond=lambda p: THERMAL(p) and (p["detector"]["noise_mode"] in ("measured", "device", "device_scaled"))),
         F("detector.t_th_ms", "Detector thermal time constant", cond=UNCOOLED, unit="ms"),
         F("detector.noise_floor_e", "Read noise (additive floor)", cond=RADIOMETRIC, unit="e-"),
         H("Camera NETD test conditions (replaces the detector noise model - nothing is added on top)", cond=CAM_NETD),

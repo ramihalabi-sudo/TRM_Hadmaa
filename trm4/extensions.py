@@ -641,3 +641,21 @@ def aerosol_mtf(r, R_km, S_per_km, xi_c):
     r = np.asarray(r, float)
     sr = float(S_per_km) * float(R_km)
     return np.where(r < xi_c, np.exp(-sr * (r / xi_c) ** 2), math.exp(-sr))
+
+
+# ---------------------------------------------------------------------------------------------
+# Line of sight over flat terrain / the sea: distance to the horizon
+# ---------------------------------------------------------------------------------------------
+# d = sqrt(2 R h): 3.57 km x sqrt(height in m) for the Earth radius R = 6378 km (geometric), 3.86 km x sqrt(h) with
+# the standard atmospheric refraction - ray curvature about 1/7 of the Earth's, effective radius 7/6 R
+# (A. T. Young, "Distance to the Horizon", San Diego State University, aty.sdsu.edu/explain/atmos_refr/horizon.html).
+# The refraction varies from day to day (ducts and mirages change it strongly), so this is a check, not a limit.
+HORIZON_KM_GEOMETRIC = 3.57
+HORIZON_KM_REFRACTED = 3.86
+
+
+def horizon_km(h1_m, h2_m, refraction=True):
+    """Largest distance [km] at which two points h1 and h2 [m] above flat terrain / the sea see each other:
+    k (sqrt(h1) + sqrt(h2)) - the sum of the two single-height horizon distances."""
+    k = HORIZON_KM_REFRACTED if refraction else HORIZON_KM_GEOMETRIC
+    return k * (math.sqrt(max(float(h1_m), 0.0)) + math.sqrt(max(float(h2_m), 0.0)))

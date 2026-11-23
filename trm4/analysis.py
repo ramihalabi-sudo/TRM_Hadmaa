@@ -281,6 +281,17 @@ def _measured_netd(p):
                                                p.get("detector", {}).get("noise_mode") == "measured")
 
 
+def _netd_follows_F(p):
+    """Uncooled NETD that the engine converts to the F-number of the case (so a lens change does change it)."""
+    d = p.get("detector", {})
+    if not (p.get("category") == "Thermal" and p.get("imager_type") == "uncooled"):
+        return False
+    return d.get("noise_mode") == "device_scaled" and float(d.get("netd_F", 0.0) or 0.0) > 0 or         d.get("noise_mode") == "detector" and float(d.get("meas_F", 0.0) or 0.0) > 0
+
+
+_NETD_F_NOTE = "The measured NETD is converted to the new F-number (NETD ~ F^2)."
+
+
 def apply_policy(case, path, value, policy=None):
     """Set `path` = value in `case` and adjust the dependent inputs; returns explanatory notes."""
     notes = []
@@ -330,12 +341,16 @@ def apply_policy(case, path, value, policy=None):
         else:
             if o.get("aperture") == "general":
                 o["F_general"] = float(o["F_general"]) * ratio
-            if _measured_netd(case):
+            if _netd_follows_F(case):
+                notes.append(_NETD_F_NOTE)
+            elif _measured_netd(case):
                 notes.append("The measured NETD is held constant although the F-number changes - it is only valid "
                              "for the optics it was measured with.")
         return notes
     set_path(case, path, newv)
-    if path in ("optics.D_mm", "optics.F_general", "optics.tau_opt") and _measured_netd(case):
+    if path in ("optics.D_mm", "optics.F_general") and _netd_follows_F(case):
+        notes.append(_NETD_F_NOTE)
+    elif path in ("optics.D_mm", "optics.F_general", "optics.tau_opt") and _measured_netd(case):
         notes.append("The measured NETD is held constant although the collected radiation changes - it is only valid "
                      "for the optical configuration it was measured with.")
     if path in ("detector.noise_floor_e", "detector.dark_A", "detector.storage_e") and _measured_netd(case):

@@ -74,6 +74,20 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.31 - corrections of the displayed range: grid steps, horizon, camera NETD and the lens
+
+The first three items (U0, U1, U2) of `reports/TRM_Hadmaa_Field_Effects_and_Upgrades_HE_2026-11-23.pdf`. One template
+range changes: General (MWIR sun-lit scene), Atm 1, Identification 3.511 -> 3.987 km (+13.6 %); all other template
+ranges are identical (`tests/test_dri_reference.py`). U1 and U2 are extensions: U1 is a new option that is off by
+default, U2 never changes a range.
+
+| Item | Implementation | Source / limits |
+|---|---|---|
+| U0 Resolution-limited range (Visible / General) | `TRM4Model._ranges_signal`: where the MNDS becomes infinite between two points of the 56-point range grid (the bar frequency passes the resolution limit), the limit is located by bisection (16 steps) and seven ranges are added below it, per direction; the average MNDS curve and the crossing use the refined grid. Before, a task limited by the resolution and not by the signal took the range of a grid point (18 % steps): InGaAs camera in daylight, Identification 2.970 km for f = 140 ... 160 mm, then 3.511 km; now 3.066 / 3.174 / 3.280 / 3.386 / 3.490 km. The curves returned for the plots stay on the 56-point grid. | Numerical correction; the Thermal category already inverted the MTDP continuously. A well-sampled, signal-limited camera (daylight template) is unchanged. |
+| U2 Line of sight | `extensions.horizon_km`, `TRM4Model._horizon`: after the ranges, every task range is compared with k (sqrt(h_imager) + sqrt(h_target)) km, k = 3.86 with standard refraction and 3.57 geometric; heights from *target height above ground* and the look-down geometry (the turbulence path geometry). A range beyond the horizon: one warning, `horizon.beyond` in the task; System data shows the heights and the horizon. The ranges are never changed. Templates (imager and target 1 m above ground): horizon 7.72 km. | A. T. Young, "Distance to the Horizon", San Diego State University (effective radius 7/6). Flat terrain or sea only; the refraction varies from day to day. |
+| U1 Camera NETD and the lens (uncooled) | *Noise / sensitivity source: Measured camera NETD, converted to the scenario F-number* (`detector.noise_mode = device_scaled`): NETD x (F / test F-number)^2, the F-number term of Eq. (3.142); it needs the test F-number (`ModelError` otherwise) and is listed under assumptions. Sweeps and the advisor then say that the NETD follows the F-number instead of "held constant" (`analysis._netd_follows_F`). Uncooled template, F/1 -> F/1.4: ranges -17 / -13 / -12 % with the conversion, -10 / -7 / -7 % with the NETD held. | Default unchanged (measured NETD not converted, decision of 2.5). Lens transmission of the test taken as that of the project; the exact law for very fast optics is (4 F^2 + 1) (Foote, JPL). A measured NETD of a cooled camera is still not converted. |
+| Tests | `tests/test_range_bias_fixes.py` (11 tests); reference range of the General template updated. | - |
+
 ## Version 2.30 - guide: the sentences built from the project in the Gemini voice too
 
 The model is not touched: template ranges are unchanged; the run IDs change with the version number.

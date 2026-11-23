@@ -14,7 +14,7 @@
    }
   },
   "fom_nyq_h": 0.13714336821518816,
-  "n_warn": 0
+  "n_warn": 2
  },
  "Thermal - MWIR cooled staring 640x512 (InSb)": {
   "time_s": 0.46,
@@ -31,7 +31,7 @@
    }
   },
   "fom_nyq_h": 0.10584036900344748,
-  "n_warn": 0
+  "n_warn": 3
  },
  "Thermal - MWIR cooled staring 640x512 (XBn 3.6-4.2 um)": {
   "time_s": 0.47,
@@ -48,7 +48,7 @@
    }
   },
   "fom_nyq_h": 0.14638776433873169,
-  "n_warn": 1
+  "n_warn": 3
  },
  "Thermal - LWIR uncooled microbolometer 640x480": {
   "time_s": 0.48,
@@ -82,7 +82,7 @@
    }
   },
   "fom_nyq_h": 374.95259877247025,
-  "n_warn": 0
+  "n_warn": 2
  },
  "Visible/SWIR - InGaAs night camera 640x512": {
   "time_s": 0.61,
@@ -99,7 +99,7 @@
    }
   },
   "fom_nyq_h": 76.43118946972587,
-  "n_warn": 0
+  "n_warn": 2
  },
  "General - MWIR sun-lit scene (emission + reflection)": {
   "time_s": 0.54,
@@ -107,7 +107,7 @@
    "Atm 1 (sigma=0.2/km)": {
     "Detection": 18.27199097006264,
     "Recognition": 7.556621624315826,
-    "Identification": 3.5111917342151306
+    "Identification": 3.9869800727205216
    },
    "Atm 2 (sigma=1/km)": {
     "Detection": 6.201146719533738,
@@ -116,7 +116,7 @@
    }
   },
   "fom_nyq_h": 8019.348649673664,
-  "n_warn": 0
+  "n_warn": 3
  },
  "NIIRS - airborne visible camera (slant path)": {
   "time_s": 1.41,
@@ -128,6 +128,6 @@
    }
   },
   "fom_nyq_h": 881.706437654369,
-  "n_warn": 0
+  "n_warn": 1
  }
 }

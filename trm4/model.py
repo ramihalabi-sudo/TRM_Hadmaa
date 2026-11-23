@@ -159,6 +159,7 @@ class TRM4Model:
         self.wi = dict(self.p.get("_what_if") or {})
         self.imports = []             # traceability of imported files: (what, name, sha256, notes)
         self.assumptions = []
+        self.horizon = None           # line-of-sight check of the task ranges (set after the range calculation)
 
     # -----------------------------------------------------------------------------------------
     def warn(self, msg):
@@ -1020,6 +1021,15 @@ class TRM4Model:
                         extra += (float(d["lsb_mK"]) * 1e-3) ** 2 / 12
                     self.netd = math.sqrt(netd_s ** 2 + extra)
                     self.netd_scaled_only = netd_s
+                elif d["noise_mode"] == "device_scaled":
+                    # camera NETD converted to the F-number of the scenario (extension): NETD ~ F^2, the F-number
+                    # term of Eq. (3.142); the lens transmission of the test is taken as that of the project optics
+                    Fm = float(d.get("netd_F", 0.0) or 0.0)
+                    if Fm <= 0:
+                        raise ModelError("Camera NETD converted to the scenario F-number: enter the test F-number of "
+                                         "the NETD (> 0)")
+                    self.netd_F_scale = (self.F_eff / Fm) ** 2
+                    self.netd = netd_m * self.netd_F_scale
                 else:
                     self.netd = netd_m
                 t_th = float(d["t_th_ms"]) * 1e-3
@@ -1061,7 +1071,7 @@ class TRM4Model:
         measured = self.uncooled or d["noise_mode"] == "measured"
         if not measured:
             return
-        camera = not self.uncooled or d["noise_mode"] == "device"
+        camera = not self.uncooled or d["noise_mode"] in ("device", "device_scaled")
         if camera:
             self._check_camera_netd()
         else:
@@ -1099,6 +1109,12 @@ class TRM4Model:
         Fm = float(d.get("netd_F", 0.0) or 0.0)
         if Fm <= 0:
             missing.append("F-number")
+        elif self.uncooled and d["noise_mode"] == "device_scaled":
+            self.noise_source = "Measured camera NETD converted to the scenario F-number (F^2)"
+            self.assume("Camera NETD %.4g mK measured at F/%.2f, converted to the optics F/%.2f: x %.3g (NETD ~ F^2, the "
+                        "F-number term of TRM4 Eq. 3.142; lens transmission of the test taken as that of the project "
+                        "optics; for very fast optics the exact law (4 F^2 + 1) gives a smaller change). %s" % (
+                            float(d["netd_mK"]), Fm, self.F_eff, self.netd_F_scale, X.EXTENSION))
         elif abs(Fm - self.F_eff) / self.F_eff > 0.05:
             self.warn("Camera NETD was measured at F/%.2f but the optics are F/%.2f: NETD scales roughly with F^2 "
                       "(factor %.2f) - the measured value is used unchanged." % (Fm, self.F_eff, (self.F_eff / Fm) ** 2))
@@ -2160,6 +2176,7 @@ class TRM4Model:
             if self.p["mode"]["niirs"]:
                 self.progress("NIIRS calculation", 0.9)
                 res["niirs"] = self._niirs()
+            self.horizon = self._horizon(res)               # line-of-sight check after the ranges (extension)
             self.aniso = self._anisoplanatism(res)          # diagnostic after the ranges (extension, off by default)
             self.scint = self._scintillation(res)           # diagnostic after the ranges (extension, off by default)
         res["spectral"] = {"lam": self.lam, "qe": self.eta * 100, "w": self.w,
@@ -2181,6 +2198,45 @@ class TRM4Model:
         res["assumptions"] = self.assumptions
         self.progress("Done", 1.0)
         return res
+
+    # -----------------------------------------------------------------------------------------
+    def _los_heights(self, R_km):
+        """(imager, target) height above the ground [m] of the line of sight at slant range R - the same geometry as
+        the turbulence path: the target at its height above ground, the imager above it by the look-down geometry."""
+        h_t = max(float(self.p["target"]["alt_m"]), 0.0)
+        return max(h_t + R_km * 1000.0 * math.sin(self.los_angle(R_km)), 0.0), h_t
+
+    def _horizon(self, res):
+        """Line of sight over flat terrain / the sea (extension): every task range is compared with the distance to
+        the horizon for the imager and target heights.  The ranges are not changed - a range beyond the horizon is
+        flagged in the task (`horizon`) and named in one warning."""
+        if self.lab or "range" not in res:
+            return None
+        beyond, out = [], None
+        for a in res["range"]["atm"]:
+            for t in a["tasks"]:
+                R0 = t.get("R0")
+                if R0 is None or not np.isfinite(R0) or R0 <= 0:
+                    continue
+                h_i, h_t = self._los_heights(R0)
+                d = {"h_imager_m": h_i, "h_target_m": h_t, "geometric_km": X.horizon_km(h_i, h_t, False),
+                     "refracted_km": X.horizon_km(h_i, h_t, True)}
+                d["beyond"] = bool(R0 > d["refracted_km"])
+                t["horizon"] = d
+                out = out or d
+                if d["beyond"]:
+                    beyond.append((a["label"], t["name"], R0, d))
+        if beyond:
+            lab, name, R0, d = max(beyond, key=lambda x: x[2] / x[3]["refracted_km"])
+            names = sorted({b[1] for b in beyond}, key=[t["name"] for t in res["range"]["atm"][0]["tasks"]].index)
+            self.warn("Line of sight: the %s range%s exceed%s the horizon over flat terrain or the sea - e.g. %s, %s: "
+                      "%.3g km, but an imager %.3g m and a target %.3g m above the ground see each other only to "
+                      "%.3g km (%.3g km without atmospheric refraction). The ranges are not limited: they hold from "
+                      "elevated ground or across a valley - enter the heights (target height above ground, imager "
+                      "height above the target) of the real geometry. %s" % (
+                          ", ".join(names), "s" if len(names) > 1 else "", "" if len(names) > 1 else "s", lab, name,
+                          R0, d["h_imager_m"], d["h_target_m"], d["refracted_km"], d["geometric_km"], X.EXTENSION))
+        return out
 
     # -----------------------------------------------------------------------------------------
     def _check_contrast(self, st):
@@ -2292,7 +2348,7 @@ class TRM4Model:
                 "counted once per binned pixel"))
         # (3) noise measurement port
         cam_netd = self.cat == "Thermal" and (d["noise_mode"] == "measured" and not self.uncooled or
-                                              self.uncooled and d["noise_mode"] == "device")
+                                              self.uncooled and d["noise_mode"] in ("device", "device_scaled"))
         if cam_netd and d.get("noise_port", "raw") == "processed":
             self.warn("Camera NETD was measured at the processed video output (after denoising / temporal filtering): "
                       "TRM adds its own frame integration and filters - the noise reduction may be counted twice. "
@@ -3340,6 +3396,18 @@ class TRM4Model:
         eds = np.array([s["eds"] for s in states])
         res = {"label": atm.label, "R": R, "signal": eds, "tasks": []}
 
+        extra_states = {}
+
+        def state_at(x):
+            if x not in extra_states:
+                extra_states[x] = self.signal_state(x, atm)
+            return extra_states[x]
+
+        def mnds(x, s, z, zi, n_perc):
+            a_z = self.target_dims(self.los_angle(x))[zi]
+            rp = n_perc * x / a_z if a_z > 0 else np.inf
+            return self.mdsp(x, rp, z, s["nes"], s["ies"]) if np.isfinite(rp) else np.inf
+
         def solve(n_perc):
             mn = {}
             for z, zi in (("h", 0), ("v", 1)):
@@ -3349,21 +3417,55 @@ class TRM4Model:
                     if dead:
                         vals.append(np.inf)
                         continue
-                    a_z = self.target_dims(self.los_angle(x))[zi]
-                    rp = n_perc * x / a_z if a_z > 0 else np.inf
-                    m = self.mdsp(x, rp, z, s["nes"], s["ies"]) if np.isfinite(rp) else np.inf
+                    m = mnds(x, s, z, zi, n_perc)
                     vals.append(m)
                     dead = not np.isfinite(m)
                 mn[z] = np.array(vals)
-            Ra, Sa = self._avg_curve(R, mn["h"], mn["v"])
+            # Resolution limit between two grid ranges (the bar frequency passes the last resolvable one and the MNDS
+            # becomes infinite): the 56-point grid is 18 % wide there, and a task limited by the resolution rather
+            # than by the signal took the range of a grid point.  The limit is located by bisection and the grid is
+            # refined below it, so the range varies continuously with the inputs, as in the Thermal category.
+            Rr, mr, eds_r = R, mn, eds
+            add = set()
+            for z, zi in (("h", 0), ("v", 1)):
+                bad = np.nonzero(~np.isfinite(mn[z]))[0]
+                if not bad.size or bad[0] == 0:
+                    continue
+                lo, hi = float(R[bad[0] - 1]), float(R[bad[0]])
+                for _ in range(16):
+                    mid = math.sqrt(lo * hi)
+                    if np.isfinite(mnds(mid, states[bad[0] - 1], z, zi, n_perc)):
+                        lo = mid
+                    else:
+                        hi = mid
+                x0 = float(R[bad[0] - 1])
+                add.update(float(x) for x in np.geomspace(x0, lo, 8)[1:])
+                add.add(hi)
+            add = sorted(x for x in add if not np.any(np.isclose(x, R, rtol=1e-12, atol=0.0)))
+            if add:
+                Rr = np.concatenate([R, add])
+                order = np.argsort(Rr)
+                st_r = list(states) + [state_at(x) for x in add]
+                Rr = Rr[order]
+                st_r = [st_r[i] for i in order]
+                eds_r = np.array([s["eds"] for s in st_r])
+                mr = {}
+                for z, zi in (("h", 0), ("v", 1)):
+                    vals, dead = [], False
+                    for x, s in zip(Rr, st_r):
+                        m = np.inf if dead else mnds(x, s, z, zi, n_perc)
+                        vals.append(m)
+                        dead = dead or not np.isfinite(m)
+                    mr[z] = np.array(vals)
+            Ra, Sa = self._avg_curve(Rr, mr["h"], mr["v"])
             R0 = None
             if Ra.size >= 2:
-                eds_a = ph.loglog_interp(Ra, R, np.maximum(eds, 1e-300))
+                eds_a = ph.loglog_interp(Ra, Rr, np.maximum(eds_r, 1e-300))
                 R0 = self._crossing(Ra, Sa, eds_a)
                 if R0 is None:
                     # no crossing: either the signal suffices up to the end of the grid, or the bar pattern
                     # frequency exceeds the resolution limit (MNDS infinite) beyond the last averaged range
-                    dead = not (np.all(np.isfinite(mn["h"])) and np.all(np.isfinite(mn["v"])))
+                    dead = not (np.all(np.isfinite(mr["h"])) and np.all(np.isfinite(mr["v"])))
                     R0 = float(Ra[-1]) if dead else float("inf")
                 elif R0 == "below":
                     R0 = None
@@ -3761,6 +3863,12 @@ class TRM4Model:
             "ms")
         add(g, "Sensor timing limit (%s)" % ("exposure overlaps readout" if self.exp_overlap else
                                              "readout after exposure"), "%.4g" % (self.t_timing * 1e3), "ms")
+        hz = getattr(self, "horizon", None)
+        if hz:
+            add(g, "Line of sight: imager / target height above ground (extension)",
+                "%.4g / %.4g" % (hz["h_imager_m"], hz["h_target_m"]), "m")
+            add(g, "Horizon over flat terrain: with standard refraction / geometric (extension)",
+                "%.4g / %.4g" % (hz["refracted_km"], hz["geometric_km"]), "km")
         ds_ = "Data sources"
         add(ds_, "Optics MTF route", {"A": "Mode A - computed (diffraction + aberration model)",
                                       "B": "Mode B - imported optics MTF (no extra diffraction)",
