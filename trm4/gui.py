@@ -680,6 +680,8 @@ TABS = [
                                                   ("pixel2", "pixel^2/Hz")], cond=JIT_PSD),
         F("stab.residual_los", "Data are residual LOS after stabilization", "bool",
           cond=lambda p: JIT_PSD(p) or JIT_MEAS(p)),
+        F("stab.eis", "Electronic stabilization: frame-to-frame jitter removed (extension)", "bool",
+          cond=lambda p: JIT_PSD(p) or JIT_MEAS(p)),
         F("stab.jitter_file", "Jitter file ('t h v' or 'h v')", "file",
           {"check": IM.jitter_summary, "title": "Import measured line-of-sight jitter"}, cond=JIT_MEAS),
         F("stab.jitter_unit", "Motion unit in file", "choice", [("urad", "microradian"), ("mrad", "milliradian"),

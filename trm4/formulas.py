@@ -269,6 +269,8 @@ FIELD = {
     "stab.jitter_mode": (_P, "Motion from the vibration models, a measured time series or a PSD."),
     "stab.psd_file": (_P, "sigma^2 = Int PSD(f) [1 - sinc^2(f t_int)] df; MTF = exp(-2 pi^2 sigma^2 r^2)."),
     "stab.psd_unit": (_P, "Converts the PSD to mrad^2 / Hz."),
+    "stab.eis": (_P, "Frame-to-frame jitter MTF exp(-2 pi^2 sigma_f^2 r^2) set to 1; the blur within the exposure "
+                     "stays."),
     "stab.residual_los": ("check", "Whether the data are the residual line of sight or the platform motion."),
     "stab.jitter_file": (_P, "Blur within the exposure and frame-to-frame jitter from the measured angles."),
     "stab.jitter_unit": (_P, "Converts the measured angles to mrad."),

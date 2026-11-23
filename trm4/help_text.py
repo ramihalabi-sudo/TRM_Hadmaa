@@ -538,7 +538,10 @@ HELP = {
                         "creates no new information. Without a calibrated noise / task model it is not credited in "
                         "the ranges (the filter is then ignored); tick to include the TRM4 model of the filter.",
     "dsp.pl_denoise": "Denoising is part of the pipeline. It is not modelled - documented so that the prediction is "
-                      "marked as not covering this processing.",
+                      "marked as not covering this processing. To include it, describe it with the existing inputs: "
+                      "temporal denoising = frame integration (number of frames or the recursive factor), spatial "
+                      "denoising = the digital filter with its kernel; super-resolution from sub-pixel motion = "
+                      "micro-scan.",
     "dsp.pl_compression": "Video compression. Lossy compression acts on the ranges only with an equivalent blur "
                           "(below); otherwise it is documented as not modelled.",
     "dsp.tone_mode": "Extension: tone curve or AGC that maps the signal to a quantized output stream (e.g. 8-bit "
@@ -581,6 +584,12 @@ HELP = {
     "stab.psd_file": "One-sided angular power spectral density of the residual line of sight: frequency [Hz] and "
                      "PSD (one column for both axes, or h and v columns).",
     "stab.psd_unit": "Unit of the PSD values (angle squared per Hz).",
+    "stab.eis": "Extension: electronic image stabilization registers the frames before they are displayed. The "
+                "frame-to-frame part of the measured motion (PSD x sinc^2(f t_int), or the jitter of the time series "
+                "between exposures) then does not blur the image the eye integrates; the blur within the exposure "
+                "is not affected. The interpolation of the shifted frames and the cropped field of view are not "
+                "modelled - best case. Only for measured or PSD motion; the random-vibration model is blur within "
+                "the exposure.",
     "stab.residual_los": "Tick when the data are the residual motion after stabilization. Unticked = platform "
                          "motion, which overestimates the blur when a stabilization loop is active.",
     "target.task_preset": "Version of the task criteria (line pairs across the critical dimension for detection / "

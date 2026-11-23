@@ -399,6 +399,8 @@ DEFAULT_PROJECT = {
              "jitter_mode": "model", "jitter_file": dict(_NOFILE), "jitter_unit": "urad", "jitter_rate_hz": 0.0,
              # angular PSD of the residual line-of-sight motion (field map Sec. 15.2.9)
              "psd_file": dict(_NOFILE), "psd_unit": "urad2", "residual_los": True,
+             # electronic image stabilization: frame-to-frame jitter of the measured / PSD motion removed (extension)
+             "eis": False,
              # allowed image smear during one exposure for the exposure budget [pixels] (review Sec. 4.3)
              "smear_allow_px": 0.5,
              # GUI preset that fills the random jitter (custom = user values)

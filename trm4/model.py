@@ -1454,7 +1454,11 @@ class TRM4Model:
                         "the codec and bit rate in use." % (X.EXTENSION, comp))
         if unmodelled:
             self.assume("Processing not modelled: %s - the prediction does not include these steps; compare with a "
-                        "measured end-to-end SFR of this processing state (Lab)." % ", ".join(unmodelled))
+                        "measured end-to-end SFR of this processing state (Lab).%s" % (
+                            ", ".join(unmodelled),
+                            " Denoising can be entered with the existing inputs: temporal denoising as frame "
+                            "integration (number of frames or the recursive factor), spatial denoising as the digital "
+                            "filter with its kernel." if dsp.get("pl_denoise") else ""))
 
     def _zemax_mtf_data(self):
         """Imported Zemax MTF converted to object space: {z: (r [1/mrad], mtf)}."""
@@ -1642,7 +1646,7 @@ class TRM4Model:
                 m = M.mtf_random_vibration(rg, stats["rms"])
                 self.warn("Jitter sample rate %.4g Hz is too low to resolve motion within the %.3g ms integration "
                           "time - the measured rms is used as random vibration." % (jd["rate"], t * 1e3))
-            elif not self.still:
+            elif not self.still and not self._eis(sig_f):
                 m = m * M.mtf_random_vibration(rg, sig_f)              # frame-to-frame jitter seen by the eye
             drift_eye = abs(stats["drift"]) * self.t_eye
             if drift_eye > 0.5 * self.alpha_s[z]:
@@ -1697,10 +1701,23 @@ class TRM4Model:
             self._psd_cache[key] = (math.sqrt(s_i), math.sqrt(s_f), math.sqrt(s_t))
         return self._psd_cache[key]
 
+    def _eis(self, sigma_frame):
+        """Electronic image stabilization (extension, off by default): the frames are registered before they are shown,
+        so the frame-to-frame jitter does not blur the image the eye integrates.  The blur within the exposure stays."""
+        if not self.p["stab"].get("eis"):
+            return False
+        if not getattr(self, "_eis_noted", False):
+            self._eis_noted = True
+            self.assume("Electronic image stabilization: the frame-to-frame jitter (%.3g urad rms) is taken as removed "
+                        "by the registration of the frames; the blur within the exposure remains. The interpolation "
+                        "of the shifted frames and the crop of the field of view are not modelled, so this is the "
+                        "best case. %s" % (sigma_frame * 1e3, X.EXTENSION))
+        return True
+
     def _psd_mtf(self, r, z):
         s_i, s_f, _ = self.psd_stats(z)
         m = M.mtf_random_vibration(r, s_i)                  # blur during the exposure
-        if not self.still and not self.algo:
+        if not self.still and not self.algo and not self._eis(s_f):
             m = m * M.mtf_random_vibration(r, s_f)          # frame-to-frame jitter seen by the eye in video
         return m
 

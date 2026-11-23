@@ -74,6 +74,17 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.34 - electronic stabilization and the documented processing steps (U12); U14 closed by a check
+
+Off by default: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation | Source / limits |
+|---|---|---|
+| U12 Electronic image stabilization | *Electronic stabilization: frame-to-frame jitter removed* (Stabilization page, `stab.eis`, for measured or PSD motion): the frame-to-frame Gaussian MTF of `_psd_mtf` / `_jitter_mtf` is not applied (`TRM4Model._eis`); the blur within the exposure stays. MWIR template with 45 urad rms of mostly slow motion: Identification 2.63 -> 3.32 km (3.35 km without motion). | Best case: the interpolation of the shifted frames and the cropped field of view are not modelled (listed under assumptions). No effect on the random-vibration model or on a still frame. |
+| U12 Documented processing | With *Denoising active* the assumption and the help text say how to describe it with the existing inputs: temporal denoising = frame integration, spatial denoising = the digital filter, super-resolution = micro-scan. | The flag itself still changes no range. |
+| U14 Range-dependent noise | Nothing to add: in the Thermal category target, background and air are blackbodies at one temperature, so the background flux - and with it the NETD - is the same at every range (`test_thermal_background_flux_does_not_depend_on_the_range`); the General category already evaluates the noise at every range. | The report item was wrong on this point. |
+| Tests | `tests/test_processing_blocks.py` (7 tests). The new field has a Hebrew guide card without a recording and a formula entry. | - |
+
 ## Version 2.33 - every field shows the step of the calculation it enters and its formula
 
 The model is not touched: template ranges are unchanged; the run IDs change with the version number.
