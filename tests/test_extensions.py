@@ -203,6 +203,27 @@ class RangeBands(unittest.TestCase):
         self.assertEqual(len(b["turb"]), 1)
         self.assertEqual(len(b["atms"]), 2)
 
+    def test_target_in_the_envelope(self):
+        plain = AN.range_bands(template(MWIR))
+        b = AN.range_bands(template(MWIR), target=True)
+        self.assertEqual(b["turb"][1:], ["Target size -25 %", "Target size +25 %", "Target dT / 2", "Target dT x 2"])
+        self.assertEqual(b["base"], plain["base"])                      # the nominal case is unchanged
+        for t in b["tasks"]:
+            nom, small, large, cold, hot = (row[0] for row in b["grid"][t])
+            self.assertLess(small, nom)
+            self.assertGreater(large, nom)
+            self.assertLessEqual(cold, nom)
+            self.assertGreaterEqual(hot, nom)
+            self.assertLessEqual(b["band"][t]["min"], plain["band"][t]["min"])
+            self.assertGreaterEqual(b["band"][t]["max"], plain["band"][t]["max"])
+        # identification is limited by the sampling: the size moves it almost in proportion, dT hardly
+        small, large = b["grid"]["Identification"][1][0], b["grid"]["Identification"][2][0]
+        self.assertAlmostEqual(large / small, 1.25 / 0.75, delta=0.12)
+        self.assertIn("target size", b["method"])
+        # no temperature difference in the Visible category
+        v = AN.range_bands(template(VIS), target=True)
+        self.assertEqual(v["turb"][3:], ["Target size -25 %", "Target size +25 %"])
+
 
 class GlobalSensitivity(unittest.TestCase):
     def test_sobol_estimators(self):

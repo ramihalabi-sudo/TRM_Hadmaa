@@ -85,6 +85,13 @@ HELP = {
                          "parameter q, or a Gaussian blur spot.",
     "optics.q": "Aberration parameter q (> 1). Ratio of real blur to diffraction blur; 1 means "
                 "diffraction-limited, larger values mean poorer optics.",
+    "optics.defocus_um": "Extension: distance between the image plane and the best focus, in micrometres (sign "
+                         "does not matter). The optics MTF becomes the transfer function of the defocused pupil, "
+                         "calculated from the aperture shape. Within the depth of focus +-2 lambda F^2 the loss is "
+                         "small (Strehl >= 0.8); beyond it the MTF falls quickly. Sources of a focus error: a target "
+                         "closer than the focus distance, or a temperature change of a lens that is not athermal - "
+                         "a germanium lens of focal length f shifts by about f x 132e-6 per kelvin. 0 = in focus. "
+                         "Not applied to an imported optics MTF.",
     "optics.blur_um": "Standard deviation of a Gaussian blur spot in the image plane that represents the "
                       "optical aberrations.",
     "optics.zemax_mtf": "Import an MTF table: Zemax OpticStudio FFT/Huygens MTF export, or a measured / simulated "
@@ -228,6 +235,15 @@ HELP = {
                           "image appears to the eye.",
     "display.pitch_v_mm": "Vertical size of one display pixel.",
     "display.luminance": "Average brightness of the display. The eye's contrast sensitivity depends on it.",
+    "display.ambient_lux": "Extension (diagnostic): illuminance of the ambient light falling on the screen. A "
+                           "diffusely reflecting screen adds the luminance reflectance x illuminance / pi, which "
+                           "lowers every displayed contrast by L / (L + L_reflected). The TRM4 observer has no "
+                           "contrast threshold, so the ranges are not changed - the factor is reported and a warning "
+                           "is given below 0.5. Office 300-500 lux, overcast daylight 1000-10000 lux, direct sun "
+                           "up to 100000 lux. 0 = dark room.",
+    "display.reflectance": "Diffuse reflectance of the screen surface (0-1), used with the ambient light. A few "
+                           "per cent for a display with an anti-reflection coating; take it from the display data "
+                           "sheet. Default 0.04 is an assumption.",
     "display.neglect_eye": "Ignore the eye MTF (assume a perfect eye), e.g. when the display is magnified "
                            "enough.",
     "display.observation": "Display viewed directly, or through an eyepiece (e.g. a viewfinder).",
@@ -320,6 +336,21 @@ HELP = {
                        "1976). Gas line absorption is not included - a lower bound in clear air, aerosol only in "
                        "the MWIR.\nSpectral: imported wavelength- and range-dependent transmission (e.g. MODTRAN).",
     "atmosphere.atm.N.on": "Calculate ranges for this atmosphere (up to three weather conditions are compared).",
+    "atmosphere.scale_height_km": "Extension: the extinction falls off with height as exp(-h / H). The entered "
+                                  "extinction (or visual range) is then the ground-level value, and the path uses "
+                                  "its mean along the line of sight between imager and target height - important "
+                                  "when looking down from a mast, a hill or an aircraft. Measured aerosol scale "
+                                  "heights: about 0.6 km in clean air, 1.7 km in haze; water vapour 1 - 2 km. "
+                                  "0 = homogeneous path (TRM4). Not applied to imported spectral data or to rain.",
+    "atmosphere.rain_mmh": "Extension: rain rate. Adds the extinction 1.2924 R^0.6436 dB/km (ITU-R P.1814-1) to "
+                           "every atmosphere, the same in every band - rain drops are much larger than the "
+                           "wavelength, so the thermal bands lose as much as the visible. Light rain 2.5 mm/h, "
+                           "heavy rain 25 mm/h. 0 = no rain.",
+    "atmosphere.extra_sigma": "Extension: an additional extinction coefficient added to every atmosphere, for "
+                              "losses the selected extinction model does not contain - above all gas absorption "
+                              "(CO2, water vapour lines) in the MWIR when the extinction is derived from the "
+                              "weather, which is aerosol only below 8 um. Take the value from MODTRAN or a "
+                              "measurement. 0 = none.",
     "atmosphere.atm.N.sigma": "Extinction coefficient: transmission = tau0 * exp(-sigma * range). Larger value "
                               "= worse weather, shorter range.",
     "atmosphere.atm.N.V_km": "Meteorological visual range; converted to an extinction coefficient.",
@@ -578,6 +609,13 @@ HELP = {
     "target.tasks.N.v50": "V50 of the TTP metric for this task [cycles on target] (defaults 2.7 / 14.5 / 20.8; "
                           "identification ~ 20 is the order of the NVESD tracked-vehicle set, the others are typical "
                           "orders of magnitude). Calibrate for the target set.",
+    "target.point": "Extension: also report the range at which the target is detected as a point source - the pixel "
+                    "that holds it exceeds the noise by the SNR criterion. For targets smaller than a pixel (drones, "
+                    "distant aircraft), where the line-pair criterion does not describe the task. Signal = "
+                    "difference signal x (target solid angle / pixel solid angle) x the fraction of the blurred "
+                    "point image that falls on one pixel. The TRM4 ranges are not changed.",
+    "target.point_snr": "Signal-to-noise ratio of a single pixel required to detect a point target. 5 is a common "
+                        "engineering value for a low false-alarm rate; it is an assumption, not a TRM4 constant.",
     "target.geo_limit": "Extension: range at which the task line pairs fit across the critical dimension "
                         "sqrt(a_h a_v) with one line pair = the larger of 2 pixels (Nyquist) and lambda / D "
                         "(diffraction). No noise, contrast or atmosphere - a sizing reference, not a bound: TRM4 also "
@@ -640,7 +678,11 @@ HELP = {
     "detector.snr_req": "Pixel SNR the mission requires. The exposure budget reports the SNR at the selected and at "
                         "the recommended integration time. 0 = not checked.",
     "detector.dark_mode": "Single value: the dark current below is used as entered. Table: the dark current is "
-                          "interpolated (log-linear) at the sensor operating temperature from a calibration table.",
+                          "interpolated (log-linear) at the sensor operating temperature from a calibration table. "
+                          "Rule 07 (extension): the dark current density of p-on-n HgCdTe from the sensor "
+                          "temperature and the cut-off wavelength of the QE curve (Tennant et al. 2008), times the "
+                          "pixel pitch area - for trading the operating temperature (HOT detectors) when no table "
+                          "exists. Other materials follow other laws.",
     "detector.dark_table": "Calibration table of the dark current per pixel: one 'temperature[K] current[A]' pair "
                            "per line, at least two rows. Outside the table the edge value is used.",
     "detector.T_sensor_K": "Operating temperature of the focal plane array. Used to look up the dark current in the "

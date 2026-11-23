@@ -440,6 +440,7 @@ TABS = [
                                                                         ("blur", "Gaussian blur")], cond=OPT_MODEL),
         F("optics.q", "Aberration parameter q (>1)", cond=lambda p: OPT_MODEL(p) and p["optics"]["aberration"] == "q"),
         F("optics.blur_um", "Gaussian blur sigma", cond=lambda p: OPT_MODEL(p) and p["optics"]["aberration"] == "blur", unit="um"),
+        F("optics.defocus_um", "Focus error at the image plane (0 = in focus, extension)", cond=OPT_MODEL, unit="um"),
         H("Transmission"),
         F("optics.tau_mode", "Optics transmission", "choice", [("value", "Peak transmission value"),
                                                               ("zemax", "Spectral curve from file (.csv/.txt)")]),
@@ -551,14 +552,16 @@ TABS = [
           p["detector"].get("dark_mode", "value") != "value"),
         F("detector.electron_gain", "Electron gain", cond=RADIOMETRIC),
         F("detector.dark_mode", "Dark current via", "choice", [("value", "Single value"),
-                                                              ("table", "Calibrated table vs sensor temperature")],
+                                                              ("table", "Calibrated table vs sensor temperature"),
+                                                              ("rule07", "Rule 07 (HgCdTe) from the sensor temperature "
+                                                                         "and the QE cut-off (extension)")],
           RADIOMETRIC),
         F("detector.dark_A", "Dark current", cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode", "value") == "value",
           unit="A"),
         F("detector.dark_table", "Dark current table: 'T_sensor[K] I_dark[A]' per line", "multiline",
           cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") == "table"),
         F("detector.T_sensor_K", "Sensor operating temperature", unit="K",
-          cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") == "table"),
+          cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") in ("table", "rule07")),
         F("detector.noise_figure", "Noise figure (multiplicative)", cond=RADIOMETRIC),
         H("ADC resolution", level="adv", active=lambda p: p["detector"].get("adc_mode", "none") != "none"),
         F("detector.adc_mode", "ADC quantization noise", "choice", [("none", "Not specified"), ("carriers", "LSB in carriers"),
@@ -651,6 +654,10 @@ TABS = [
         F("display.pitch_h_mm", "Horizontal element pitch", unit="mm"),
         F("display.pitch_v_mm", "Vertical element pitch", unit="mm"),
         F("display.luminance", "Operational display luminance", unit="cd/m2"),
+        F("display.ambient_lux", "Ambient light on the display (0 = dark room, diagnostic)", unit="lux",
+          cond=lambda p: p["display"]["observation"] == "direct"),
+        F("display.reflectance", "Diffuse reflectance of the screen", cond=lambda p:
+          p["display"]["observation"] == "direct" and float(p["display"].get("ambient_lux", 0.0) or 0.0) > 0),
         H("Observer calibration constants (TRM4 defaults)"),
         F("display.snr_th", "Threshold SNR"),
         F("display.t_eye_s", "Eye integration time", unit="s",
@@ -749,6 +756,8 @@ TABS = [
         F("target.prob_levels", "Also report P80 / P90 ranges (Johnson TTPF)", "bool", cond=lambda p: not POT(p)),
         F("target.ttp", "Also report TTP / V50 ranges (Vollmerhausen 2004)", "bool", cond=lambda p: not POT(p)),
         F("target.geo_limit", "Also report the geometric reference range (Nyquist / diffraction)", "bool"),
+        F("target.point", "Also report the detection range as a point (sub-pixel) target", "bool"),
+        F("target.point_snr", "Point target: single-pixel SNR criterion", cond=lambda p: bool(p["target"].get("point"))),
         F("target.clutter", "Background clutter", "choice", [("not_specified", "Not specified"), ("low", "Low"),
                                                              ("medium_low", "Medium-low"), ("medium", "Medium"),
                                                              ("high", "High")]),
@@ -803,6 +812,14 @@ TABS = [
         F("atmosphere.atm.0.F_PR", "Path radiance factor", cond=lambda p: SPEC_ATM(p) and NOT_THERMAL(p)
           and p["atmosphere"].get("path_mode") != "import"),
     ] + _atm_rows() + [
+        H("Slant path, rain and additional extinction (extensions, 0 = off)", cond=lambda p: not SPEC_ATM(p),
+          level="advanced", active=lambda p: any(float(p["atmosphere"].get(k, 0.0) or 0.0) > 0 for k in
+                                                 ("scale_height_km", "rain_mmh", "extra_sigma"))),
+        F("atmosphere.scale_height_km", "Extinction scale height (0 = homogeneous path)", unit="km",
+          cond=lambda p: not SPEC_ATM(p)),
+        F("atmosphere.rain_mmh", "Rain rate (0 = no rain)", unit="mm/h", cond=lambda p: not SPEC_ATM(p)),
+        F("atmosphere.extra_sigma", "Additional extinction, e.g. gas absorption (0 = none)", unit="1/km",
+          cond=lambda p: not SPEC_ATM(p)),
         H("Path radiance (independent of the direct-path transmittance)", cond=NOT_THERMAL),
         F("atmosphere.path_mode", "Path radiance", "choice", [("model", "Modelled (air temperature / path radiance factor)"),
                                                               ("import", "Imported spectral path radiance")], NOT_THERMAL),
@@ -1565,6 +1582,7 @@ class SensitivityTab(ttk.Frame):
         self.adv_step = tk.StringVar(value="25")
         self.adv_robust = tk.BooleanVar(value=True)
         self.band_factor = tk.StringVar(value="10")
+        self.band_target = tk.BooleanVar(value=True)
         self.c2_climate = tk.StringVar(value="Arid")
         self.c2_season = tk.StringVar(value="summer")
         self.c2_overcast = tk.BooleanVar(value=False)
@@ -1587,7 +1605,7 @@ class SensitivityTab(ttk.Frame):
         elif mode == "advisor":
             extra = [self.adv_task.get(), self.adv_minfov.get(), self.adv_step.get(), self.adv_robust.get()]
         elif mode == "bands":
-            extra = [self.band_factor.get()]
+            extra = [self.band_factor.get(), bool(self.band_target.get())]
         elif mode == "cn2stats":
             extra = [self.c2_climate.get(), self.c2_season.get(), bool(self.c2_overcast.get()),
                      bool(self.c2_neutral.get())]
@@ -1720,6 +1738,9 @@ class SensitivityTab(ttk.Frame):
         fr.pack(fill="x", pady=(6, 0))
         ttk.Label(fr, text="Turbulence factor (Cn2 / f, x f)").pack(side="left")
         ttk.Entry(fr, textvariable=self.band_factor, width=7).pack(side="left", padx=(6, 0))
+        ttk.Checkbutton(self.opts, variable=self.band_target,
+                        text="Include the target: size -/+ %g %%, temperature difference / %g and x %g" % (
+                            AN.TARGET_SIZE_PCT, AN.TARGET_DT_FACTOR, AN.TARGET_DT_FACTOR)).pack(anchor="w", pady=(4, 0))
 
     def _opts_cn2stats(self):
         self._section_label(self.opts, "Cn2 statistics: the DRI ranges for the turbulence measured over a year by "
@@ -2058,7 +2079,8 @@ class SensitivityTab(ttk.Frame):
                 fac = float(self.band_factor.get())
             except ValueError:
                 raise ValueError("Enter a numeric turbulence factor.")
-            return lambda prog, stop: AN.range_bands(p, prog, stop=stop, factor=fac)
+            tgt = bool(self.band_target.get())
+            return lambda prog, stop: AN.range_bands(p, prog, stop=stop, factor=fac, target=tgt)
         if mode == "cn2stats":
             climate, season, overcast = self.c2_climate.get(), self.c2_season.get(), bool(self.c2_overcast.get())
             neutral = bool(self.c2_neutral.get())

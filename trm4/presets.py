@@ -324,7 +324,8 @@ DEFAULT_PROJECT = {
               # exposure limits; 0 = not specified.  bin_kind: charge (hardware) or digital (sum after readout)
               "exp_overlap": True, "guard_ms": 0.0, "exp_min_ms": 0.0, "exp_max_ms": 0.0, "bin_kind": "charge",
               "roi": ""},
-    "optics": {"aperture": "circular", "D_mm": 50.0, "D_obsc_mm": 0.0, "W_trunc_h_mm": 0.0,
+    "optics": {"defocus_um": 0.0,            # focus error at the image plane [um], 0 = in focus (extension)
+               "aperture": "circular", "D_mm": 50.0, "D_obsc_mm": 0.0, "W_trunc_h_mm": 0.0,
                "W_trunc_v_mm": 0.0, "f_mm": 100.0, "diff_focal": False, "f_v_mm": 100.0, "F_general": 2.0,
                "diffraction": "spectral", "lambda_diff_um": 0.0, "aberration": "none", "q": 1.3,
                "blur_um": 5.0, "tau_opt": 0.8, "tau_filter": 1.0,
@@ -390,7 +391,9 @@ DEFAULT_PROJECT = {
                 # observer (field map Sec. 15.2.8): legacy = TRM4 standard observer
                 "observer": "legacy", "algo_id": "", "algo_calib": "", "algo_roc": "",
                 # algorithm criterion: lp = TRM4 line pairs (uncalibrated), pot = pixels on target + pixel CNR
-                "algo_criterion": "lp", "algo_cnr_min": 3.0},
+                "algo_criterion": "lp", "algo_cnr_min": 3.0,
+                # ambient light on the screen (diagnostic, 0 = dark room) and its diffuse reflectance
+                "ambient_lux": 0.0, "reflectance": 0.04},
     "stab": {"neglect": False, "random_on": False, "rand_h_mrad": 0.0, "rand_v_mrad": 0.0,
              "lin_on": False, "lin_h": 0.0, "lin_v": 0.0, "sin_on": False, "sin_h": 0.0, "sin_v": 0.0,
              "jitter_mode": "model", "jitter_file": dict(_NOFILE), "jitter_unit": "urad", "jitter_rate_hz": 0.0,
@@ -414,7 +417,9 @@ DEFAULT_PROJECT = {
                "task_preset": "legacy", "clutter": "not_specified", "scene_id": "",
                # extensions: P80 / P90 ranges (Johnson TTPF), clutter multiplier of the Detection criterion,
                # TTP / V50 ranges, geometric (Nyquist / diffraction) reference range
-               "prob_levels": True, "clutter_model": False, "ttp": False, "geo_limit": True},
+               "prob_levels": True, "clutter_model": False, "ttp": False, "geo_limit": True,
+               # detection range of the target as a point (sub-pixel) source and its single-pixel SNR criterion
+               "point": False, "point_snr": 5.0},
     "irradiance": {"mode": "none", "type": "broadband", "spectrum": "colour", "T_colour_K": 5800.0,
                    "E_peak": 1239.0, "E_eff": 100.0, "preset": "Direct sunlight", "lambda_um": 0.85,
                    "E_mono": 1.0, "T_bb_K": 6000.0, "geometry": "extended", "beta_h_deg": 0.0,
@@ -423,6 +428,9 @@ DEFAULT_PROJECT = {
                    "atm": [_atm(True, 0.2), _atm(True, 1.0), _atm(False, 0.5)],
                    "spec_file": dict(_NOFILE), "spec_L_km": 1.0,
                    "path_mode": "model", "path_file": dict(_NOFILE), "path_L_km": 1.0,
+                   # extensions (0 = off): extinction scale height of slant paths [km], rain rate [mm/h] and a
+                   # user-supplied additional extinction [1/km] (e.g. gas absorption), for the non-imported modes
+                   "scale_height_km": 0.0, "rain_mmh": 0.0, "extra_sigma": 0.0,
                    # documentation of imported atmospheric data (field map Sec. 15.2.12)
                    "meta": {"geometry": "", "source": "", "conditions": "",
                             # versioning of spectral RT data (research review Sec. 3.18 / 7.6)

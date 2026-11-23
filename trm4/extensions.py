@@ -654,6 +654,79 @@ HORIZON_KM_GEOMETRIC = 3.57
 HORIZON_KM_REFRACTED = 3.86
 
 
+# ---------------------------------------------------------------------------------------------
+# Dark current of HgCdTe versus temperature: "Rule 07"
+# ---------------------------------------------------------------------------------------------
+# J = J0 exp[C q 1.24 / (k lambda_e T)]  [A/cm^2], lambda_e = lambda_c for lambda_c >= lambda_threshold, else
+# lambda_c / [1 - (lambda_scale / lambda_c - lambda_scale / lambda_threshold)^P]: Tennant, Lee, Zandian, Piquette &
+# Carmody, "MBE HgCdTe technology: a very general solution to IR detection, described by Rule 07, a very convenient
+# heuristic", J. Electron. Mater. 37, 1406 (2008).  Constants as implemented in the open-source lentil library
+# (github.com/andykee/lentil, detector.rule07_dark_current).  An empirical rule for p-on-n HgCdTe photodiodes; newer
+# devices can lie below it (Leisenring et al., Astron. Nachr. 2023, arXiv:2306.05470) and other materials differ.
+RULE07 = {"J0": 8367.00001853855, "C": -1.16239134096245, "lam_th": 4.63513642316149, "lam_s": 0.200847413564122,
+          "P": 0.544071281108481, "k": 1.3802e-23, "q": 1.6021e-19}
+
+
+def rule07_current_density(lam_c_um, T_K):
+    """Rule 07 dark current density [A/cm^2] for a cut-off wavelength [um] and an operating temperature [K]."""
+    c, T = float(lam_c_um), float(T_K)
+    if not (c > 0 and T > 0):
+        raise ValueError("Rule 07 needs a cut-off wavelength and a temperature > 0")
+    k = RULE07
+    lam_e = c if c >= k["lam_th"] else c / (1.0 - (k["lam_s"] / c - k["lam_s"] / k["lam_th"]) ** k["P"])
+    return k["J0"] * math.exp(k["C"] * 1.24 * k["q"] / (k["k"] * lam_e * T))
+
+
+# ---------------------------------------------------------------------------------------------
+# Ambient light on the display (diagnostic)
+# ---------------------------------------------------------------------------------------------
+def display_ambient(luminance, ambient_lux, reflectance):
+    """Ambient light reflected by a diffusely reflecting screen: L_refl = rho E / pi [cd/m^2] (Lambertian surface),
+    and the factor L / (L + L_refl) by which it lowers every displayed contrast."""
+    L, E, rho = float(luminance), float(ambient_lux), float(reflectance)
+    L_refl = rho * E / math.pi
+    return {"L_refl": L_refl, "contrast_factor": L / (L + L_refl) if L + L_refl > 0 else 1.0}
+
+
+AMBIENT_WARN_FACTOR = 0.5         # displayed contrast factor below which the diagnostic warns
+
+
+# ---------------------------------------------------------------------------------------------
+# Rain, and an extinction that falls off with height (slant paths)
+# ---------------------------------------------------------------------------------------------
+# Specific attenuation of rain gamma = k R^alpha [dB/km], R the rain rate [mm/h]: Recommendation ITU-R P.1814-1
+# (09/2025), Eq. (11) and Table 4 - best fit for a Gamma drop size distribution; the shape parameter mu = 0 is used
+# (mu = -2 ... 2 gives k = 2.2838 ... 1.0505, alpha = 0.4050 ... 0.7497).  The drops are much larger than the
+# wavelength, so the attenuation is the same from the visible to the thermal infrared (same Recommendation, 4.1.2.2).
+RAIN_K, RAIN_ALPHA = 1.2924, 0.6436
+RAIN_SPAN = ((1.0505, 0.7497), (2.2838, 0.4050))      # mu = 2 and mu = -2 of Table 4
+DB_PER_NEPER = 10.0 / math.log(10.0)                  # 4.343 dB per unit of optical depth
+
+
+def rain_extinction(rate_mmh, k=RAIN_K, alpha=RAIN_ALPHA):
+    """Extinction coefficient of rain [1/km] at a rain rate [mm/h], the same in every band."""
+    r = float(rate_mmh)
+    if r < 0:
+        raise ValueError("Rain rate must be >= 0")
+    return k * r ** alpha / DB_PER_NEPER if r > 0 else 0.0
+
+
+def height_factor(h1_m, h2_m, H_km):
+    """Mean of exp(-h / H) along a straight line of sight between the heights h1 and h2 [m] above the ground: the
+    factor on the ground-level extinction coefficient when it falls off exponentially with the scale height H [km].
+
+    Measured aerosol scale heights: 0.63 +- 0.33 km in clean air, 1.71 +- 0.84 km in haze (MODIS optical thickness
+    and surface visibility, J. Korean Assoc. Geographic Information Studies 16(2), 141, 2013); water vapour typically
+    1 - 2 km.  H <= 0: homogeneous path (factor 1)."""
+    H = float(H_km)
+    if not H > 0:
+        return 1.0
+    a, b = max(float(h1_m), 0.0) / 1000.0 / H, max(float(h2_m), 0.0) / 1000.0 / H
+    if abs(b - a) < 1e-9:
+        return math.exp(-a)
+    return (math.exp(-a) - math.exp(-b)) / (b - a)
+
+
 def horizon_km(h1_m, h2_m, refraction=True):
     """Largest distance [km] at which two points h1 and h2 [m] above flat terrain / the sea see each other:
     k (sqrt(h1) + sqrt(h2)) - the sum of the two single-height horizon distances."""

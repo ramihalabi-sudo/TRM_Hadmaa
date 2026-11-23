@@ -981,11 +981,32 @@ def _all_atm_ranges(project):
     return [(a["label"], task_ranges(a)) for a in rg["atm"]]
 
 
-def range_bands(project, progress=None, stop=None, factor=10.0, runner=None):
+TARGET_DT_FACTOR = 2.0            # target temperature difference / 2 and x 2 (assumption for the scenario envelope)
+TARGET_SIZE_PCT = 25.0            # target width and height -25 % and +25 % (assumption for the scenario envelope)
+
+
+def _scale_target(project, dT=1.0, size=1.0):
+    """Copy of the project with the target temperature difference x dT and the target width and height x size."""
+    case = copy.deepcopy(project)
+    tg = case.setdefault("target", {})
+    base = P.DEFAULT_PROJECT["target"]
+    if dT != 1.0:
+        tg["dT_K"] = float(tg.get("dT_K", base["dT_K"])) * dT
+    if size != 1.0:
+        for k in ("W_m", "H_m"):
+            tg[k] = float(tg.get(k, base[k])) * size
+    return case
+
+
+def range_bands(project, progress=None, stop=None, factor=10.0, runner=None, target=False):
     """DRI ranges over weather x turbulence: every active atmosphere slot (one run computes all of them) and, when
     turbulence acts, Cn2 / factor, Cn2 and Cn2 x factor (one decade of Cn2 ~ +/-35 % range in the visible, report
     Sec. 4.3).  The band of a task is the smallest / largest range of the grid - a scenario envelope, not a
-    probability interval."""
+    probability interval.
+
+    target=True adds the target to the envelope, at the nominal turbulence: its width and height -/+ 25 % and, where
+    the temperature difference is the signal (Thermal, General), dT / 2 and x 2 - the inputs with the largest effect
+    on the range (elasticity 0.5 - 1.0) and the largest uncertainty in the field."""
     progress = progress or _noop
     p = P.deep_merge(P.DEFAULT_PROJECT, project)
     if p["mode"]["environment"] != "field":
@@ -997,8 +1018,19 @@ def range_bands(project, progress=None, stop=None, factor=10.0, runner=None):
         if _turbulence_on(p) else [("no turbulence" if p["category"] != "Thermal" or p["turbulence"].get("thermal")
                                     else "no turbulence (Thermal, TRM4)", 1.0)]
     calls = [(_all_atm_ranges, (_scale_turbulence(project, s) if s != 1.0 else project,)) for _l, s in levels]
+    i_nom = [s for _l, s in levels].index(1.0)
+    if target:
+        lo, hi = 1.0 - TARGET_SIZE_PCT / 100.0, 1.0 + TARGET_SIZE_PCT / 100.0
+        extra = [("Target size -%g %%" % TARGET_SIZE_PCT, {"size": lo}), ("Target size +%g %%" % TARGET_SIZE_PCT,
+                                                                          {"size": hi})]
+        if p["category"] != "Visible":
+            extra += [("Target dT / %g" % TARGET_DT_FACTOR, {"dT": 1.0 / TARGET_DT_FACTOR}),
+                      ("Target dT x %g" % TARGET_DT_FACTOR, {"dT": TARGET_DT_FACTOR})]
+        for lab, kw in extra:
+            levels.append((lab, None))
+            calls.append((_all_atm_ranges, (_scale_target(project, **kw),)))
     res = (runner or Runner(1)).map(calls, progress, stop, "Range bands")
-    nominal = res[[s for _l, s in levels].index(1.0)]
+    nominal = res[i_nom]
     if nominal is None:
         raise ModelError("The nominal case has no valid ranges.")
     atms = [lab for lab, _r in nominal]
@@ -1017,8 +1049,11 @@ def range_bands(project, progress=None, stop=None, factor=10.0, runner=None):
     return {"kind": "bands", "tasks": tasks, "base": base, "atms": atms, "turb": [l for l, _s in levels],
             "factor": factor, "grid": grid_, "band": band, "analysis_atm": atms[i_an], "time": _now(),
             "invalid": [l for (l, _s), r in zip(levels, res) if r is None], "engine": describe_engine(project),
-            "method": "Scenario envelope over the active atmospheres%s (full model run per turbulence level)." % (
-                " x Cn2 / %g, nominal, x %g" % (factor, factor) if len(levels) > 1 else "")}
+            "method": "Scenario envelope over the active atmospheres%s%s (full model run per level)." % (
+                " x Cn2 / %g, nominal, x %g" % (factor, factor) if _turbulence_on(p) else "",
+                "; target size -/+%g %%%s at the nominal turbulence (assumed spans)" % (
+                    TARGET_SIZE_PCT, " and dT / %g, x %g" % (TARGET_DT_FACTOR, TARGET_DT_FACTOR)
+                    if p["category"] != "Visible" else "") if target else "")}
 
 
 # ---------------------------------------------------------------------------------------------

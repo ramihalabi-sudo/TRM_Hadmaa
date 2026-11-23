@@ -95,6 +95,14 @@ class Atmosphere:
         self.spec = spec              # {"lam", "R", "tau"} resampled to the model grid
         self.path = path              # {"lam", "R", "L"} resampled to the model grid
         self.band_w = None            # spectral weight for the band-effective scalar transmission
+        # extensions (set by the model for the non-imported modes): rain, a user-supplied additional extinction and a
+        # ground-level extinction that falls off with the height of the line of sight
+        self.sigma_rain = 0.0         # [1/km], the same in every band, homogeneous along the path
+        self.sigma_extra = 0.0        # [1/km], e.g. gas absorption that the extinction model does not contain
+        self.height = None            # R_km -> mean of exp(-h / H) along the line of sight (None: homogeneous)
+
+    def _fac(self, R_km):
+        return self.height(R_km) if self.height else 1.0
 
     def tau_lam(self, R_km):
         """Transmission on the model wavelength grid (array) or a scalar in fast mode."""
@@ -105,7 +113,7 @@ class Atmosphere:
             # Beer-Lambert per wavelength from one path length (initial transmission: weather-derived extinction)
             with np.errstate(divide="ignore"):
                 k = -np.log(np.maximum(tab[:, 0], 1e-300)) / R[0]
-            return self.tau0 * np.exp(-k * R_km)
+            return self.tau0 * np.exp(-(k + self.sigma_extra) * R_km * self._fac(R_km) - self.sigma_rain * R_km)
         if R_km <= R[0]:
             # between 0 and the first tabulated range: log-linear towards tau = 1
             return np.maximum(tab[:, 0], 1e-300) ** (R_km / R[0]) if R[0] > 0 else tab[:, 0]
@@ -122,7 +130,8 @@ class Atmosphere:
     def tau(self, R_km):
         """Band-effective (scalar) transmission; Beer-Lambert with initial transmission, Eq. (2.29)."""
         if self.spec is None:
-            return self.tau0 * math.exp(-self.sigma * R_km)
+            return self.tau0 * math.exp(-(self.sigma + self.sigma_extra) * R_km * self._fac(R_km) -
+                                        self.sigma_rain * R_km)
         tl = self.tau_lam(R_km)
         w = self.band_w if self.band_w is not None else np.ones_like(tl)
         return float(ph.trapz(w * tl, self.spec["lam"]) / ph.trapz(w, self.spec["lam"]))
@@ -347,6 +356,22 @@ class TRM4Model:
             dist_m = float(disp["distance_cm"]) / 100.0
         self.m_sys = self.n_fov["v"] * float(disp["pitch_v_mm"]) / (self.fov["v"] * dist_m)
         self.gamma_eye = M.eye_gamma(float(disp["luminance"]), P.EYE_GAMMA)
+        self.ambient = None
+        E_amb, rho = float(disp.get("ambient_lux", 0.0) or 0.0), float(disp.get("reflectance", 0.04) or 0.0)
+        if E_amb < 0 or not 0 <= rho <= 1:
+            raise ModelError("Display: ambient illuminance must be >= 0 lux and the screen reflectance in [0, 1]")
+        if E_amb > 0 and disp.get("observer", "legacy") != "algorithm" and disp["observation"] == "direct":
+            self.ambient = dict(X.display_ambient(disp["luminance"], E_amb, rho), lux=E_amb, reflectance=rho)
+            msg = ("Ambient light %.4g lux on the display (diffuse reflectance %.3g): reflected luminance %.3g cd/m2 "
+                   "on a display of %.3g cd/m2 - every displayed contrast is multiplied by %.2f. The TRM4 observer "
+                   "model is limited by noise and has no contrast threshold of the eye, so the ranges are not "
+                   "reduced (diagnostic). %s" % (E_amb, rho, self.ambient["L_refl"], float(disp["luminance"]),
+                                                 self.ambient["contrast_factor"], X.EXTENSION))
+            if self.ambient["contrast_factor"] < X.AMBIENT_WARN_FACTOR:
+                self.warn(msg + " Shade the display or raise its luminance: the calculated ranges are optimistic for "
+                                "this viewing condition.")
+            else:
+                self.assume(msg)
         dist = abs(self.alpha_s["h"] * disp["pitch_v_mm"] * self.lrep /
                    (self.alpha_s["v"] * disp["pitch_h_mm"] * self.crep) - 1.0)    # Eq. (3.36)
         self.distortion = dist
@@ -403,6 +428,37 @@ class TRM4Model:
                           "is used, not extrapolated." % (T, pts[0, 0], pts[-1, 0]))
             self.dark_A = float(np.exp(np.interp(T, pts[:, 0], np.log(pts[:, 1]))))
             self.dark_label = "%.3g A at %.1f K (table, %d points)" % (self.dark_A, T, len(pts))
+        elif d.get("dark_mode") == "rule07":
+            T = float(d.get("T_sensor_K", 0.0) or 0.0)
+            if T <= 0:
+                raise ModelError("Dark current from Rule 07: the sensor operating temperature must be > 0 K")
+            lam_c = self._cutoff_um()
+            if not lam_c:
+                raise ModelError("Dark current from Rule 07: no cut-off wavelength (select a QE curve)")
+            J = X.rule07_current_density(lam_c, T)
+            area_cm2 = float(d["pitch_h_um"]) * float(d["pitch_v_um"]) * 1e-8
+            self.dark_A = J * area_cm2
+            self.dark_label = "%.3g A at %.1f K (Rule 07, cut-off %.2f um, %.3g A/cm2)" % (self.dark_A, T, lam_c, J)
+            self.assume("Dark current %.3g A per pixel from Rule 07 (Tennant et al. 2008) at %.1f K for the cut-off "
+                        "%.2f um of the QE curve and the pixel pitch area: an empirical rule for p-on-n HgCdTe - "
+                        "newer devices can lie below it, and InSb, XBn and T2SL detectors follow other laws; use a "
+                        "measured table where there is one. %s" % (self.dark_A, T, lam_c, X.EXTENSION))
+
+    def _cutoff_um(self):
+        """Long-wave cut-off of the detector [um]: the 50 % point of the preset QE curve, else the end of the QE
+        window."""
+        d = self.p["detector"]
+        pts = P.DETECTOR_QE.get(d.get("qe_preset"))
+        if pts:
+            lam = np.array([x for x, _q in pts], float)
+            q = np.array([y for _x, y in pts], float)
+            i = int(np.argmax(q))
+            half = 0.5 * q[i]
+            for j in range(i, len(q) - 1):
+                if q[j] >= half > q[j + 1]:
+                    return float(lam[j] + (lam[j + 1] - lam[j]) * (q[j] - half) / (q[j] - q[j + 1]))
+        win = P.qe_window(self.p)
+        return float(win[1]) if win else None
 
     # =========================================================================================
     # Spectral data (Sections 3.5, 3.6)
@@ -652,6 +708,8 @@ class TRM4Model:
             if self.atms and a.get("preset", "custom") != "custom":
                 self.assume("Atmosphere: '%s' preset extinction for the %s band (typical engineering value, "
                             "horizontal path near ground)." % (a["preset"], P.band_of(*self.band)))
+        if a["mode"] != "spectral":
+            self._atmosphere_extensions(a)
         if (a["mode"] == "spectral" or path is not None) and not self.lab:
             meta = a.get("meta") or {}
             missing = [k for k in ("geometry", "source", "conditions") if not str(meta.get(k, "")).strip()]
@@ -686,6 +744,39 @@ class TRM4Model:
                 tg["flight"] == "angle" and float(tg["angle_deg"]) < 0:
             self.warn("Upward looking geometry (sky background) is not implemented; the background is "
                       "treated as a Lambertian plane.")
+
+    def _atmosphere_extensions(self, a):
+        """Rain, additional extinction and the height dependence of the extinction (extensions, all 0 by default):
+        applied to the atmospheres of the extinction, visual-range and weather modes, not to imported data."""
+        rain, extra = float(a.get("rain_mmh", 0.0) or 0.0), float(a.get("extra_sigma", 0.0) or 0.0)
+        H = float(a.get("scale_height_km", 0.0) or 0.0)
+        if rain < 0 or extra < 0 or H < 0:
+            raise ModelError("Atmosphere: rain rate, additional extinction and extinction scale height must be >= 0")
+        self.atm_ext = {"rain_mmh": rain, "sigma_rain": X.rain_extinction(rain), "sigma_extra": extra, "H_km": H}
+        if not (rain or extra or H) or self.lab:
+            return
+        for x in self.atms:
+            x.sigma_rain, x.sigma_extra = self.atm_ext["sigma_rain"], extra
+            x.height = self._height_factor if H > 0 else None
+        if rain:
+            lo, hi = (X.rain_extinction(rain, k, al) for k, al in X.RAIN_SPAN)
+            self.assume("Rain %.3g mm/h: extinction %.3g /km added in every band (ITU-R P.1814-1, gamma = %.4g "
+                        "R^%.4g dB/km for a drop size distribution with mu = 0; other rain types give %.3g ... %.3g "
+                        "/km), homogeneous along the path. %s" % (
+                            rain, self.atm_ext["sigma_rain"], X.RAIN_K, X.RAIN_ALPHA, min(lo, hi), max(lo, hi),
+                            X.EXTENSION))
+        if extra:
+            self.assume("Additional extinction %.3g /km entered by the user (e.g. gas absorption that the extinction "
+                        "model does not contain) is added to every atmosphere. %s" % (extra, X.EXTENSION))
+        if H > 0:
+            self.assume("Extinction falls off with height: scale height %.3g km - the entered extinction is the "
+                        "ground-level value and is multiplied by the mean of exp(-h / H) along the line of sight "
+                        "(measured aerosol scale heights 0.6 km in clean air to 1.7 km in haze, water vapour 1 - 2 km; "
+                        "rain is not reduced). %s" % (H, X.EXTENSION))
+
+    def _height_factor(self, R_km):
+        h_i, h_t = self._los_heights(R_km)
+        return X.height_factor(h_i, h_t, self.atm_ext["H_km"])
 
     def _weather_atmosphere(self, i, at, path):
         """Atmosphere slot from visual range, relative humidity and air temperature (extension): spectral extinction
@@ -823,6 +914,7 @@ class TRM4Model:
             if D > 0 and Dobs >= D:
                 raise ModelError("Central obscuration must be smaller than the aperture")
         self.diff = {"h": M.DiffractionMTF(D, Dobs, Wh, Wv), "v": M.DiffractionMTF(D, Dobs, Wv, Wh)}
+        self.pupil = (D, Dobs, Wh, Wv)
         area = self.diff["h"].area
         self.A_pup = area
         self.D_eff = math.sqrt(4 * area / math.pi)                           # Eq. (3.48)
@@ -1237,13 +1329,54 @@ class TRM4Model:
             self.assume("Optics aberrations approximated by %s (full optical MTF not available)." %
                         ("the aberration parameter q = %g" % float(o["q"]) if o["aberration"] == "q" else
                          "a Gaussian blur of sigma = %g um" % float(o["blur_um"])))
+        dz = float(o.get("defocus_um", 0.0) or 0.0)
+        self.defocus = None
+        if dz and self.mtf_mode != "A":
+            self.warn("Focus error %.3g um is not applied: the imported optics MTF already describes the lens as "
+                      "measured or designed (its focus state included)." % dz)
+            dz = 0.0
+        if dz:
+            D, Dobs, Wh, Wv = self.pupil
+            defoc = {"h": M.DefocusMTF(D, Dobs, Wh, Wv), "v": M.DefocusMTF(D, Dobs, Wv, Wh)}
+            lam_m = float(ph.trapz(lam * self.w, lam))
+            self.defocus = {"dz_um": dz, "depth_um": 2.0 * lam_m * self.F_eff ** 2,
+                            "blur_mrad": abs(dz) / (self.F_eff * self.f_eff), "lam_um": lam_m, "first_zero": {}}
+            self.assume("Focus error %.4g um at the image plane = %.3g x the depth of focus (+-2 lambda F^2 = +-%.4g um "
+                        "at %.3g um): the optics MTF is the transfer function of the defocused pupil; the geometric "
+                        "blur disc is %.3g mrad (%.2f pixels). Spatial frequencies beyond its first zero are "
+                        "contrast-reversed and not credited. %s" % (
+                            dz, abs(dz) / self.defocus["depth_um"], self.defocus["depth_um"], lam_m,
+                            self.defocus["blur_mrad"], self.defocus["blur_mrad"] / min(self.alpha_s.values()),
+                            X.EXTENSION))
         for z in "hv":
             dm = self.diff[z]
             r_cut = dm.d_max / lam[0]
             if zemax:
                 r_cut = max(r_cut, zemax[z][0][-1])
             r = np.linspace(0.0, r_cut, 1200)
-            if o["diffraction"] == "spectral" or zemax:
+            if dz:
+                # defocused pupil (extension): the signed OTF replaces the diffraction MTF, on a coarser grid
+                rc = np.linspace(0.0, r_cut, 400)
+                if o["diffraction"] == "spectral":
+                    lam_s = lam[::4]
+                    w = np.interp(lam_s, lam, self.w)
+                    w = w / ph.trapz(w, lam_s)
+                    mc = ph.trapz(w[None, :] * np.stack([defoc[z](rc, x, dz, self.f[z]) for x in lam_s], axis=1),
+                                  lam_s, axis=1)
+                else:
+                    lam0 = float(o["lambda_diff_um"])
+                    if lam0 <= 0:
+                        lam0 = float(ph.trapz(lam * self.w, lam))
+                    mc = defoc[z](rc, lam0, dz, self.f[z])
+                # beyond its first zero the defocused image is contrast-reversed (spurious resolution): not credited
+                neg = np.nonzero(mc <= 0)[0]
+                if neg.size and neg[0] > 0:
+                    i = neg[0]
+                    r0 = rc[i - 1] + (rc[i] - rc[i - 1]) * mc[i - 1] / (mc[i - 1] - mc[i])
+                    self.defocus["first_zero"][z] = float(r0)
+                    mc = np.where(rc < r0, mc, 0.0)
+                m = np.clip(np.interp(r, rc, mc), 0.0, None)
+            elif o["diffraction"] == "spectral" or zemax:
                 lam_s = lam[::4]
                 w = np.interp(lam_s, lam, self.w)
                 w = w / ph.trapz(w, lam_s)
@@ -1278,6 +1411,12 @@ class TRM4Model:
             self.opt_tab[z] = (r, m)
 
         # --- detector crosstalk diffusion constants (4.30)
+        if not self.uncooled and min(self.pitch_unbinned.values()) <= 10.0 and \
+                float(d["xtalk_h"]) <= 0 and float(d["xtalk_v"]) <= 0 and "detector_aperture" not in cov:
+            self.assume("Pixel pitch %.3g um with an ideal detector MTF (footprint only, %.2f at Nyquist for a full "
+                        "fill factor): at pitches of 10 um and below, lateral carrier diffusion lowers the measured "
+                        "MTF (Gravrand et al., Opto-Electronics Review 31, 2023) - enter the detector MTF at "
+                        "Nyquist from the data sheet." % (min(self.pitch_unbinned.values()), 2.0 / math.pi))
         self.d_diff = {}
         for z, key in (("h", "xtalk_h"), ("v", "xtalk_v")):
             spec = float(d[key])
@@ -2058,7 +2197,8 @@ class TRM4Model:
         """Physical bounds of inputs that are otherwise only parsed as numbers (sensitivity study, report Ch. 6.4)."""
         p = self.p
         o, d, disp, tg, tb = p["optics"], p["detector"], p["display"], p["target"], p["turbulence"]
-        checks = [("Target width", tg["W_m"], "> 0", lambda v: v > 0),
+        checks = [("Focus error", abs(float(o.get("defocus_um", 0.0) or 0.0)), "finite", math.isfinite),
+                  ("Target width", tg["W_m"], "> 0", lambda v: v > 0),
                   ("Target height", tg["H_m"], "> 0", lambda v: v > 0),
                   ("Target depth", tg["D_m"], ">= 0", lambda v: v >= 0),
                   ("Background temperature [K]", tg["T_bg_K"], "> 0", lambda v: v > 0),
@@ -2177,6 +2317,7 @@ class TRM4Model:
                 self.progress("NIIRS calculation", 0.9)
                 res["niirs"] = self._niirs()
             self.horizon = self._horizon(res)               # line-of-sight check after the ranges (extension)
+            self._point_target(res)                         # extra output after the ranges (extension, off by default)
             self.aniso = self._anisoplanatism(res)          # diagnostic after the ranges (extension, off by default)
             self.scint = self._scintillation(res)           # diagnostic after the ranges (extension, off by default)
         res["spectral"] = {"lam": self.lam, "qe": self.eta * 100, "w": self.w,
@@ -3551,6 +3692,72 @@ class TRM4Model:
                                "rer": np.array(rers), "dsnr": np.array(dsnrs)})
 
 
+    def _pixel_energy(self, R_km):
+        """Fraction of the energy of a point source that falls on the pixel it is centred on (best phase): per
+        direction a Int MTF_pre(r) dr with the angular detector width a - the point spread function of optics,
+        motion and turbulence integrated over the detector footprint (the detector MTF is part of MTF_pre)."""
+        e = 1.0
+        for z in "hv":
+            r_max = self.opt_tab[z][0][-1]
+            r = np.linspace(0.0, r_max, 4000)
+            e *= min(1.0, max(0.0, 2.0 * self.das[z] * float(ph.trapz(self.pre_system(r, z, R_km), r))))
+        return e
+
+    def _point_target(self, res):
+        """Detection range of the target as a point (sub-pixel) source (extension, off by default): the range at which
+        the signal of the pixel that holds the target still exceeds the noise by the single-pixel SNR criterion.
+
+        Pixel signal = extended-source difference signal x (target solid angle / pixel solid angle, at most 1) x the
+        pixel energy fraction; noise = temporal noise after the frame / eye integration and the fixed pattern noise.
+        The line-pair ranges of TRM4 are not changed."""
+        tg = self.p["target"]
+        if not tg.get("point") or self.lab or "range" not in res:
+            return
+        snr_req = float(tg.get("point_snr", 5.0))
+        if not snr_req > 0:
+            raise ModelError("Point target: the single-pixel SNR criterion must be > 0")
+        pix = self.das["h"] * self.das["v"]                                   # mrad^2
+        cache = {}
+
+        def energy(x):
+            key = round(x, 9) if self.turbulence_active() else 0.0
+            if key not in cache:
+                cache[key] = self._pixel_energy(x)
+            return cache[key]
+
+        def snr(x, atm):
+            ah, av, _A = self.target_dims(self.los_angle(x))
+            fill = min(1.0, (ah / x) * (av / x) / pix)
+            s = self.signal_state(x, atm)
+            n = math.sqrt(s["nes"] ** 2 / self.n_int_frames + s["ies"] ** 2)
+            return (s["eds"] * fill * energy(x) / n if n > 0 else float("inf")), fill
+
+        R = self._range_grid(120 if not self.turbulence_active() else 40)
+        for a, atm in zip(res["range"]["atm"], self.atms):
+            vals = np.array([snr(x, atm)[0] for x in R])
+            ok = np.nonzero(vals >= snr_req)[0]
+            if not ok.size:
+                R0 = None
+            elif ok[-1] == len(R) - 1:
+                R0 = float("inf")
+            else:
+                lo, hi = float(R[ok[-1]]), float(R[ok[-1] + 1])
+                for _ in range(30):
+                    mid = math.sqrt(lo * hi)
+                    if snr(mid, atm)[0] >= snr_req:
+                        lo = mid
+                    else:
+                        hi = mid
+                R0 = lo
+            Rs = R0 if R0 and np.isfinite(R0) else float(R[0])
+            a["point"] = {"R0": R0, "snr": snr_req, "fill": snr(Rs, atm)[1], "energy": energy(Rs)}
+        p0 = res["range"]["atm"][0]["point"]
+        self.assume("Point-target detection range: single-pixel SNR >= %.3g of the pixel that holds the target, target "
+                    "centred on a pixel (best phase), pixel energy fraction %.2f; the noise is the temporal noise after "
+                    "frame / eye integration plus the fixed pattern noise. It applies where the target is smaller "
+                    "than a pixel (fill %.3g at that range); clutter and search are not included. %s" % (
+                        snr_req, p0["energy"], p0["fill"], X.EXTENSION))
+
     def _turb_eval_range(self, res):
         """(range [km], description, task name or None) of the turbulence diagnostics: the reference range, else the
         range of the most demanding task."""
@@ -3863,6 +4070,15 @@ class TRM4Model:
             "ms")
         add(g, "Sensor timing limit (%s)" % ("exposure overlaps readout" if self.exp_overlap else
                                              "readout after exposure"), "%.4g" % (self.t_timing * 1e3), "ms")
+        for a in (res.get("range") or {}).get("atm", []):
+            pt = a.get("point")
+            if pt:
+                R0 = pt["R0"]
+                add("Point target (extension)", "Detection range as a point source, single-pixel SNR %.3g - %s" % (
+                    pt["snr"], a["label"]), "below the first range" if R0 is None else
+                    ("beyond the range grid" if not np.isfinite(R0) else "%.4g" % R0), "km")
+                add("Point target (extension)", "Target solid angle / pixel and pixel energy fraction - %s" % a["label"],
+                    "%.3g / %.3g" % (pt["fill"], pt["energy"]))
         hz = getattr(self, "horizon", None)
         if hz:
             add(g, "Line of sight: imager / target height above ground (extension)",
@@ -3922,6 +4138,10 @@ class TRM4Model:
             add(o, "F lambda / d (mean wavelength %.2f um, pitch %.3g um)" % (fl["lambda_um"], fl["pitch_um"]),
                 "%.2f - %s" % (fl["value"], fl["regime"]))
             add(o, "Hardware lever in this regime", fl["lever"])
+        if getattr(self, "defocus", None):
+            add(o, "Focus error / depth of focus +-2 lambda F^2 (extension)",
+                "%.4g / %.4g" % (self.defocus["dz_um"], self.defocus["depth_um"]), "um")
+            add(o, "Defocus blur disc (geometric, extension)", "%.4g" % self.defocus["blur_mrad"], "mrad")
         add(o, "Diffraction cut-off at %.2f um (h)" % self.lam_peak, "%.3f" % (self.diff["h"].d_max / self.lam_peak),
             "1/mrad")
         add(o, "Optics MTF", getattr(self, "zemax_mtf_label", None) or "TRM4 model (diffraction %s, aberration %s)" % (
@@ -4015,6 +4235,8 @@ class TRM4Model:
             if self.rel_illum < 1:
                 add("Radiometry", "Photoelectron rate at the field edge (relative illumination %.2f)" % self.rel_illum,
                     "%.4g" % (r_e * self.rel_illum), "e-/s")
+                add("Radiometry", "Signal at the field edge / centre (ranges are for the centre of the field)",
+                    "%.2f" % self.rel_illum)
         for rec in getattr(self, "preset_records", []):
             add("Preset data in use (lifecycle)", "%s '%s'" % (rec["kind"], rec["name"]),
                 "%s; %s; %s; uncertainty: %s; %s [%s]" % (rec["source"], rec["date"], rec["applicability"],
@@ -4025,6 +4247,11 @@ class TRM4Model:
         add(n, "Spatial noise bandwidth h x v", "%.3f x %.3f" % (self.df_I["h"], self.df_I["v"]))
         add(n, "System magnification", "%.3f" % self.m_sys)
         add(n, "Eye PSF width Gamma", "%.4f" % self.gamma_eye)
+        if getattr(self, "ambient", None):
+            add(n, "Ambient light reflected by the display (diagnostic, extension)", "%.4g" % self.ambient["L_refl"],
+                "cd/m2")
+            add(n, "Displayed contrast factor L / (L + L_reflected) (diagnostic)", "%.3f" %
+                self.ambient["contrast_factor"])
         add(n, "Displayed pixels h x v", "%d x %d" % (self.n_fov["h"], self.n_fov["v"]))
         f = res["fom"]
         for z in "hv":
