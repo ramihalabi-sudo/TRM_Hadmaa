@@ -74,6 +74,19 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.33 - every field shows the step of the calculation it enters and its formula
+
+The model is not touched: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation |
+|---|---|
+| Step and formula of every field | `trm4/formulas.py`: `FIELD` maps each of the 404 form fields (339 paths) to one of the steps of the calculation - geometry and sampling, signal, noise, sharpness before sampling, processing / display / eye, system threshold, the signal at the range, the range - or to *extra output*, *check / diagnostic*, *documentation*, with the formula the engine evaluates (equation numbers of the TRM4.v3 documentation). |
+| '?' of a field | The help tooltip ends with "In the calculation - <step>:" and the formula (`formulas.help_addendum`). |
+| Guide card | New section "איך זה נכנס לחישוב": the step and its explanation in Hebrew, and the formula (`guide_he.field_blocks`). It is shown, not narrated, so it needs no recordings. |
+| Help menu | *How the range is calculated*: the whole chain with the formulas of every step (`formulas.chain_text`, `App.show_calculation`). |
+| Checked against the engine | `tests/test_formulas.py` (13 tests): every form field has a step, no entry for a field that does not exist, a field the guide rates "no effect" is not presented as part of the range chain, and the quoted formulas equal the engine (IFOV, Nyquist, FOV = [(n - 1) p + a] / f, F, jitter / diffraction / blur / eye MTF, system magnification, MTDP, eye frame integration, extinction, rain, probability levels, horizon). |
+| Open | The recordings of the guide cards added in 2.32 are still missing: `test_every_fixed_sentence_is_recorded` fails until `py tools/make_guide_voice.py` is run. |
+
 ## Version 2.32 - extensions of the field report: atmospheric path, focus error, point target, dark current vs temperature
 
 Items U3, U4 (partly), U5 (partly), U6 (diagnostic), U7, U8, U11 and U13 of

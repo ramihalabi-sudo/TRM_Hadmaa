@@ -15,6 +15,7 @@ The cards of all other fields of the form are in guide_kb_he.MORE.
 """
 import re
 
+from . import formulas as FO
 from . import guide_design_he as DS
 from .guide_kb_he import MORE, _check_jitter_preset, _check_tint, _n, _range
 
@@ -1311,6 +1312,10 @@ def field_blocks(path, value=None, project=None, extra=()):
         out.append(("box", "ok" if res[0] == "ok" else "warn", lines, True))
     out += list(extra)
     out += [("p", e["what"]), ("h", "למה זה חשוב"), ("p", e["why"])]
+    calc = FO.card_lines(path)
+    if calc:                                        # the step of the calculation the field enters, and the formula
+        out += [("h", "איך זה נכנס לחישוב"), ("p", "%s. %s" % (calc[0], calc[1]))]
+        out += [("p", line) for line in calc[2:]]
     if e.get("typical"):
         out.append(("h", "ערכים טיפוסיים"))
         out += [("li", t) for t in e["typical"]]

@@ -41,6 +41,7 @@ from . import labtools as LT
 from . import atlas_news as NEWS
 from .guide_panel import GuidePanel, configure_styles as guide_styles
 from .help_text import help_for
+from . import formulas as FO
 from . import __version__
 
 APP_NAME = "TRM_HADMAAv1"
@@ -3023,6 +3024,7 @@ class App(tk.Tk):
         mh.add_command(label="Interactive guide (Hebrew)", accelerator="Ctrl+G", command=self.toggle_guide)
         mh.add_separator()
         mh.add_command(label="Model documentation (PDF)", accelerator="F1", command=self.open_docs)
+        mh.add_command(label="How the range is calculated", command=self.show_calculation)
         mh.add_command(label="Keyboard shortcuts", command=self.show_shortcuts)
         mh.add_separator()
         mh.add_command(label="About " + APP_NAME, command=self.show_about)
@@ -3289,6 +3291,7 @@ class App(tk.Tk):
             widgets.append(b)
         text = help_for(path)
         if text:
+            text += FO.help_addendum(path)             # where the field enters the calculation, and the formula
             q = tk.Label(fr, text="?", font=("Segoe UI Semibold", 8), bg=ACCENT_SOFT, fg=ACCENT, width=2,
                          cursor="question_arrow")
             q.grid(row=row, column=4, sticky="w", padx=(0, 4))
@@ -4033,6 +4036,29 @@ class App(tk.Tk):
         else:
             messagebox.showinfo("Documentation", "The TRM4 documentation PDF was not found in\n%s" % PROJECT_DIR,
                                 parent=self)
+
+    def show_calculation(self):
+        """The calculation chain with its formulas (trm4/formulas.py): which step every input enters."""
+        dlg = self._dialog("How the range is calculated")
+        fr = ttk.Frame(dlg, padding=14)
+        fr.pack(fill="both", expand=True)
+        txt = tk.Text(fr, wrap="word", width=96, height=34, font=("Segoe UI", 10), bg=SURFACE_ALT, fg=TEXT,
+                      relief="flat", padx=12, pady=10)
+        sb = ttk.Scrollbar(fr, orient="vertical", command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        txt.tag_configure("h", font=("Segoe UI Semibold", 11), spacing1=10, spacing3=3)
+        txt.tag_configure("f", font=("Consolas", 10), lmargin1=18, lmargin2=18, spacing1=1)
+        titles = {v[0] for v in FO.STAGES.values()} | {"How the range is calculated",
+                                                       "Fields that do not enter the range"}
+        formulas = {line for _k, block in FO.CHAIN for line in block.split("\n")}
+        for line in FO.chain_text().split("\n"):
+            txt.insert("end", line + "\n", "h" if line in titles else ("f" if line in formulas else ()))
+        txt.configure(state="disabled")
+        txt.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        fr.rowconfigure(0, weight=1)
+        fr.columnconfigure(0, weight=1)
+        ttk.Button(fr, text="Close", command=dlg.destroy).grid(row=1, column=0, sticky="e", pady=(10, 0))
 
     def show_shortcuts(self):
         rows = [("F5", "Calculate"), ("Ctrl+N", "New project"), ("Ctrl+O", "Open project"), ("Ctrl+S", "Save"),
