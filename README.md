@@ -74,6 +74,19 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.37 - the partly implemented items extended: systematic search, scene-following AGC span, stabilization interpolation and crop, IIR filter text corrected
+
+Off by default: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation | Source / limits |
+|---|---|---|
+| Temporal denoising (text fix) | The recursive temporal filter is the TRM4 IIR filter (`dsp.iir_alpha`, Eq. 3.141: (1 + alpha) / (1 - alpha) equivalent frames, alpha = feedback weight). The help text, the guide card and the guide check described alpha the other way round ((2 - alpha) / alpha, "weight of the new frame"); they are corrected. The engine is unchanged. | TRM4 Eq. 3.141; checked on a simulated filter (test). |
+| Systematic search | `target.search_mode` = systematic with `target.search_dwell_s`: tau_FOR = (2 - Ps) / (2 Ps) (N - 1) t0 + tau_FOV, Ps = 1 - e^(-t0 / tau_FOV) (`extensions.search_tau_for`). MWIR template, 50 fields of view, tau = 3 s, 120 s: random 10.02 km, systematic with 3 s stay 8.91 km, with 6 s not reached. | Friedman, Mark & Skirlo, Opt. Eng. 58(9) 093103 (2019), Eq. 4. It tends to N tau for a short stay. |
+| Scene-following AGC span | `display.contrast_span_mode` = scene: the contrast term of the threshold is scaled by the atmospheric transmission at each range (the threshold tables are built with and without the term, `_ranges_thermal`). LWIR template, 20 K: Detection 4.01 km fixed, 5.02 km scene; second atmosphere 2.03 / 4.19 km. | Structure of the TTP system contrast threshold, CTF_sys = CTF_eye / MTF x sqrt(1 + alpha^2 sigma^2 / SCT^2), target contrast dT / (2 SCT), AGC span = 2 SCT, "apparent SCT" propagated through the atmosphere (Jordan, MSc thesis, Univ. of Arizona 2024, quoting Vollmerhausen & Jacobs). The noise term is that of TRM4: not validated, still PROVISIONAL. Not applied to Visible / General (no readable source for the contrast definition). TTP ranges keep the fixed span. |
+| Stabilization interpolation and crop | `stab.eis_interp` = bilinear: digital MTF x mean over the sub-pixel shift d of sqrt(1 - 2 d (1 - d) (1 - cos(2 pi r alpha))), 1/2 at Nyquist (`extensions.shift_interp_mtf`); `stab.eis_crop_pct`: the reported field of view and the number of fields of view of the search. MWIR template with 45 urad jitter: Detection 14.40 -> 13.10 km. | Derived and checked on simulated shifts (test); no published model was found. The crop does not change the task ranges. |
+| Colour camera | Unchanged: no quantitative source for the luminance noise after demosaicing was found; the factor 2 stays an assumption. | - |
+| Tests | `tests/test_extended_items.py` (16 tests). Five new fields with help, Hebrew guide cards without recordings and formula entries. | - |
+
 ## Version 2.36 - colour camera with a Bayer colour filter array (U9, PROVISIONAL)
 
 Off by default: template ranges are unchanged; the run IDs change with the version number.

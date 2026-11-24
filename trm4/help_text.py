@@ -231,8 +231,10 @@ HELP = {
     "dsp.frames_on": "Average several frames to reduce temporal noise.",
     "dsp.n_frames": "Number of frames averaged. Noise drops by about sqrt(N).",
     "dsp.iir_on": "Recursive (IIR) frame averaging filter for temporal noise reduction.",
-    "dsp.iir_alpha": "Weight of the new frame in the IIR filter (0..1). Smaller = stronger noise reduction "
-                     "but more lag.",
+    "dsp.iir_alpha": "Feedback weight of the IIR filter, y = (1 - alpha) x + alpha y_previous (0 <= alpha < 1). "
+                     "Larger = stronger noise reduction but more lag: equivalent to (1 + alpha) / (1 - alpha) "
+                     "averaged frames (TRM4 Eq. 3.141) - 0.5 gives 3 frames, 0.8 gives 9. This is how a temporal "
+                     "(recursive) denoiser is entered.",
 
     # ---------------------------------------------------------------- Display & observer
     "display.n_h": "Number of display pixels horizontally.",
@@ -251,6 +253,11 @@ HELP = {
                               "quadrature to the TRM4 threshold. With a narrow span (high display gain) it has no "
                               "effect, which is the TRM4 assumption of an optimally adjusted display; with a wide span "
                               "or strong ambient light it shortens the ranges.",
+    "display.contrast_span_mode": "Fixed: the AGC span stays as entered at every range (manual gain) - a distant "
+                                  "target is shown with less contrast. Follows the scene: the automatic gain keeps "
+                                  "the scene filling the display, so the span shrinks with the atmospheric "
+                                  "transmission like the target signal does (the apparent scene contrast "
+                                  "temperature of NVIPM) and the contrast limit no longer grows with range.",
     "display.ambient_lux": "Extension (diagnostic): illuminance of the ambient light falling on the screen. A "
                            "diffusely reflecting screen adds the luminance reflectance x illuminance / pi, which "
                            "lowers every displayed contrast by L / (L + L_reflected). The TRM4 observer has no "
@@ -600,6 +607,12 @@ HELP = {
     "stab.psd_file": "One-sided angular power spectral density of the residual line of sight: frequency [Hz] and "
                      "PSD (one column for both axes, or h and v columns).",
     "stab.psd_unit": "Unit of the PSD values (angle squared per Hz).",
+    "stab.eis_interp": "How the registered frames are resampled. Not modelled: the best case. Linear "
+                       "interpolation: a frame shifted by a fraction of a pixel is a weighted mean of two pixels, "
+                       "which lowers the MTF - on average over the shifts to 1/2 at the Nyquist frequency.",
+    "stab.eis_crop_pct": "Part of the image, per axis, that the stabilization keeps as a margin for the shifts "
+                         "and does not show (often 5 - 15 %). The field of view is reported smaller by it, and the "
+                         "search counts more fields of view; the ranges of the tasks do not change.",
     "stab.eis": "Extension: electronic image stabilization registers the frames before they are displayed. The "
                 "frame-to-frame part of the measured motion (PSD x sinc^2(f t_int), or the jitter of the time series "
                 "between exposures) then does not blur the image the eye integrates; the blur within the exposure "
@@ -640,6 +653,11 @@ HELP = {
                      "and N the number of fields of view in the field of regard. The reported range is the one with "
                      "a 50 % chance within the search time. This is where the field of view, and so the number of "
                      "pixels, pays off. The TRM4 ranges are not changed.",
+    "target.search_mode": "Random: the observer looks around freely - mean acquisition time N x that of one "
+                          "field of view. Systematic: the sensor is stepped over the field of regard and stays a "
+                          "fixed time t0 in each field of view - mean acquisition time (2 - Ps) / (2 Ps) (N - 1) "
+                          "t0 + tau, Ps = 1 - exp(-t0 / tau) (Friedman, Mark & Skirlo 2019).",
+    "target.search_dwell_s": "Time the sensor stays on each field of view when it steps over the field of regard.",
     "target.search_time_s": "Time available for the search.",
     "target.search_tau_s": "Mean time an observer needs to find the target in one field of view when it can be "
                            "found. There is no formula for it - it is measured in search experiments and grows with "

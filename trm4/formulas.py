@@ -266,6 +266,8 @@ FIELD = {
                               "MTF_eye = exp(-Gamma r / M_sys)."),
     "display.contrast_limit": ("threshold", "MTDP = sqrt(MTDP_noise^2 + (m_t x span / (C x AMOP))^2), m_t = 1 / S of "
                                             "the Barten model, C = L / (L + L_refl)."),
+    "display.contrast_span_mode": ("threshold", "Scene: span(R) = span x tau_atm(R) (apparent scene contrast); "
+                                                "fixed: span(R) = span."),
     "display.ambient_lux": ("check", "L_refl = reflectance x E / pi; displayed contrast x L / (L + L_refl)."),
     "display.reflectance": ("check", "L_refl = reflectance x E / pi."),
     "display.snr_th": ("threshold", "MTDP = (pi / 2) SNR_th sqrt(Psi) / AMOP."),
@@ -275,6 +277,8 @@ FIELD = {
     "stab.jitter_mode": (_P, "Motion from the vibration models, a measured time series or a PSD."),
     "stab.psd_file": (_P, "sigma^2 = Int PSD(f) [1 - sinc^2(f t_int)] df; MTF = exp(-2 pi^2 sigma^2 r^2)."),
     "stab.psd_unit": (_P, "Converts the PSD to mrad^2 / Hz."),
+    "stab.eis_interp": ("mtf_post", "Linear: MTF x mean over d of sqrt(1 - 2 d (1 - d) (1 - cos(2 pi r alpha)))."),
+    "stab.eis_crop_pct": ("output", "Stabilized FOV = FOV x (1 - crop); used for the number of fields of view N."),
     "stab.eis": (_P, "Frame-to-frame jitter MTF exp(-2 pi^2 sigma_f^2 r^2) set to 1; the blur within the exposure "
                      "stays."),
     "stab.residual_los": ("check", "Whether the data are the residual line of sight or the platform motion."),
@@ -332,6 +336,8 @@ FIELD = {
     "target.ttp": ("output", "TTP = Int sqrt(signal / threshold) dr."),
     "target.geo_limit": ("output", "R_geo = sqrt(W H) / (N_task x max(2 IFOV, lambda / D))."),
     "target.search": ("output", "P(t) = P_inf (1 - exp(-t / (N tau))); range where P(t) = 50 %."),
+    "target.search_mode": ("output", "Random: tau_FOR = N tau;  systematic: (2 - Ps) / (2 Ps) (N - 1) t0 + tau."),
+    "target.search_dwell_s": ("output", "t0 in Ps = 1 - exp(-t0 / tau)."),
     "target.search_time_s": ("output", "t in P(t) = P_inf (1 - exp(-t / (N tau)))."),
     "target.search_tau_s": ("output", "tau in P(t) = P_inf (1 - exp(-t / (N tau)))."),
     "target.search_for_h_deg": ("output", "N = (field of regard / field of view), horizontal x vertical."),

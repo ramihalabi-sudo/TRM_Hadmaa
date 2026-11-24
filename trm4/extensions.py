@@ -760,6 +760,40 @@ MRAD_PER_DEG = 1000.0 * math.pi / 180.0
 # Eqs. 2 and 3; also Sjaardema, Smith & Birch, Sandia SAND2015-6368, Eq. 1).  P_inf is the probability with
 # unlimited time, here the Johnson TTPF of the resolved cycles.  tau_FOV has no analytical model - "usually obtained
 # experimentally by curve fitting" (Friedman et al.) - so it is an input.
+def search_tau_for(tau_fov_s, n_fov, mode="random", dwell_s=0.0):
+    """Mean acquisition time over a field of regard of N fields of view (Friedman, Mark & Skirlo 2019):
+    random search      tau_FOR = N tau_FOV                                              (Eq. 3)
+    systematic search  tau_FOR = (2 - Ps) / (2 Ps) (N - 1) t0 + tau_FOV,  Ps = 1 - e^(-t0 / tau_FOV)   (Eq. 4)
+    with t0 the time spent in each field of view."""
+    tau, n = float(tau_fov_s), max(float(n_fov), 1.0)
+    if not tau > 0:
+        raise ValueError("Search needs a mean acquisition time > 0")
+    if mode == "random":
+        return n * tau
+    if mode != "systematic":
+        raise ValueError("Search mode: 'random' or 'systematic'")
+    t0 = float(dwell_s)
+    if not t0 > 0:
+        raise ValueError("Systematic search needs the time spent in each field of view (> 0 s)")
+    ps = 1.0 - math.exp(-t0 / tau)
+    return (2.0 - ps) / (2.0 * ps) * (n - 1.0) * t0 + tau
+
+
+# Electronic stabilization shifts every frame by a fraction d of a pixel; with linear interpolation the shifted
+# frame is (1 - d) x(n) + d x(n + 1), whose transfer has the magnitude sqrt(1 - 2 d (1 - d) (1 - cos(2 pi r alpha))).
+# The shifts of a moving line of sight are spread evenly over 0..1, so the mean over d is used: 1 at zero
+# frequency, 1/2 at Nyquist (derived here; checked on simulated shifts in tests/test_extended_items.py).
+_SHIFTS = (np.arange(64) + 0.5) / 64.0
+
+
+def shift_interp_mtf(r, alpha_mrad):
+    """Mean transfer of the linear interpolation of sub-pixel shifted frames along an axis; r [1/mrad], alpha =
+    sampling distance [mrad]."""
+    c = 1.0 - np.cos(2.0 * math.pi * np.asarray(r, float) * float(alpha_mrad))
+    d = _SHIFTS.reshape((-1,) + (1,) * np.ndim(c))
+    return np.sqrt(np.maximum(1.0 - 2.0 * d * (1.0 - d) * c, 0.0)).mean(axis=0)
+
+
 def search_time_factor(t_s, tau_fov_s, n_fov):
     """1 - exp(-t / (N tau_FOV)): the fraction of the unlimited-time probability reached after t seconds."""
     tau = float(tau_fov_s) * max(float(n_fov), 1.0)

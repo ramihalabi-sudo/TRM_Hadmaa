@@ -397,7 +397,9 @@ DEFAULT_PROJECT = {
                 # ambient light on the screen (diagnostic, 0 = dark room) and its diffuse reflectance
                 "ambient_lux": 0.0, "reflectance": 0.04,
                 # contrast threshold of the eye (Barten) for the displayed span and the ambient light (extension)
-                "contrast_limit": False},
+                "contrast_limit": False,
+                # the AGC span stays as entered ("fixed") or follows the scene through the atmosphere ("scene")
+                "contrast_span_mode": "fixed"},
     "stab": {"neglect": False, "random_on": False, "rand_h_mrad": 0.0, "rand_v_mrad": 0.0,
              "lin_on": False, "lin_h": 0.0, "lin_v": 0.0, "sin_on": False, "sin_h": 0.0, "sin_v": 0.0,
              "jitter_mode": "model", "jitter_file": dict(_NOFILE), "jitter_unit": "urad", "jitter_rate_hz": 0.0,
@@ -405,6 +407,8 @@ DEFAULT_PROJECT = {
              "psd_file": dict(_NOFILE), "psd_unit": "urad2", "residual_los": True,
              # electronic image stabilization: frame-to-frame jitter of the measured / PSD motion removed (extension)
              "eis": False,
+             # interpolation of the registered frames ("ideal" = not modelled) and the crop margin of the image [%]
+             "eis_interp": "ideal", "eis_crop_pct": 0.0,
              # allowed image smear during one exposure for the exposure budget [pixels] (review Sec. 4.3)
              "smear_allow_px": 0.5,
              # GUI preset that fills the random jitter (custom = user values)
@@ -429,7 +433,9 @@ DEFAULT_PROJECT = {
                # detection with search in a limited time (extension): search time [s], mean acquisition time of one
                # field of view [s] (no default - from experiments) and the field of regard [deg] (0 = the field of view)
                "search": False, "search_time_s": 10.0, "search_tau_s": 0.0, "search_for_h_deg": 0.0,
-               "search_for_v_deg": 0.0},
+               "search_for_v_deg": 0.0,
+               # random search, or systematic stepping with the time spent in each field of view [s]
+               "search_mode": "random", "search_dwell_s": 0.0},
     "irradiance": {"mode": "none", "type": "broadband", "spectrum": "colour", "T_colour_K": 5800.0,
                    "E_peak": 1239.0, "E_eff": 100.0, "preset": "Direct sunlight", "lambda_um": 0.85,
                    "E_mono": 1.0, "T_bb_K": 6000.0, "geometry": "extended", "beta_h_deg": 0.0,

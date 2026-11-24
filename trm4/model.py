@@ -383,7 +383,10 @@ class TRM4Model:
             L = float(disp["luminance"])
             L_refl = self.ambient["L_refl"] if self.ambient else 0.0
             self.contrast = {"L_eye": L + L_refl, "factor": L / (L + L_refl) if L + L_refl > 0 else 1.0,
-                             "L_refl": L_refl, "span": None, "cache": {}}
+                             "L_refl": L_refl, "span": None, "cache": {},
+                             "mode": disp.get("contrast_span_mode", "fixed")}
+            if self.contrast["mode"] not in ("fixed", "scene"):
+                raise ModelError("Contrast threshold of the eye: span 'fixed' or 'scene'")
         dist = abs(self.alpha_s["h"] * disp["pitch_v_mm"] * self.lrep /
                    (self.alpha_s["v"] * disp["pitch_h_mm"] * self.crep) - 1.0)    # Eq. (3.36)
         self.distortion = dist
@@ -436,10 +439,14 @@ class TRM4Model:
                     "modulation of the Barten model (DICOM PS3.14 Annex A) on the display - AGC span %.4g K from "
                     "black to white at %.4g cd/m2, ambient light reflected %.3g cd/m2 (contrast factor %.2f), best "
                     "sensitivity at %.2g cycles/degree and kept below it. It is added in quadrature to the "
-                    "noise-limited threshold of TRM4; that combination and the linear mapping of the span are "
-                    "assumptions, not part of TRM4. A narrower span (more display gain) removes the limit. %s" % (
+                    "noise-limited threshold of TRM4 - the structure of the system contrast threshold of the TTP "
+                    "metric, CTF_sys = CTF_eye / MTF x sqrt(1 + alpha^2 sigma^2 / SCT^2) with the target contrast "
+                    "dT / (2 SCT), where the AGC span is 2 x the scene contrast temperature SCT; the noise term "
+                    "is that of TRM4, so the combination is not validated. %s A narrower span (more display "
+                    "gain) removes the limit. %s" % (
                         c["span"], float(self.p["display"]["luminance"]), c["L_refl"], c["factor"], c["u_peak"],
-                        X.EXTENSION))
+                        "The span follows the scene through the atmosphere (apparent scene contrast)."
+                        if c["mode"] == "scene" else "The span stays as entered at every range.", X.EXTENSION))
 
     def _setup_operating_point(self):
         """Detector operating point: QE basis, saturation capacity node, dark current (research review Sec. 3.5-3.11).
@@ -1794,10 +1801,36 @@ class TRM4Model:
         if not getattr(self, "_eis_noted", False):
             self._eis_noted = True
             self.assume("Electronic image stabilization: the frame-to-frame jitter (%.3g urad rms) is taken as removed "
-                        "by the registration of the frames; the blur within the exposure remains. The interpolation "
-                        "of the shifted frames and the crop of the field of view are not modelled, so this is the "
-                        "best case. %s" % (sigma_frame * 1e3, X.EXTENSION))
+                        "by the registration of the frames; the blur within the exposure remains. %s %s" % (
+                            sigma_frame * 1e3, self._eis_text(), X.EXTENSION))
         return True
+
+    def eis_active(self):
+        st = self.p["stab"]
+        return bool(st.get("eis")) and st.get("jitter_mode") in ("measured", "psd") and not st.get("neglect") \
+            and not self.still and not self.algo
+
+    def eis_crop(self):
+        """Fraction of the field of view lost to the crop margin of the electronic stabilization."""
+        c = float(self.p["stab"].get("eis_crop_pct", 0.0) or 0.0) / 100.0
+        if not 0.0 <= c < 0.9:
+            raise ModelError("Electronic stabilization: the crop margin must be in 0 ... 90 %")
+        return c if self.eis_active() else 0.0
+
+    def _eis_text(self):
+        st = self.p["stab"]
+        interp, crop = st.get("eis_interp", "ideal"), self.eis_crop()
+        if interp not in ("ideal", "bilinear"):
+            raise ModelError("Electronic stabilization: interpolation 'ideal' or 'bilinear'")
+        if interp == "ideal" and not crop:
+            return ("The interpolation of the shifted frames and the crop of the field of view are not modelled, so "
+                    "this is the best case.")
+        return "%s %s" % (
+            "The linear interpolation of the shifted frames multiplies the MTF by the mean of sqrt(1 - 2 d (1 - d) "
+            "(1 - cos(2 pi r alpha))) over the sub-pixel shifts d - 1/2 at Nyquist." if interp == "bilinear" else
+            "The interpolation of the shifted frames is not modelled.",
+            "The crop margin leaves %.3g %% of the field of view per axis (reported, and used for the search)." % (
+                100.0 * (1.0 - crop)) if crop else "The crop of the field of view is not modelled.")
 
     def _psd_mtf(self, r, z):
         s_i, s_f, _ = self.psd_stats(z)
@@ -2129,6 +2162,8 @@ class TRM4Model:
         m = np.ones_like(np.asarray(r, float)) if self.boost_off else self._fir(r, z)   # sharpening (field map SP-01)
         if getattr(self, "cfa", None) == "bilinear":
             m = m * X.bayer_bilinear_mtf(r, self.alpha_s[z])     # interpolation of the green plane (extension)
+        if self.p["stab"].get("eis_interp", "ideal") == "bilinear" and self.eis_active():
+            m = m * X.shift_interp_mtf(r, self.alpha_s[z])       # interpolation of the registered frames (extension)
         s = self.compression_blur_px()
         if s > 0:
             m = m * X.mtf_compression(r, s, self.alpha_s[z])      # lossy compression as per-pixel blur
@@ -2294,7 +2329,7 @@ class TRM4Model:
             return float("inf")
         val = 0.5 * math.pi * self.snr_th * math.sqrt(self.psi(rp, z, nes, ies)) / a
         if getattr(self, "contrast", None):
-            val = math.hypot(val, self.contrast_floor(rp) / a)
+            val = math.hypot(val, self.contrast_floor(rp) * getattr(self, "_contrast_scale", 1.0) / a)
         return val
 
     def contrast_floor(self, rp):
@@ -3449,13 +3484,26 @@ class TRM4Model:
         if not (time_s > 0 and tau > 0):
             raise ModelError("Search in a limited time: enter the search time and the mean acquisition time of one "
                              "field of view (> 0 s; it comes from search experiments, there is no formula for it)")
-        fov = {z: math.degrees(self.fov[z] * 1e-3) for z in "hv"}
+        crop = self.eis_crop()
+        fov = {z: math.degrees(self.fov[z] * 1e-3) * (1.0 - crop) for z in "hv"}
         fh = float(tg.get("search_for_h_deg", 0.0) or 0.0) or fov["h"]
         fv = float(tg.get("search_for_v_deg", 0.0) or 0.0) or fov["v"]
         n_fov = max(1.0, fh / fov["h"]) * max(1.0, fv / fov["v"])
-        frac = X.search_time_factor(time_s, tau, n_fov)
+        mode, dwell = tg.get("search_mode", "random"), float(tg.get("search_dwell_s", 0.0) or 0.0)
+        try:
+            tau_for = X.search_tau_for(tau, n_fov, mode, dwell)
+        except ValueError as e:
+            raise ModelError("Search in a limited time: %s" % e)
+        frac = X.search_time_factor(time_s, tau_for, 1.0)
         p_inf = 0.5 / frac
+        if mode == "systematic" and not getattr(self, "_search_mode_noted", False):
+            self._search_mode_noted = True
+            self.assume("Search: the field of regard is stepped systematically, %.3g s in each field of view - mean "
+                        "acquisition time (2 - Ps) / (2 Ps) (N - 1) t0 + tau_FOV = %.3g s with Ps = 1 - e^(-t0 / "
+                        "tau_FOV), against N tau_FOV = %.3g s for random search (Friedman, Mark & Skirlo 2019, "
+                        "Eq. 4). %s" % (dwell, tau_for, n_fov * tau, X.EXTENSION))
         return {"time_s": time_s, "tau_fov_s": tau, "n_fov": n_fov, "time_factor": frac, "p_inf": p_inf,
+                "mode": mode, "tau_for_s": tau_for,
                 "ratio": X.ttpf_ratio(p_inf) if p_inf < 0.999 else None}
 
     def _search_note(self, res):
@@ -3598,6 +3646,18 @@ class TRM4Model:
         dims = [self.target_dims(self.los_angle(x)) for x in R]
         res = {"label": atm.label, "R": R, "signal": etd, "tasks": []}
         turb = self._thermal_turbulence(R) if self.turbulence_active() else None
+        # contrast threshold of the eye with a span that follows the scene (extension): the threshold tables are
+        # also built without the contrast term, and the term is put back scaled by the transmission at each range
+        fom0 = turb0 = tau_k = None
+        if getattr(self, "contrast", None) and self.contrast["mode"] == "scene":
+            tau_k = np.array([atm.tau(x) for x in R])
+            self._contrast_scale = 0.0
+            try:
+                fom0 = self._fom(fom["R_ref"], self.ref_state)
+                self._fom_res = fom0
+                turb0 = self._thermal_turbulence(R) if turb is not None else None
+            finally:
+                self._contrast_scale, self._fom_res = 1.0, fom
         # resolved line pairs vs range, Eqs. (3.210), (3.211)
         nlp = {}
         for z, zi in (("h", 0), ("v", 1)):
@@ -3605,6 +3665,11 @@ class TRM4Model:
             n = []
             for k, (x, e, dm) in enumerate(zip(R, etd, dims)):
                 val = fom[z]["val"] if turb is None else turb[z][k]
+                if fom0 is not None:
+                    v0 = fom0[z]["val"] if turb0 is None else turb0[z][k]
+                    ok = np.isfinite(val) & np.isfinite(v0)
+                    val = np.array(val, float)
+                    val[ok] = np.sqrt(v0[ok] ** 2 + np.maximum(val[ok] ** 2 - v0[ok] ** 2, 0.0) * tau_k[k] ** 2)
                 finite = np.isfinite(val)
                 r_last = rp[finite][-1] if finite.any() else 0.0
                 rs = ph.inverse_first_crossing(rp, val, e)
@@ -4315,6 +4380,9 @@ class TRM4Model:
         if getattr(self, "wfe", None):
             add(o, "Wavefront error rms / Strehl ratio (extension)",
                 "%.4g um = %.3g waves / %.3f" % (self.wfe["sigma_um"], self.wfe["waves"], self.wfe["strehl"]))
+        if self.p["stab"].get("eis") and self.eis_crop():
+            add(g, "Field of view after the stabilization crop h x v (extension)", "%.4g x %.4g" % tuple(
+                math.degrees(self.fov[z] * 1e-3) * (1.0 - self.eis_crop()) for z in "hv"), "deg")
         if getattr(self, "defocus", None):
             add(o, "Focus error / depth of focus +-2 lambda F^2 (extension)",
                 "%.4g / %.4g" % (self.defocus["dz_um"], self.defocus["depth_um"]), "um")
