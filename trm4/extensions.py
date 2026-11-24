@@ -641,3 +641,231 @@ def aerosol_mtf(r, R_km, S_per_km, xi_c):
     r = np.asarray(r, float)
     sr = float(S_per_km) * float(R_km)
     return np.where(r < xi_c, np.exp(-sr * (r / xi_c) ** 2), math.exp(-sr))
+
+
+# ---------------------------------------------------------------------------------------------
+# Line of sight over flat terrain / the sea: distance to the horizon
+# ---------------------------------------------------------------------------------------------
+# d = sqrt(2 R h): 3.57 km x sqrt(height in m) for the Earth radius R = 6378 km (geometric), 3.86 km x sqrt(h) with
+# the standard atmospheric refraction - ray curvature about 1/7 of the Earth's, effective radius 7/6 R
+# (A. T. Young, "Distance to the Horizon", San Diego State University, aty.sdsu.edu/explain/atmos_refr/horizon.html).
+# The refraction varies from day to day (ducts and mirages change it strongly), so this is a check, not a limit.
+HORIZON_KM_GEOMETRIC = 3.57
+HORIZON_KM_REFRACTED = 3.86
+
+
+# ---------------------------------------------------------------------------------------------
+# Dark current of HgCdTe versus temperature: "Rule 07"
+# ---------------------------------------------------------------------------------------------
+# J = J0 exp[C q 1.24 / (k lambda_e T)]  [A/cm^2], lambda_e = lambda_c for lambda_c >= lambda_threshold, else
+# lambda_c / [1 - (lambda_scale / lambda_c - lambda_scale / lambda_threshold)^P]: Tennant, Lee, Zandian, Piquette &
+# Carmody, "MBE HgCdTe technology: a very general solution to IR detection, described by Rule 07, a very convenient
+# heuristic", J. Electron. Mater. 37, 1406 (2008).  Constants as implemented in the open-source lentil library
+# (github.com/andykee/lentil, detector.rule07_dark_current).  An empirical rule for p-on-n HgCdTe photodiodes; newer
+# devices can lie below it (Leisenring et al., Astron. Nachr. 2023, arXiv:2306.05470) and other materials differ.
+RULE07 = {"J0": 8367.00001853855, "C": -1.16239134096245, "lam_th": 4.63513642316149, "lam_s": 0.200847413564122,
+          "P": 0.544071281108481, "k": 1.3802e-23, "q": 1.6021e-19}
+
+
+def rule07_current_density(lam_c_um, T_K):
+    """Rule 07 dark current density [A/cm^2] for a cut-off wavelength [um] and an operating temperature [K]."""
+    c, T = float(lam_c_um), float(T_K)
+    if not (c > 0 and T > 0):
+        raise ValueError("Rule 07 needs a cut-off wavelength and a temperature > 0")
+    k = RULE07
+    lam_e = c if c >= k["lam_th"] else c / (1.0 - (k["lam_s"] / c - k["lam_s"] / k["lam_th"]) ** k["P"])
+    return k["J0"] * math.exp(k["C"] * 1.24 * k["q"] / (k["k"] * lam_e * T))
+
+
+# ---------------------------------------------------------------------------------------------
+# Ambient light on the display (diagnostic)
+# ---------------------------------------------------------------------------------------------
+def display_ambient(luminance, ambient_lux, reflectance):
+    """Ambient light reflected by a diffusely reflecting screen: L_refl = rho E / pi [cd/m^2] (Lambertian surface),
+    and the factor L / (L + L_refl) by which it lowers every displayed contrast."""
+    L, E, rho = float(luminance), float(ambient_lux), float(reflectance)
+    L_refl = rho * E / math.pi
+    return {"L_refl": L_refl, "contrast_factor": L / (L + L_refl) if L + L_refl > 0 else 1.0}
+
+
+AMBIENT_WARN_FACTOR = 0.5         # displayed contrast factor below which the diagnostic warns
+
+
+# ---------------------------------------------------------------------------------------------
+# Random wavefront error of the optics
+# ---------------------------------------------------------------------------------------------
+# Transfer function of a random wavefront error with the rms sigma_w [waves] and the normalized autocovariance
+# rho(s) at the pupil displacement s:  H(s) = exp{-(2 pi sigma_w)^2 [1 - rho(s)]}  -  the surface transfer function
+# of Harvey & Kotha, "Scattering effects from residual optical fabrication errors", Proc. SPIE 2576 (1995), Eq. (2)
+# (there with 4 pi sigma for a mirror surface, whose wavefront error is twice the surface error).  At displacements
+# beyond the correlation length it is the plateau exp[-(2 pi sigma_w)^2], the Strehl ratio of the Marechal
+# approximation: "the MTF in the mid-range spatial frequencies is reduced by the Strehl ratio" (Juergens, OPTI 517).
+# rho is taken Gaussian, exp[-(s / l)^2], with the correlation length l = WFE_CORR_FRACTION x aperture - an
+# assumption that only shapes the lowest frequencies.
+WFE_CORR_FRACTION = 0.25
+
+
+def wfe_transfer(sep_mm, sigma_um, lam_um, corr_mm):
+    """Transfer function of a random wavefront error: sigma [um rms of optical path], wavelength [um], pupil
+    displacement and correlation length [mm]."""
+    s = np.abs(np.asarray(sep_mm, float))
+    phase2 = (2.0 * math.pi * float(sigma_um) / np.asarray(lam_um, float)) ** 2
+    rho = np.exp(-(s / float(corr_mm)) ** 2) if corr_mm > 0 else np.zeros_like(s)
+    return np.exp(-phase2 * (1.0 - rho))
+
+
+def strehl(sigma_um, lam_um):
+    """Strehl ratio exp[-(2 pi sigma / lambda)^2] of an rms wavefront error (Marechal; good below 0.1 wave)."""
+    return math.exp(-(2.0 * math.pi * float(sigma_um) / float(lam_um)) ** 2)
+
+
+# ---------------------------------------------------------------------------------------------
+# Contrast sensitivity of the eye: Barten's model
+# ---------------------------------------------------------------------------------------------
+# Contrast sensitivity S = 1 / threshold modulation of a grating of u cycles/degree, mean luminance L [cd/m2] and
+# size X0 x X0 degrees, as used for the DICOM Grayscale Standard Display Function (DICOM PS3.14, Annex A.2, after
+# P. G. J. Barten):
+#   S(u) = M_opt(u) / k / sqrt{ (2 / T) (1 / X0^2 + 1 / XE^2 + u^2 / NE^2) [1 / (eta h I_L) + Phi0 / (1 - e^-(u/u0)^2)] }
+#   M_opt = exp(-2 pi^2 sigma^2 u^2), sigma = sqrt(sigma0^2 + (C_sph d^3)^2), I_L = pi d^2 L / 4 [td],
+#   pupil d = 4.6 - 2.8 tanh(0.4 log10(0.625 L)) mm.
+# Constants as printed in the standard; h = 357.36 photons / (td s) per square arc minute, i.e. x 3600 per square
+# degree.  With them the function reproduces Table B-1 of the standard (the luminance step of one JND for the
+# standard target, 4 c/deg, 2 x 2 deg) within 4 % from 0.05 to 3400 cd/m2 (tests/test_observer_search.py).
+# Stated validity: 1e-4 <= L <= 1e3 cd/m2, 0.5 <= X0 <= 60 deg, 0.2 <= u <= 50 c/deg.
+BARTEN = {"k": 3.3, "T": 0.1, "eta": 0.025, "h": 357.36 * 3600.0, "phi0": 3e-8, "XE": 12.0, "NE": 15.0,
+          "sigma0": 0.0133, "Csph": 1e-4, "u0": 8.0}
+
+
+def barten_sensitivity(u_cpd, L_cd_m2, X0_deg):
+    """Contrast sensitivity of the eye (Barten, DICOM PS3.14 Annex A) - see the constants above."""
+    b = BARTEN
+    u, L, X0 = max(float(u_cpd), 1e-6), max(float(L_cd_m2), 1e-9), max(float(X0_deg), 1e-6)
+    d = 4.6 - 2.8 * math.tanh(0.4 * math.log10(0.625 * L))
+    sigma = math.hypot(b["sigma0"], b["Csph"] * d ** 3)
+    m_opt = math.exp(-2.0 * math.pi ** 2 * sigma ** 2 * u ** 2)
+    il = math.pi / 4.0 * d ** 2 * L
+    geo = 1.0 / X0 ** 2 + 1.0 / b["XE"] ** 2 + u ** 2 / b["NE"] ** 2
+    noise = 1.0 / (b["eta"] * b["h"] * il) + b["phi0"] / (1.0 - math.exp(-(u / b["u0"]) ** 2))
+    return m_opt / b["k"] / math.sqrt(2.0 / b["T"] * geo * noise)
+
+
+MRAD_PER_DEG = 1000.0 * math.pi / 180.0
+
+
+# ---------------------------------------------------------------------------------------------
+# Search: probability of detection within a limited time
+# ---------------------------------------------------------------------------------------------
+# P(t) = P_inf (1 - e^(-t / tau)); for random search over a field of regard of N fields of view tau_FOR = N tau_FOV
+# (Friedman, Mark & Skirlo, "What probability distribution describes search?", Opt. Eng. 58(9), 093103 (2019),
+# Eqs. 2 and 3; also Sjaardema, Smith & Birch, Sandia SAND2015-6368, Eq. 1).  P_inf is the probability with
+# unlimited time, here the Johnson TTPF of the resolved cycles.  tau_FOV has no analytical model - "usually obtained
+# experimentally by curve fitting" (Friedman et al.) - so it is an input.
+def search_tau_for(tau_fov_s, n_fov, mode="random", dwell_s=0.0):
+    """Mean acquisition time over a field of regard of N fields of view (Friedman, Mark & Skirlo 2019):
+    random search      tau_FOR = N tau_FOV                                              (Eq. 3)
+    systematic search  tau_FOR = (2 - Ps) / (2 Ps) (N - 1) t0 + tau_FOV,  Ps = 1 - e^(-t0 / tau_FOV)   (Eq. 4)
+    with t0 the time spent in each field of view."""
+    tau, n = float(tau_fov_s), max(float(n_fov), 1.0)
+    if not tau > 0:
+        raise ValueError("Search needs a mean acquisition time > 0")
+    if mode == "random":
+        return n * tau
+    if mode != "systematic":
+        raise ValueError("Search mode: 'random' or 'systematic'")
+    t0 = float(dwell_s)
+    if not t0 > 0:
+        raise ValueError("Systematic search needs the time spent in each field of view (> 0 s)")
+    ps = 1.0 - math.exp(-t0 / tau)
+    return (2.0 - ps) / (2.0 * ps) * (n - 1.0) * t0 + tau
+
+
+# Electronic stabilization shifts every frame by a fraction d of a pixel; with linear interpolation the shifted
+# frame is (1 - d) x(n) + d x(n + 1), whose transfer has the magnitude sqrt(1 - 2 d (1 - d) (1 - cos(2 pi r alpha))).
+# The shifts of a moving line of sight are spread evenly over 0..1, so the mean over d is used: 1 at zero
+# frequency, 1/2 at Nyquist (derived here; checked on simulated shifts in tests/test_extended_items.py).
+_SHIFTS = (np.arange(64) + 0.5) / 64.0
+
+
+def shift_interp_mtf(r, alpha_mrad):
+    """Mean transfer of the linear interpolation of sub-pixel shifted frames along an axis; r [1/mrad], alpha =
+    sampling distance [mrad]."""
+    c = 1.0 - np.cos(2.0 * math.pi * np.asarray(r, float) * float(alpha_mrad))
+    d = _SHIFTS.reshape((-1,) + (1,) * np.ndim(c))
+    return np.sqrt(np.maximum(1.0 - 2.0 * d * (1.0 - d) * c, 0.0)).mean(axis=0)
+
+
+def search_time_factor(t_s, tau_fov_s, n_fov):
+    """1 - exp(-t / (N tau_FOV)): the fraction of the unlimited-time probability reached after t seconds."""
+    tau = float(tau_fov_s) * max(float(n_fov), 1.0)
+    if not (tau > 0 and t_s > 0):
+        raise ValueError("Search needs a search time and a mean acquisition time > 0")
+    return 1.0 - math.exp(-float(t_s) / tau)
+
+
+# ---------------------------------------------------------------------------------------------
+# Colour camera: Bayer colour filter array
+# ---------------------------------------------------------------------------------------------
+# Half of the pixels of a Bayer array are green, on a quincunx lattice, and the resolution of the image comes from
+# the green plane (Palum, "Image sampling with the Bayer color filter array", IS&T PICS 2001).  On the horizontal
+# and the vertical axis the green plane has the Nyquist frequency of the monochrome array, on the diagonals half of
+# it; the red and the blue plane have half of it in every direction.
+# The missing green values are interpolated:
+#   adaptive - the average of the two green neighbours in the direction of the smaller gradient (Palum).  For a bar
+#              pattern along an axis that direction is along the bars, so the pattern is reproduced without loss:
+#              "resolutions very close to the resolution of the monochrome sensor";
+#   bilinear - the average of the four green neighbours, i.e. the kernel [[0,1,0],[1,4,1],[0,1,0]] / 4 on the
+#              zero-filled green plane.  Its transfer on an axis is (3 + cos(2 pi r alpha)) / 4: 1 at zero, 1/2 at
+#              Nyquist (derived here; checked against a simulated mosaic in tests/test_colour_camera.py).
+# Noise: only half of the pixels carry an independent luminance sample, so the noise power that the eye integrates
+# is twice that of a monochrome array with the same pixel noise - an assumption (luminance from the green plane
+# alone), not a measured model.
+BAYER_NOISE_POWER = 2.0
+
+
+def bayer_bilinear_mtf(r, alpha_mrad):
+    """Transfer of the bilinear interpolation of the green plane of a Bayer array along an axis; r [1/mrad],
+    alpha = sampling distance of the pixels [mrad]."""
+    return 0.75 + 0.25 * np.cos(2.0 * math.pi * np.asarray(r, float) * float(alpha_mrad))
+
+
+# ---------------------------------------------------------------------------------------------
+# Rain, and an extinction that falls off with height (slant paths)
+# ---------------------------------------------------------------------------------------------
+# Specific attenuation of rain gamma = k R^alpha [dB/km], R the rain rate [mm/h]: Recommendation ITU-R P.1814-1
+# (09/2025), Eq. (11) and Table 4 - best fit for a Gamma drop size distribution; the shape parameter mu = 0 is used
+# (mu = -2 ... 2 gives k = 2.2838 ... 1.0505, alpha = 0.4050 ... 0.7497).  The drops are much larger than the
+# wavelength, so the attenuation is the same from the visible to the thermal infrared (same Recommendation, 4.1.2.2).
+RAIN_K, RAIN_ALPHA = 1.2924, 0.6436
+RAIN_SPAN = ((1.0505, 0.7497), (2.2838, 0.4050))      # mu = 2 and mu = -2 of Table 4
+DB_PER_NEPER = 10.0 / math.log(10.0)                  # 4.343 dB per unit of optical depth
+
+
+def rain_extinction(rate_mmh, k=RAIN_K, alpha=RAIN_ALPHA):
+    """Extinction coefficient of rain [1/km] at a rain rate [mm/h], the same in every band."""
+    r = float(rate_mmh)
+    if r < 0:
+        raise ValueError("Rain rate must be >= 0")
+    return k * r ** alpha / DB_PER_NEPER if r > 0 else 0.0
+
+
+def height_factor(h1_m, h2_m, H_km):
+    """Mean of exp(-h / H) along a straight line of sight between the heights h1 and h2 [m] above the ground: the
+    factor on the ground-level extinction coefficient when it falls off exponentially with the scale height H [km].
+
+    Measured aerosol scale heights: 0.63 +- 0.33 km in clean air, 1.71 +- 0.84 km in haze (MODIS optical thickness
+    and surface visibility, J. Korean Assoc. Geographic Information Studies 16(2), 141, 2013); water vapour typically
+    1 - 2 km.  H <= 0: homogeneous path (factor 1)."""
+    H = float(H_km)
+    if not H > 0:
+        return 1.0
+    a, b = max(float(h1_m), 0.0) / 1000.0 / H, max(float(h2_m), 0.0) / 1000.0 / H
+    if abs(b - a) < 1e-9:
+        return math.exp(-a)
+    return (math.exp(-a) - math.exp(-b)) / (b - a)
+
+
+def horizon_km(h1_m, h2_m, refraction=True):
+    """Largest distance [km] at which two points h1 and h2 [m] above flat terrain / the sea see each other:
+    k (sqrt(h1) + sqrt(h2)) - the sum of the two single-height horizon distances."""
+    k = HORIZON_KM_REFRACTED if refraction else HORIZON_KM_GEOMETRIC
+    return k * (math.sqrt(max(float(h1_m), 0.0)) + math.sqrt(max(float(h2_m), 0.0)))

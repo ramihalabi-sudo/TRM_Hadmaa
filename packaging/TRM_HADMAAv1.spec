@@ -15,8 +15,14 @@ datas = (tree("trm4/assets", "trm4/assets") + tree("detector_lookup_HTML", "dete
          [(os.path.join(ROOT, f), ".") for f in os.listdir(ROOT)
           if f.startswith("TRM4") and "Documentation" in f and f.endswith(".pdf")])
 
+# google-genai: the Gemini voice of the guide for the sentences built from the user's project (trm4/voice_live.py,
+# imported only when used, so PyInstaller does not see it)
+from PyInstaller.utils.hooks import collect_submodules
+
+genai = collect_submodules("google.genai")
+
 a = Analysis([os.path.join(SPECPATH, "trm_entry.py")], pathex=[ROOT], datas=datas,
-             hiddenimports=["matplotlib.backends.backend_tkagg", "matplotlib.backends.backend_pdf"],
+             hiddenimports=["matplotlib.backends.backend_tkagg", "matplotlib.backends.backend_pdf"] + genai,
              excludes=["PyQt5", "PyQt6", "PySide2", "PySide6", "IPython", "pytest"])
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TRM_HADMAAv1", console=False,

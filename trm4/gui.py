@@ -39,7 +39,9 @@ from . import advisor as ADV
 from . import extensions as X
 from . import labtools as LT
 from . import atlas_news as NEWS
+from .guide_panel import GuidePanel, configure_styles as guide_styles
 from .help_text import help_for
+from . import formulas as FO
 from . import __version__
 
 APP_NAME = "TRM_HADMAAv1"
@@ -193,6 +195,7 @@ def apply_theme(root):
     s.configure("TPanedwindow", background=BG)
     s.configure("Sash", sashthickness=6, gripcount=0, background=BG, lightcolor=BG, bordercolor=BG)
     s.configure("TSeparator", background=BORDER)
+    guide_styles(s, FONT_SEMI)
     root.configure(background=BG)
 
 
@@ -248,7 +251,7 @@ JIT_PSD = lambda p: p["stab"].get("jitter_mode") == "psd" and not p["stab"]["neg
 JIT_MODEL = lambda p: p["stab"].get("jitter_mode", "model") == "model" and not p["stab"]["neglect"]
 SPEC_ATM = lambda p: p["atmosphere"]["mode"] == "spectral"
 CAM_NETD = lambda p: THERMAL(p) and (p["detector"]["noise_mode"] == "measured" and p["imager_type"] == "cooled" or
-                                     UNCOOLED(p) and p["detector"]["noise_mode"] == "device")
+                                     UNCOOLED(p) and p["detector"]["noise_mode"] in ("device", "device_scaled"))
 ALGO = lambda p: p["display"].get("observer", "legacy") == "algorithm"
 POT = lambda p: ALGO(p) and p["display"].get("algo_criterion", "lp") == "pot"
 TTP = lambda p: bool(p["target"].get("ttp")) and not POT(p)
@@ -438,6 +441,8 @@ TABS = [
                                                                         ("blur", "Gaussian blur")], cond=OPT_MODEL),
         F("optics.q", "Aberration parameter q (>1)", cond=lambda p: OPT_MODEL(p) and p["optics"]["aberration"] == "q"),
         F("optics.blur_um", "Gaussian blur sigma", cond=lambda p: OPT_MODEL(p) and p["optics"]["aberration"] == "blur", unit="um"),
+        F("optics.defocus_um", "Focus error at the image plane (0 = in focus, extension)", cond=OPT_MODEL, unit="um"),
+        F("optics.wfe_rms_um", "Wavefront error rms (0 = none, extension)", cond=OPT_MODEL, unit="um"),
         H("Transmission"),
         F("optics.tau_mode", "Optics transmission", "choice", [("value", "Peak transmission value"),
                                                               ("zemax", "Spectral curve from file (.csv/.txt)")]),
@@ -462,6 +467,11 @@ TABS = [
         F("detector.n_h", "Number of horizontal detectors (sets the FOV, not the resolution)", "int"),
         F("detector.n_v", "Number of vertical detectors (sets the FOV, not the resolution)", "int"),
         F("detector.square", "Square pixels (vertical pitch and active size = horizontal)", "bool"),
+        F("detector.cfa", "Colour filter array (extension)", "choice",
+          [("none", "None (monochrome)"), ("bayer", "Bayer (colour camera)")], cond=NOT_THERMAL),
+        F("detector.demosaic", "  Interpolation of the colour image", "choice",
+          [("adaptive", "Adaptive (edge-directed)"), ("bilinear", "Bilinear (simple average)")],
+          cond=lambda p: NOT_THERMAL(p) and p["detector"].get("cfa", "none") == "bayer"),
         F("detector.pitch_h_um", "Detector pitch (horizontal)", unit="um"),
         F("detector.pitch_v_um", "Vertical detector pitch", cond=lambda p: not p["detector"].get("square"), unit="um"),
         F("detector.a_h_um", "Active size (horizontal)", cond=lambda p: p["detector"]["shape"] in ("rectangular", "rhombic"), unit="um"),
@@ -504,10 +514,12 @@ TABS = [
           [("calculated", "Physics model (detector noise sources)"), ("measured", "Measured camera NETD")],
           cond=lambda p: THERMAL(p) and p["imager_type"] == "cooled"),
         F("detector.noise_mode", "Noise / sensitivity source", "choice",
-          [("device", "Measured camera NETD"), ("detector", "Detector-level NETD (scaled to this optics)")], UNCOOLED),
+          [("device", "Measured camera NETD"),
+           ("device_scaled", "Measured camera NETD, converted to the scenario F-number (needs the test F-number)"),
+           ("detector", "Detector-level NETD (scaled to this optics)")], UNCOOLED),
         F("detector.netd_mK", "NETD", cond=lambda p: THERMAL(p) and (UNCOOLED(p) or p["detector"]["noise_mode"] == "measured"), unit="mK"),
         F("detector.netd_TB_K", "NETD test temperature (0 = not documented)", unit="K",
-          cond=lambda p: THERMAL(p) and (p["detector"]["noise_mode"] in ("measured", "device"))),
+          cond=lambda p: THERMAL(p) and (p["detector"]["noise_mode"] in ("measured", "device", "device_scaled"))),
         F("detector.t_th_ms", "Detector thermal time constant", cond=UNCOOLED, unit="ms"),
         F("detector.noise_floor_e", "Read noise (additive floor)", cond=RADIOMETRIC, unit="e-"),
         H("Camera NETD test conditions (replaces the detector noise model - nothing is added on top)", cond=CAM_NETD),
@@ -547,14 +559,16 @@ TABS = [
           p["detector"].get("dark_mode", "value") != "value"),
         F("detector.electron_gain", "Electron gain", cond=RADIOMETRIC),
         F("detector.dark_mode", "Dark current via", "choice", [("value", "Single value"),
-                                                              ("table", "Calibrated table vs sensor temperature")],
+                                                              ("table", "Calibrated table vs sensor temperature"),
+                                                              ("rule07", "Rule 07 (HgCdTe) from the sensor temperature "
+                                                                         "and the QE cut-off (extension)")],
           RADIOMETRIC),
         F("detector.dark_A", "Dark current", cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode", "value") == "value",
           unit="A"),
         F("detector.dark_table", "Dark current table: 'T_sensor[K] I_dark[A]' per line", "multiline",
           cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") == "table"),
         F("detector.T_sensor_K", "Sensor operating temperature", unit="K",
-          cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") == "table"),
+          cond=lambda p: RADIOMETRIC(p) and p["detector"].get("dark_mode") in ("table", "rule07")),
         F("detector.noise_figure", "Noise figure (multiplicative)", cond=RADIOMETRIC),
         H("ADC resolution", level="adv", active=lambda p: p["detector"].get("adc_mode", "none") != "none"),
         F("detector.adc_mode", "ADC quantization noise", "choice", [("none", "Not specified"), ("carriers", "LSB in carriers"),
@@ -647,6 +661,15 @@ TABS = [
         F("display.pitch_h_mm", "Horizontal element pitch", unit="mm"),
         F("display.pitch_v_mm", "Vertical element pitch", unit="mm"),
         F("display.luminance", "Operational display luminance", unit="cd/m2"),
+        F("display.contrast_limit", "Include the contrast threshold of the eye (AGC span, ambient light)", "bool",
+          cond=THERMAL),
+        F("display.contrast_span_mode", "  AGC span with range", "choice",
+          [("fixed", "Fixed (manual gain)"), ("scene", "Follows the scene through the atmosphere (AGC)")],
+          cond=lambda p: THERMAL(p) and bool(p["display"].get("contrast_limit"))),
+        F("display.ambient_lux", "Ambient light on the display (0 = dark room, diagnostic)", unit="lux",
+          cond=lambda p: p["display"]["observation"] == "direct"),
+        F("display.reflectance", "Diffuse reflectance of the screen", cond=lambda p:
+          p["display"]["observation"] == "direct" and float(p["display"].get("ambient_lux", 0.0) or 0.0) > 0),
         H("Observer calibration constants (TRM4 defaults)"),
         F("display.snr_th", "Threshold SNR"),
         F("display.t_eye_s", "Eye integration time", unit="s",
@@ -668,6 +691,13 @@ TABS = [
                                                   ("pixel2", "pixel^2/Hz")], cond=JIT_PSD),
         F("stab.residual_los", "Data are residual LOS after stabilization", "bool",
           cond=lambda p: JIT_PSD(p) or JIT_MEAS(p)),
+        F("stab.eis", "Electronic stabilization: frame-to-frame jitter removed (extension)", "bool",
+          cond=lambda p: JIT_PSD(p) or JIT_MEAS(p)),
+        F("stab.eis_interp", "  Interpolation of the registered frames", "choice",
+          [("ideal", "Not modelled (best case)"), ("bilinear", "Linear interpolation")],
+          cond=lambda p: (JIT_PSD(p) or JIT_MEAS(p)) and bool(p["stab"].get("eis"))),
+        F("stab.eis_crop_pct", "  Crop margin of the stabilized image (per axis)", unit="%",
+          cond=lambda p: (JIT_PSD(p) or JIT_MEAS(p)) and bool(p["stab"].get("eis"))),
         F("stab.jitter_file", "Jitter file ('t h v' or 'h v')", "file",
           {"check": IM.jitter_summary, "title": "Import measured line-of-sight jitter"}, cond=JIT_MEAS),
         F("stab.jitter_unit", "Motion unit in file", "choice", [("urad", "microradian"), ("mrad", "milliradian"),
@@ -745,6 +775,21 @@ TABS = [
         F("target.prob_levels", "Also report P80 / P90 ranges (Johnson TTPF)", "bool", cond=lambda p: not POT(p)),
         F("target.ttp", "Also report TTP / V50 ranges (Vollmerhausen 2004)", "bool", cond=lambda p: not POT(p)),
         F("target.geo_limit", "Also report the geometric reference range (Nyquist / diffraction)", "bool"),
+        F("target.search", "Also report the detection range with search in a limited time", "bool"),
+        F("target.search_time_s", "Search: time available", unit="s", cond=lambda p: bool(p["target"].get("search"))),
+        F("target.search_mode", "Search: pattern", "choice",
+          [("random", "Random"), ("systematic", "Systematic stepping")],
+          cond=lambda p: bool(p["target"].get("search"))),
+        F("target.search_dwell_s", "Search: time spent in each field of view", unit="s",
+          cond=lambda p: bool(p["target"].get("search")) and p["target"].get("search_mode") == "systematic"),
+        F("target.search_tau_s", "Search: mean acquisition time of one field of view (from experiments)", unit="s",
+          cond=lambda p: bool(p["target"].get("search"))),
+        F("target.search_for_h_deg", "Search: field of regard, horizontal (0 = the field of view)", unit="deg",
+          cond=lambda p: bool(p["target"].get("search"))),
+        F("target.search_for_v_deg", "Search: field of regard, vertical (0 = the field of view)", unit="deg",
+          cond=lambda p: bool(p["target"].get("search"))),
+        F("target.point", "Also report the detection range as a point (sub-pixel) target", "bool"),
+        F("target.point_snr", "Point target: single-pixel SNR criterion", cond=lambda p: bool(p["target"].get("point"))),
         F("target.clutter", "Background clutter", "choice", [("not_specified", "Not specified"), ("low", "Low"),
                                                              ("medium_low", "Medium-low"), ("medium", "Medium"),
                                                              ("high", "High")]),
@@ -799,6 +844,14 @@ TABS = [
         F("atmosphere.atm.0.F_PR", "Path radiance factor", cond=lambda p: SPEC_ATM(p) and NOT_THERMAL(p)
           and p["atmosphere"].get("path_mode") != "import"),
     ] + _atm_rows() + [
+        H("Slant path, rain and additional extinction (extensions, 0 = off)", cond=lambda p: not SPEC_ATM(p),
+          level="advanced", active=lambda p: any(float(p["atmosphere"].get(k, 0.0) or 0.0) > 0 for k in
+                                                 ("scale_height_km", "rain_mmh", "extra_sigma"))),
+        F("atmosphere.scale_height_km", "Extinction scale height (0 = homogeneous path)", unit="km",
+          cond=lambda p: not SPEC_ATM(p)),
+        F("atmosphere.rain_mmh", "Rain rate (0 = no rain)", unit="mm/h", cond=lambda p: not SPEC_ATM(p)),
+        F("atmosphere.extra_sigma", "Additional extinction, e.g. gas absorption (0 = none)", unit="1/km",
+          cond=lambda p: not SPEC_ATM(p)),
         H("Path radiance (independent of the direct-path transmittance)", cond=NOT_THERMAL),
         F("atmosphere.path_mode", "Path radiance", "choice", [("model", "Modelled (air temperature / path radiance factor)"),
                                                               ("import", "Imported spectral path radiance")], NOT_THERMAL),
@@ -1184,6 +1237,14 @@ class SidebarItem(tk.Frame):
         self.selected = on
         self._paint()
 
+    def text_height(self):
+        """Height of the icon and the name without the padding of the row."""
+        return max(w.winfo_reqheight() for w in self.parts[1:])
+
+    def set_pad(self, pad):
+        for w in self.parts[1:]:
+            w.pack_configure(pady=pad)
+
 
 class PlotTab(ttk.Frame):
     def __init__(self, master, nrows=1, ncols=1):
@@ -1561,6 +1622,7 @@ class SensitivityTab(ttk.Frame):
         self.adv_step = tk.StringVar(value="25")
         self.adv_robust = tk.BooleanVar(value=True)
         self.band_factor = tk.StringVar(value="10")
+        self.band_target = tk.BooleanVar(value=True)
         self.c2_climate = tk.StringVar(value="Arid")
         self.c2_season = tk.StringVar(value="summer")
         self.c2_overcast = tk.BooleanVar(value=False)
@@ -1583,7 +1645,7 @@ class SensitivityTab(ttk.Frame):
         elif mode == "advisor":
             extra = [self.adv_task.get(), self.adv_minfov.get(), self.adv_step.get(), self.adv_robust.get()]
         elif mode == "bands":
-            extra = [self.band_factor.get()]
+            extra = [self.band_factor.get(), bool(self.band_target.get())]
         elif mode == "cn2stats":
             extra = [self.c2_climate.get(), self.c2_season.get(), bool(self.c2_overcast.get()),
                      bool(self.c2_neutral.get())]
@@ -1716,6 +1778,9 @@ class SensitivityTab(ttk.Frame):
         fr.pack(fill="x", pady=(6, 0))
         ttk.Label(fr, text="Turbulence factor (Cn2 / f, x f)").pack(side="left")
         ttk.Entry(fr, textvariable=self.band_factor, width=7).pack(side="left", padx=(6, 0))
+        ttk.Checkbutton(self.opts, variable=self.band_target,
+                        text="Include the target: size -/+ %g %%, temperature difference / %g and x %g" % (
+                            AN.TARGET_SIZE_PCT, AN.TARGET_DT_FACTOR, AN.TARGET_DT_FACTOR)).pack(anchor="w", pady=(4, 0))
 
     def _opts_cn2stats(self):
         self._section_label(self.opts, "Cn2 statistics: the DRI ranges for the turbulence measured over a year by "
@@ -2054,7 +2119,8 @@ class SensitivityTab(ttk.Frame):
                 fac = float(self.band_factor.get())
             except ValueError:
                 raise ValueError("Enter a numeric turbulence factor.")
-            return lambda prog, stop: AN.range_bands(p, prog, stop=stop, factor=fac)
+            tgt = bool(self.band_target.get())
+            return lambda prog, stop: AN.range_bands(p, prog, stop=stop, factor=fac, target=tgt)
         if mode == "cn2stats":
             climate, season, overcast = self.c2_climate.get(), self.c2_season.get(), bool(self.c2_overcast.get())
             neutral = bool(self.c2_neutral.get())
@@ -2774,6 +2840,7 @@ class App(tk.Tk):
         self.model = None
         self.analyses = {}
         self.busy = False
+        self.guide = None
         self.file_path = None
         self.saved_state = None
         self.dirty = False
@@ -2793,6 +2860,7 @@ class App(tk.Tk):
         self.after(max(0, int(1100 - (time.time() - t0) * 1000)), lambda: (splash.destroy(), self.deiconify(),
                                                                            self.lift(), self.focus_force(),
                                                                            self.after(80, self._place_sash),
+                                                                           self.after(200, self._start_guide),
                                                                            self.after(2500, self.check_news)))
 
     def _place_sash(self):
@@ -2992,7 +3060,10 @@ class App(tk.Tk):
         self.menubar, self.news_menu_index = m, m.index("end")
 
         mh = tk.Menu(m, tearoff=False)
+        mh.add_command(label="Interactive guide (Hebrew)", accelerator="Ctrl+G", command=self.toggle_guide)
+        mh.add_separator()
         mh.add_command(label="Model documentation (PDF)", accelerator="F1", command=self.open_docs)
+        mh.add_command(label="How the range is calculated", command=self.show_calculation)
         mh.add_command(label="Keyboard shortcuts", command=self.show_shortcuts)
         mh.add_separator()
         mh.add_command(label="About " + APP_NAME, command=self.show_about)
@@ -3002,7 +3073,8 @@ class App(tk.Tk):
 
         keys = {"<Control-n>": self.new_project, "<Control-o>": self.open_project, "<Control-s>": self.save_project,
                 "<Control-S>": self.save_project_as, "<Control-e>": self.export_report, "<Control-p>": self.export_plot,
-                "<Control-d>": self.detector_lookup, "<F5>": self.calculate, "<F1>": self.open_docs}
+                "<Control-d>": self.detector_lookup, "<F5>": self.calculate, "<F1>": self.open_docs,
+                "<Control-g>": self.toggle_guide}
         for k, fn in keys.items():
             self.bind_all(k, lambda e, fn=fn: (fn(), "break")[1])
         for i in range(9):
@@ -3033,6 +3105,8 @@ class App(tk.Tk):
         ToolButton(inner, GLYPH["search"], "Detector lookup", self.detector_lookup,
                    tip="Pick a detector from the Detector Atlas and fill its parameters  (Ctrl+D)").pack(side="left")
         ToolButton(inner, GLYPH["help"], "Docs", self.open_docs, tip="Open model documentation  (F1)").pack(side="left")
+        ToolButton(inner, "", "Guide", self.toggle_guide,
+                   tip="Interactive guide in Hebrew: lessons, field cards and value checks  (Ctrl+G)").pack(side="left")
         self.calc_btn = ToolButton(inner, GLYPH["run"], "Calculate", self.calculate, accent=True,
                                    tip="Run the model  (F5)")
         self.calc_btn.pack(side="right", padx=(0, 4))
@@ -3055,6 +3129,8 @@ class App(tk.Tk):
         side = tk.Frame(body, bg=SIDEBAR, width=int(240 * self.k))
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
+        self.side, self._side_fit = side, None
+        side.bind("<Configure>", self._fit_sidebar)
         tk.Label(side, text="WORKFLOW", font=("Segoe UI Semibold", 8), fg="#7f8ba0", bg=SIDEBAR,
                  anchor="w").pack(fill="x", padx=18, pady=(16, 6))
         seg = tk.Frame(side, bg=SIDEBAR)
@@ -3084,10 +3160,50 @@ class App(tk.Tk):
         Tooltip(self.adv_check, "Advanced parameters change the result only for special hardware or detailed "
                                 "studies. Groups that are in use stay visible anyway; hiding a field never changes, "
                                 "resets or bypasses its value or checks.", wrap=int(300 * self.k))
-        tk.Label(foot, text="TRM4.v3 model  ·  v%s" % __version__, font=("Segoe UI", 8), fg="#6f7b90",
-                 bg=SIDEBAR, anchor="w").pack(fill="x")
-        tk.Label(foot, text="Fraunhofer IOSB TR 2021/04", font=("Segoe UI", 8), fg="#6f7b90", bg=SIDEBAR,
-                 anchor="w").pack(fill="x")
+        self.foot_labels = [
+            tk.Label(foot, text="TRM4.v3 model  ·  v%s" % __version__, font=("Segoe UI", 8), fg="#6f7b90",
+                     bg=SIDEBAR, anchor="w"),
+            tk.Label(foot, text="Fraunhofer IOSB TR 2021/04", font=("Segoe UI", 8), fg="#6f7b90", bg=SIDEBAR,
+                     anchor="w")]
+        for w in self.foot_labels:
+            w.pack(fill="x")
+
+    SIDE_PADS = (7, 6, 5, 4, 3, 2, 1)    # padding of a row of the page list, from roomy to tight
+
+    def _fit_sidebar(self, _event=None):
+        """Keep the page list and 'Show advanced parameters' on the screen in a low window (a 768-line display):
+        the two version lines go first, then the rows of the page list get tighter."""
+        items = list(self.side_items.values())
+        avail = self.side.winfo_height()
+        if not items or avail <= 1:
+            return
+        if self.side_list.winfo_y() <= 0:                       # the sidebar is not laid out yet: once it is
+            self._side_tries = getattr(self, "_side_tries", 0) + 1
+            if self._side_tries <= 25:
+                self.after(20, self._fit_sidebar)
+            return
+        self._side_tries = 0
+        adv = self.adv_check.winfo_reqheight() + 10 if self.adv_check.winfo_manager() else 0
+        lines = sum(w.winfo_reqheight() for w in self.foot_labels)
+        fixed = self.side_list.winfo_y() + 28 + adv              # 28: the padding above and below the footer
+        text = items[0].text_height()
+
+        def need(labels, pad):
+            return fixed + (lines if labels else 0) + len(items) * (text + 2 * pad)
+        # roomy rows matter more than the version lines: the lines stay only with (nearly) full rows; after that
+        # the rows get tighter step by step, and the tightest ones are used when nothing fits
+        choices = [(True, p) for p in self.SIDE_PADS[:2]] + [(False, p) for p in self.SIDE_PADS]
+        fit = next((c for c in choices if need(*c) <= avail), (False, self.SIDE_PADS[-1]))
+        if fit == self._side_fit:
+            return
+        self._side_fit = fit
+        for it in items:
+            it.set_pad(fit[1])
+        for w in self.foot_labels:
+            if fit[0] and not w.winfo_manager():
+                w.pack(fill="x")
+            elif not fit[0] and w.winfo_manager():
+                w.pack_forget()
 
     def set_workflow(self, key, initial=False):
         if key not in WORKFLOWS:
@@ -3107,8 +3223,11 @@ class App(tk.Tk):
             self.side_items[name] = it
         if key == "quick":
             self.adv_check.pack_forget()
-        elif not self.adv_check.winfo_ismapped():
-            self.adv_check.pack(fill="x", pady=(0, 10), before=self.adv_check.master.winfo_children()[1])
+        elif not self.adv_check.winfo_manager():
+            first = self.foot_labels[0]
+            self.adv_check.pack(fill="x", pady=(0, 10), **({"before": first} if first.winfo_manager() else {}))
+        self._side_fit = None                                   # new rows: fit them to the height again
+        self.after_idle(self._fit_sidebar)
         # result tabs: compact set for Quick Prediction, engineering views otherwise
         visible = RESULT_TABS[key]
         for name, w in self.result_tabs.items():
@@ -3236,9 +3355,13 @@ class App(tk.Tk):
             w = ttk.Entry(fr, textvariable=var, width=10)
             w.bind("<FocusOut>", lambda e: self.refresh())
             w.bind("<Return>", lambda e: self.refresh())
-            w.bind("<KeyRelease>", lambda e, var=var: (self._user_edit(path, idx, check=var), self._schedule_dirty_check()))
+            w.bind("<KeyRelease>", lambda e, var=var: (self._user_edit(path, idx, check=var), self._schedule_dirty_check(),
+                                                       self._guide_typing(path)))
         w.grid(row=row, column=1, sticky="we", padx=4, pady=3)
         widgets.append(w)
+        for gw in (w, lab):                             # field card of the guide (when it is open)
+            gw.bind("<FocusIn>" if gw is w else "<ButtonRelease-1>", lambda e, path=path: self._guide_focus(path),
+                    add="+")
         if f["unit"]:
             u = ttk.Label(fr, text=f["unit"], style="Unit.TLabel")
             u.grid(row=row, column=2, sticky="w", padx=(2, 6))
@@ -3252,6 +3375,7 @@ class App(tk.Tk):
             widgets.append(b)
         text = help_for(path)
         if text:
+            text += FO.help_addendum(path)             # where the field enters the calculation, and the formula
             q = tk.Label(fr, text="?", font=("Segoe UI Semibold", 8), bg=ACCENT_SOFT, fg=ACCENT, width=2,
                          cursor="question_arrow")
             q.grid(row=row, column=4, sticky="w", padx=(0, 4))
@@ -3600,6 +3724,8 @@ class App(tk.Tk):
             self.sens.check_stale(p)
         if self.saved_state is not None:
             self._set_dirty(self._state_of(p) != self.saved_state)
+        if self.guide is not None:
+            self.guide.on_project_change()
 
     # ------------------------------------------------------------------ camera profiles
     def apply_profile(self, prof, config):
@@ -3939,8 +4065,52 @@ class App(tk.Tk):
             self.settings["geometry"] = self.geometry()
         self.settings["workflow"] = self.workflow
         self.settings["show_adv"] = bool(self.show_adv.get())
+        self.settings["guide_open"] = self.guide is not None
+        if self.guide is not None:
+            self.guide.close()
         save_settings(self.settings)
         self.destroy()
+
+    # ------------------------------------------------------------------ interactive guide (optional)
+    def _start_guide(self):
+        if self.settings.get("guide_open"):
+            self.toggle_guide(True)
+        elif not self.settings.get("guide_hint"):
+            self.settings["guide_hint"] = True
+            self.status.set("New: interactive guide in Hebrew - Help > Interactive guide or Ctrl+G")
+
+    def toggle_guide(self, on=None):
+        if on is None:
+            on = self.guide is None
+        if on and self.guide is None:
+            self.guide = GuidePanel(self.paned, self)
+            self.paned.add(self.guide, weight=1)
+            self.update_idletasks()
+            try:
+                W = self.paned.winfo_width()
+                gw = int(400 * self.k)
+                # parameters | results | guide: the form keeps its width, the results give way
+                self.paned.sashpos(0, max(int((W - gw) * 0.5), min(int(620 * self.k), int((W - gw) * 0.6))))
+                self.paned.sashpos(1, W - gw)
+            except tk.TclError:
+                pass
+            self.status.set("Interactive guide opened")
+        elif not on and self.guide is not None:
+            self.guide.close()
+            self.paned.forget(self.guide)
+            self.guide.destroy()
+            self.guide = None
+            self.update_idletasks()
+            self._place_sash()
+            self.status.set("Interactive guide closed")
+
+    def _guide_focus(self, path):
+        if self.guide is not None:
+            self.guide.on_field_focus(path)
+
+    def _guide_typing(self, path):
+        if self.guide is not None:
+            self.guide.on_field_typing(path)
 
     # ------------------------------------------------------------------ help
     def open_docs(self):
@@ -3951,11 +4121,35 @@ class App(tk.Tk):
             messagebox.showinfo("Documentation", "The TRM4 documentation PDF was not found in\n%s" % PROJECT_DIR,
                                 parent=self)
 
+    def show_calculation(self):
+        """The calculation chain with its formulas (trm4/formulas.py): which step every input enters."""
+        dlg = self._dialog("How the range is calculated")
+        fr = ttk.Frame(dlg, padding=14)
+        fr.pack(fill="both", expand=True)
+        txt = tk.Text(fr, wrap="word", width=96, height=34, font=("Segoe UI", 10), bg=SURFACE_ALT, fg=TEXT,
+                      relief="flat", padx=12, pady=10)
+        sb = ttk.Scrollbar(fr, orient="vertical", command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        txt.tag_configure("h", font=("Segoe UI Semibold", 11), spacing1=10, spacing3=3)
+        txt.tag_configure("f", font=("Consolas", 10), lmargin1=18, lmargin2=18, spacing1=1)
+        titles = {v[0] for v in FO.STAGES.values()} | {"How the range is calculated",
+                                                       "Fields that do not enter the range"}
+        formulas = {line for _k, block in FO.CHAIN for line in block.split("\n")}
+        for line in FO.chain_text().split("\n"):
+            txt.insert("end", line + "\n", "h" if line in titles else ("f" if line in formulas else ()))
+        txt.configure(state="disabled")
+        txt.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        fr.rowconfigure(0, weight=1)
+        fr.columnconfigure(0, weight=1)
+        ttk.Button(fr, text="Close", command=dlg.destroy).grid(row=1, column=0, sticky="e", pady=(10, 0))
+
     def show_shortcuts(self):
         rows = [("F5", "Calculate"), ("Ctrl+N", "New project"), ("Ctrl+O", "Open project"), ("Ctrl+S", "Save"),
                 ("Ctrl+Shift+S", "Save as"), ("Ctrl+E", "Export text report"), ("Ctrl+P", "Export current plot"),
                 ("Ctrl+D", "Detector lookup"), ("Ctrl+1 ... 9", "Go to parameter page"),
-                ("Ctrl+Shift+1 / 2 / 3", "Quick / Engineering / Lab workflow"), ("F1", "Documentation")]
+                ("Ctrl+Shift+1 / 2 / 3", "Quick / Engineering / Lab workflow"), ("F1", "Documentation"),
+                ("Ctrl+G", "Interactive guide"), ("F9", "Guide: listen to the explanation / pause")]
         dlg = self._dialog("Keyboard shortcuts")
         fr = ttk.Frame(dlg, padding=20)
         fr.pack(fill="both", expand=True)

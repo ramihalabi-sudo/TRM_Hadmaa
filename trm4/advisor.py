@@ -286,8 +286,8 @@ def catalogue(project, step=0.25):
     lens_note = ["The imported optics MTF belongs to the current lens; a new lens needs its own MTF curve "
                  "(the computed effect is approximate)."] if _imported_mtf(p) else []
     meas = AN._measured_netd(p)
-    netd_note = ["The measured NETD is held constant although the F-number / collected flux changes - it is only valid "
-                 "for the optics it was measured with."] if meas else []
+    netd_note = [AN._NETD_F_NOTE] if AN._netd_follows_F(p) else         ["The measured NETD is held constant although the F-number / collected flux changes - it is only valid "
+         "for the optics it was measured with."] if meas else []
     if o.get("aperture") != "general":
         add("lens_long_sameF", "focal_length", "hardware",
             "Longer lens, same F-number: f x%.2f and D x%.2f" % (up, up),

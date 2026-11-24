@@ -85,6 +85,19 @@ HELP = {
                          "parameter q, or a Gaussian blur spot.",
     "optics.q": "Aberration parameter q (> 1). Ratio of real blur to diffraction blur; 1 means "
                 "diffraction-limited, larger values mean poorer optics.",
+    "optics.defocus_um": "Extension: distance between the image plane and the best focus, in micrometres (sign "
+                         "does not matter). The optics MTF becomes the transfer function of the defocused pupil, "
+                         "calculated from the aperture shape. Within the depth of focus +-2 lambda F^2 the loss is "
+                         "small (Strehl >= 0.8); beyond it the MTF falls quickly. Sources of a focus error: a target "
+                         "closer than the focus distance, or a temperature change of a lens that is not athermal - "
+                         "a germanium lens of focal length f shifts by about f x 132e-6 per kelvin. 0 = in focus. "
+                         "Not applied to an imported optics MTF.",
+    "optics.wfe_rms_um": "Extension: rms wavefront error of the lens, as optical path in micrometres (0.07 wave at "
+                         "10 um = 0.7 um; at 0.55 um = 0.039 um). The optics MTF is multiplied by "
+                         "exp{-(2 pi sigma / lambda)^2 [1 - rho(s)]}: mid and high frequencies fall by the Strehl "
+                         "ratio exp[-(2 pi sigma / lambda)^2] - 0.8 at lambda / 14 rms (the Marechal criterion). "
+                         "Take it from the lens specification or the interferometer report. Above 0.1 wave the "
+                         "result is only a rough guide. 0 = none. Not applied to an imported optics MTF.",
     "optics.blur_um": "Standard deviation of a Gaussian blur spot in the image plane that represents the "
                       "optical aberrations.",
     "optics.zemax_mtf": "Import an MTF table: Zemax OpticStudio FFT/Huygens MTF export, or a measured / simulated "
@@ -141,6 +154,9 @@ HELP = {
     "detector.noise_mode": "Noise / sensitivity source - which data are the truth for the temporal noise.\n"
                            "Physics model: shot, dark, read and quantization noise from the detector data.\n"
                            "Measured camera NETD: replaces the noise model; no read noise is added on top.\n"
+                           "Measured camera NETD, converted to the scenario F-number (uncooled, extension): the same "
+                           "NETD multiplied by (F / test F-number)^2, so a change of the lens changes the sensitivity "
+                           "in sweeps and in the advisor; needs the test F-number.\n"
                            "Detector-level NETD (uncooled): converted to the project optics (Eq. 3.142).",
     "detector.netd_F": "F-number at which the camera NETD was measured. NETD scales roughly with F^2: a mismatch "
                        "with the project optics is flagged, the value is not converted silently.",
@@ -215,8 +231,10 @@ HELP = {
     "dsp.frames_on": "Average several frames to reduce temporal noise.",
     "dsp.n_frames": "Number of frames averaged. Noise drops by about sqrt(N).",
     "dsp.iir_on": "Recursive (IIR) frame averaging filter for temporal noise reduction.",
-    "dsp.iir_alpha": "Weight of the new frame in the IIR filter (0..1). Smaller = stronger noise reduction "
-                     "but more lag.",
+    "dsp.iir_alpha": "Feedback weight of the IIR filter, y = (1 - alpha) x + alpha y_previous (0 <= alpha < 1). "
+                     "Larger = stronger noise reduction but more lag: equivalent to (1 + alpha) / (1 - alpha) "
+                     "averaged frames (TRM4 Eq. 3.141) - 0.5 gives 3 frames, 0.8 gives 9. This is how a temporal "
+                     "(recursive) denoiser is entered.",
 
     # ---------------------------------------------------------------- Display & observer
     "display.n_h": "Number of display pixels horizontally.",
@@ -225,6 +243,30 @@ HELP = {
                           "image appears to the eye.",
     "display.pitch_v_mm": "Vertical size of one display pixel.",
     "display.luminance": "Average brightness of the display. The eye's contrast sensitivity depends on it.",
+    "display.contrast_limit": "Extension (PROVISIONAL): a bar pattern must exceed not only the noise but also the "
+                              "contrast threshold of the eye on the display (Barten model of DICOM PS3.14). The "
+                              "displayed modulation is the signal difference divided by the span shown from black to "
+                              "white - the AGC span in kelvin of the Image processing page - times the ambient "
+                              "contrast factor L / (L + L_reflected). Thermal category only. A camera with local "
+                              "contrast enhancement (DDE, local AGC) shows details with a much narrower span than the "
+                              "whole scene: enter that local span as the AGC span. The contrast threshold is added in "
+                              "quadrature to the TRM4 threshold. With a narrow span (high display gain) it has no "
+                              "effect, which is the TRM4 assumption of an optimally adjusted display; with a wide span "
+                              "or strong ambient light it shortens the ranges.",
+    "display.contrast_span_mode": "Fixed: the AGC span stays as entered at every range (manual gain) - a distant "
+                                  "target is shown with less contrast. Follows the scene: the automatic gain keeps "
+                                  "the scene filling the display, so the span shrinks with the atmospheric "
+                                  "transmission like the target signal does (the apparent scene contrast "
+                                  "temperature of NVIPM) and the contrast limit no longer grows with range.",
+    "display.ambient_lux": "Extension (diagnostic): illuminance of the ambient light falling on the screen. A "
+                           "diffusely reflecting screen adds the luminance reflectance x illuminance / pi, which "
+                           "lowers every displayed contrast by L / (L + L_reflected). The TRM4 observer has no "
+                           "contrast threshold, so the ranges are not changed - the factor is reported and a warning "
+                           "is given below 0.5. Office 300-500 lux, overcast daylight 1000-10000 lux, direct sun "
+                           "up to 100000 lux. 0 = dark room.",
+    "display.reflectance": "Diffuse reflectance of the screen surface (0-1), used with the ambient light. A few "
+                           "per cent for a display with an anti-reflection coating; take it from the display data "
+                           "sheet. Default 0.04 is an assumption.",
     "display.neglect_eye": "Ignore the eye MTF (assume a perfect eye), e.g. when the display is magnified "
                            "enough.",
     "display.observation": "Display viewed directly, or through an eyepiece (e.g. a viewfinder).",
@@ -317,6 +359,21 @@ HELP = {
                        "1976). Gas line absorption is not included - a lower bound in clear air, aerosol only in "
                        "the MWIR.\nSpectral: imported wavelength- and range-dependent transmission (e.g. MODTRAN).",
     "atmosphere.atm.N.on": "Calculate ranges for this atmosphere (up to three weather conditions are compared).",
+    "atmosphere.scale_height_km": "Extension: the extinction falls off with height as exp(-h / H). The entered "
+                                  "extinction (or visual range) is then the ground-level value, and the path uses "
+                                  "its mean along the line of sight between imager and target height - important "
+                                  "when looking down from a mast, a hill or an aircraft. Measured aerosol scale "
+                                  "heights: about 0.6 km in clean air, 1.7 km in haze; water vapour 1 - 2 km. "
+                                  "0 = homogeneous path (TRM4). Not applied to imported spectral data or to rain.",
+    "atmosphere.rain_mmh": "Extension: rain rate. Adds the extinction 1.2924 R^0.6436 dB/km (ITU-R P.1814-1) to "
+                           "every atmosphere, the same in every band - rain drops are much larger than the "
+                           "wavelength, so the thermal bands lose as much as the visible. Light rain 2.5 mm/h, "
+                           "heavy rain 25 mm/h. 0 = no rain.",
+    "atmosphere.extra_sigma": "Extension: an additional extinction coefficient added to every atmosphere, for "
+                              "losses the selected extinction model does not contain - above all gas absorption "
+                              "(CO2, water vapour lines) in the MWIR when the extinction is derived from the "
+                              "weather, which is aerosol only below 8 um. Take the value from MODTRAN or a "
+                              "measurement. 0 = none.",
     "atmosphere.atm.N.sigma": "Extinction coefficient: transmission = tau0 * exp(-sigma * range). Larger value "
                               "= worse weather, shorter range.",
     "atmosphere.atm.N.V_km": "Meteorological visual range; converted to an extinction coefficient.",
@@ -504,7 +561,10 @@ HELP = {
                         "creates no new information. Without a calibrated noise / task model it is not credited in "
                         "the ranges (the filter is then ignored); tick to include the TRM4 model of the filter.",
     "dsp.pl_denoise": "Denoising is part of the pipeline. It is not modelled - documented so that the prediction is "
-                      "marked as not covering this processing.",
+                      "marked as not covering this processing. To include it, describe it with the existing inputs: "
+                      "temporal denoising = frame integration (number of frames or the recursive factor), spatial "
+                      "denoising = the digital filter with its kernel; super-resolution from sub-pixel motion = "
+                      "micro-scan.",
     "dsp.pl_compression": "Video compression. Lossy compression acts on the ranges only with an equivalent blur "
                           "(below); otherwise it is documented as not modelled.",
     "dsp.tone_mode": "Extension: tone curve or AGC that maps the signal to a quantized output stream (e.g. 8-bit "
@@ -547,6 +607,18 @@ HELP = {
     "stab.psd_file": "One-sided angular power spectral density of the residual line of sight: frequency [Hz] and "
                      "PSD (one column for both axes, or h and v columns).",
     "stab.psd_unit": "Unit of the PSD values (angle squared per Hz).",
+    "stab.eis_interp": "How the registered frames are resampled. Not modelled: the best case. Linear "
+                       "interpolation: a frame shifted by a fraction of a pixel is a weighted mean of two pixels, "
+                       "which lowers the MTF - on average over the shifts to 1/2 at the Nyquist frequency.",
+    "stab.eis_crop_pct": "Part of the image, per axis, that the stabilization keeps as a margin for the shifts "
+                         "and does not show (often 5 - 15 %). The field of view is reported smaller by it, and the "
+                         "search counts more fields of view; the ranges of the tasks do not change.",
+    "stab.eis": "Extension: electronic image stabilization registers the frames before they are displayed. The "
+                "frame-to-frame part of the measured motion (PSD x sinc^2(f t_int), or the jitter of the time series "
+                "between exposures) then does not blur the image the eye integrates; the blur within the exposure "
+                "is not affected. The interpolation of the shifted frames and the cropped field of view are not "
+                "modelled - best case. Only for measured or PSD motion; the random-vibration model is blur within "
+                "the exposure.",
     "stab.residual_los": "Tick when the data are the residual motion after stabilization. Unticked = platform "
                          "motion, which overestimates the blur when a stabilization loop is active.",
     "target.task_preset": "Version of the task criteria (line pairs across the critical dimension for detection / "
@@ -575,6 +647,31 @@ HELP = {
     "target.tasks.N.v50": "V50 of the TTP metric for this task [cycles on target] (defaults 2.7 / 14.5 / 20.8; "
                           "identification ~ 20 is the order of the NVESD tracked-vehicle set, the others are typical "
                           "orders of magnitude). Calibrate for the target set.",
+    "target.search": "Extension: also report the Detection range when the target has to be found by searching within "
+                     "a limited time. P(t) = P_inf (1 - exp(-t / (N tau))): P_inf is the probability with unlimited "
+                     "time (Johnson TTPF of the resolved cycles), tau the mean acquisition time of one field of view "
+                     "and N the number of fields of view in the field of regard. The reported range is the one with "
+                     "a 50 % chance within the search time. This is where the field of view, and so the number of "
+                     "pixels, pays off. The TRM4 ranges are not changed.",
+    "target.search_mode": "Random: the observer looks around freely - mean acquisition time N x that of one "
+                          "field of view. Systematic: the sensor is stepped over the field of regard and stays a "
+                          "fixed time t0 in each field of view - mean acquisition time (2 - Ps) / (2 Ps) (N - 1) "
+                          "t0 + tau, Ps = 1 - exp(-t0 / tau) (Friedman, Mark & Skirlo 2019).",
+    "target.search_dwell_s": "Time the sensor stays on each field of view when it steps over the field of regard.",
+    "target.search_time_s": "Time available for the search.",
+    "target.search_tau_s": "Mean time an observer needs to find the target in one field of view when it can be "
+                           "found. There is no formula for it - it is measured in search experiments and grows with "
+                           "clutter and range (a few seconds in uncluttered scenes). No default: it must be entered.",
+    "target.search_for_h_deg": "Horizontal extent of the area to be searched. N = field of regard / field of view. "
+                               "0 = one field of view.",
+    "target.search_for_v_deg": "Vertical extent of the area to be searched. 0 = one field of view.",
+    "target.point": "Extension: also report the range at which the target is detected as a point source - the pixel "
+                    "that holds it exceeds the noise by the SNR criterion. For targets smaller than a pixel (drones, "
+                    "distant aircraft), where the line-pair criterion does not describe the task. Signal = "
+                    "difference signal x (target solid angle / pixel solid angle) x the fraction of the blurred "
+                    "point image that falls on one pixel. The TRM4 ranges are not changed.",
+    "target.point_snr": "Signal-to-noise ratio of a single pixel required to detect a point target. 5 is a common "
+                        "engineering value for a low false-alarm rate; it is an assumption, not a TRM4 constant.",
     "target.geo_limit": "Extension: range at which the task line pairs fit across the critical dimension "
                         "sqrt(a_h a_v) with one line pair = the larger of 2 pixels (Nyquist) and lambda / D "
                         "(diffraction). No noise, contrast or atmosphere - a sizing reference, not a bound: TRM4 also "
@@ -590,6 +687,17 @@ HELP = {
     "turbulence.r0_L_km": "Path length over which r0 was measured or specified.",
 
     # ---------------------------------------------------------------- fields documented in version 2.5
+    "detector.cfa": "Extension (PROVISIONAL): colour camera with a Bayer colour filter array. Half of the pixels are "
+                    "green and the image resolution comes from them: on the horizontal and the vertical axis the "
+                    "Nyquist frequency stays that of the monochrome array, on the diagonals and for red and blue it "
+                    "is half. The perceived noise power is doubled, because only half of the pixels carry an "
+                    "independent luminance sample (assumption). Enter the quantum efficiency of the green channel "
+                    "including its filter. There is no validated range model for colour cameras: colour contrast "
+                    "and colour aliasing are not modelled. Not available in the Thermal category.",
+    "detector.demosaic": "How the camera fills in the missing colour values. Adaptive (edge-directed, the usual "
+                         "choice): bar patterns along the axes are reproduced without loss. Bilinear (average of "
+                         "the four neighbours): the MTF is multiplied by (3 + cos(2 pi r alpha)) / 4, which is 1/2 "
+                         "at the Nyquist frequency.",
     "detector.square": "Ticked: one entry for the pixel pitch and the active size, used for both axes. Unticked: "
                        "separate vertical values (rectangular pixels). Set from the values when a project is loaded; "
                        "the calculation itself only sees the horizontal and vertical values.",
@@ -637,7 +745,11 @@ HELP = {
     "detector.snr_req": "Pixel SNR the mission requires. The exposure budget reports the SNR at the selected and at "
                         "the recommended integration time. 0 = not checked.",
     "detector.dark_mode": "Single value: the dark current below is used as entered. Table: the dark current is "
-                          "interpolated (log-linear) at the sensor operating temperature from a calibration table.",
+                          "interpolated (log-linear) at the sensor operating temperature from a calibration table. "
+                          "Rule 07 (extension): the dark current density of p-on-n HgCdTe from the sensor "
+                          "temperature and the cut-off wavelength of the QE curve (Tennant et al. 2008), times the "
+                          "pixel pitch area - for trading the operating temperature (HOT detectors) when no table "
+                          "exists. Other materials follow other laws.",
     "detector.dark_table": "Calibration table of the dark current per pixel: one 'temperature[K] current[A]' pair "
                            "per line, at least two rows. Outside the table the edge value is used.",
     "detector.T_sensor_K": "Operating temperature of the focal plane array. Used to look up the dark current in the "

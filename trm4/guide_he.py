@@ -1,0 +1,1331 @@
+"""Interactive Hebrew guide: parameter knowledge base and lessons.
+
+PARAMS holds, for the parameters that decide the ranges, what the value means, how strongly it moves the DRI
+ranges, typical values, where to take it from, common mistakes and a plausibility check of the entered value.
+The impact ratings come from the parameter-sensitivity study (reports/השפעת פרמטרים על טווחי תצפית TRM.md,
+Table 2 and Table 5: elasticities over four representative systems).
+
+LESSONS are the guided tours shown by the guide panel of the GUI (gui.GuidePanel).  A step names the page and
+the parameter to highlight; its field card is taken from PARAMS.  Lesson 4 ("engineering") is built from the form
+itself (entry_steps): every field the project shows, page by page, the fields critical to the range emphasised.  The
+hidden "tour" (tour_steps: one step per group of fields of every page) is what "הסבר על העמוד" walks through.
+review() checks every shown field of a project at once.
+
+The cards of all other fields of the form are in guide_kb_he.MORE.
+"""
+import re
+
+from . import formulas as FO
+from . import guide_design_he as DS
+from .guide_kb_he import MORE, _check_jitter_preset, _check_tint, _n, _range
+
+IMPACT_TEXT = {3: "השפעה גבוהה על הטווח", 2: "השפעה בינונית", 1: "השפעה נמוכה", 0: "לא משפיע על הטווח"}
+IMPACT_STYLE = {3: "high", 2: "mid", 1: "low", 0: "info"}
+
+
+def _cat(p):
+    return p.get("category", "Thermal")
+
+
+def _thermal(p):
+    return _cat(p) == "Thermal"
+
+
+def _visible(p):
+    return _cat(p) == "Visible"
+
+
+def _field(p):
+    return p.get("mode", {}).get("environment", "field") == "field"
+
+
+def _refl_mode(p, who):
+    return p.get("target", {}).get(who + "_refl_mode", "effective")
+
+
+def _check_materials(p):
+    t = p.get("target", {})
+    if t.get("t_refl_mode") == "spectral" and t.get("b_refl_mode") == "spectral":
+        if t.get("t_refl_preset") == t.get("b_refl_preset"):
+            return ("warn", "המטרה והרקע מאותו חומר (%s): אין ניגוד, ולכן לא יהיה טווח." % t.get("t_refl_preset"))
+        return ("ok", "מטרה: %s, רקע: %s." % (t.get("t_refl_preset"), t.get("b_refl_preset")))
+    return None
+
+
+def _check_f(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v <= 0:
+        return ("warn", "אורך מוקד חייב להיות חיובי.")
+    if v < 3:
+        return ("warn", "פחות מ-3 mm - ייתכן שהוזן בס\"מ במקום מ\"מ. מוקד קצר פי 10 נותן IFOV גדול פי 10, והטווחים "
+                        "יוצאים קצרים פי 5-10.", round(v * 10, 3))
+    if v > 3000:
+        return ("warn", "יותר מ-3000 mm - חריג מאוד. ייתכן שהוזן במיקרון או שיש טעות הקלדה. מוקד ארוך מדי מנפח את "
+                        "הטווח במערכת מוגבלת-דגימה.")
+    D = p.get("optics", {}).get("D_mm") or 0
+    if p.get("optics", {}).get("aperture") == "circular" and D > 0:
+        F = v / D
+        if F < 0.7 or F > 12:
+            return ("warn", "היחס f/D יוצא F/%.1f - לא סביר (עדשות אמיתיות: F/0.8-F/8). קוטר שגוי משנה את העקיפה "
+                            "ואת כמות האור. בדקו את הקוטר D." % F)
+        return ("ok", "f = %s mm עם D = %s mm נותן F/%.2g." % (_n(v), _n(D), F))
+    return ("ok", "f = %s mm." % _n(v))
+
+
+def _check_D(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v < 0:
+        return ("warn", "הקוטר לא יכול להיות שלילי.")
+    if v == 0:
+        return ("ok", "0 = מפתח מלבני לפי רוחב וגובה (מתקדם).")
+    f = p.get("optics", {}).get("f_mm") or 0
+    if f and f / v < 0.7:
+        return ("warn", "הקוטר גדול מדי ביחס למוקד (F/%.2g) - עדשה כזו לא קיימת, והיא מנפחת את האות ומקטינה את "
+                        "העקיפה. ייתכן שהוזן ה-F-number או ערך שגוי." % (f / v))
+    if f and f / v > 12:
+        return ("warn", "הקוטר קטן מאוד ביחס למוקד (F/%.2g): עקיפה חזקה ומעט אור. ייתכן שהוזן הרדיוס או ה-F-number "
+                        "במקום הקוטר." % (f / v))
+    return _range(2, 600, "mm")(v, p)
+
+
+def _check_netd(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if 0 < v < 1:
+        return ("warn", "נראה שה-NETD הוזן ב-K במקום ב-mK: %s K = %s mK. NETD קטן פי 1000 מנפח את הרגישות." %
+                (_n(v), _n(v * 1000)), v * 1000)
+    if p.get("imager_type") == "uncooled":
+        return _range(15, 150, "mK", "לא-מקורר טיפוסי: 30-80 mK")(v, p)
+    return _range(5, 100, "mK", "מקורר טיפוסי: 15-40 mK")(v, p)
+
+
+def _check_pitch(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if _thermal(p):
+        return _range(5, 50, "µm", "תרמי: 8-25 µm")(v, p)
+    return _range(0.8, 30, "µm", "נראה: 1.4-6 µm, SWIR: 5-20 µm")(v, p)
+
+
+def _check_lp(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v <= 0:
+        return ("warn", "מספר זוגות הקווים חייב להיות חיובי.")
+    if v > 15:
+        return ("warn", "יותר מ-15 זוגות קווים - חריג. ערכים מקובלים: 0.75-8.")
+    return ("ok", "%s זוגות קווים." % _n(v))
+
+
+def _check_dT(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v == 0:
+        return ("warn", "ΔT = 0: אין ניגוד ולכן אין טווח. זה מתאים רק למעבר תרמי (שחר / דמדומים). לדרישה "
+                        "מקובל ΔT = 2 K.", 2.0)
+    if abs(v) > 20:
+        return ("warn", "ΔT מעל 20 K - נדיר למטרה טיפוסית (מנוע חם, אש?). ניגוד גבוה מדי מנפח בעיקר את טווח הגילוי. "
+                        "בדקו שזה ניגוד ולא טמפרטורה.")
+    if abs(v) < 0.5:
+        return ("ok", "ניגוד נמוך מאוד - תרחיש קשה. כאן NETD ועיבוד אות מתחילים להשפיע.")
+    return ("ok", "ΔT = %s K, בתחום המקובל (תקן: 2 K)." % _n(v))
+
+
+def _check_Tbg(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v < 200 or v > 340:
+        msg = ("טמפרטורת רקע של %s K (%.0f °C) חריגה. שימו לב: הערך בקלווין, לא בצלזיוס. רקע קר מאוד מוריד את "
+               "קרינת הרקע ואת הרגישות, ומקצר את הטווח." % (_n(v), v - 273.15))
+        if -60 <= v <= 80:
+            return ("warn", msg + " %s °C = %s K." % (_n(v), _n(round(v + 273.15, 2))), round(v + 273.15, 2))
+        return ("warn", msg)
+    return ("ok", "%s K = %.0f °C." % (_n(v), v - 273.15))
+
+
+def _check_refl(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if 1 < v <= 100:
+        return ("warn", "החזרות היא שבר בין 0 ל-1, לא אחוזים: %s נראה כמו %s%%. ההחזרות קובעת את הניגוד, ולכן "
+                        "ערך שגוי משנה את כל הטווחים." % (_n(v), _n(v)), round(v / 100.0, 4))
+    if v < 0 or v > 1:
+        return ("warn", "החזרות היא שבר בין 0 ל-1, לא אחוזים.")
+    t = p.get("target", {})
+    other = t.get("b_refl") if v == t.get("t_refl") else t.get("t_refl")
+    if p.get("category") != "Thermal" and isinstance(other, (int, float)) and abs(v - other) < 0.02 and \
+            t.get("t_refl_mode") == t.get("b_refl_mode") == "effective":
+        return ("warn", "ההחזרות של המטרה (%s) ושל הרקע (%s) כמעט שוות: כמעט אין ניגוד, והטווחים יהיו קצרים מאוד. "
+                        "בדקו את שני הערכים." % (_n(t.get("t_refl")), _n(t.get("b_refl"))))
+    return ("ok", "החזרות %s." % _n(v))
+
+
+def _check_sigma(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v < 0:
+        return ("warn", "מקדם הנחתה לא יכול להיות שלילי.")
+    if 0 < v < 0.005:
+        return ("warn", "σ = %s 1/km - אוויר כמעט ריק. ייתכן שהוזן ב-1/m: %s 1/m = %s 1/km. הנחתה נמוכה מדי מנפחת "
+                        "את טווח הגילוי." % (_n(v), _n(v), _n(v * 1000)), round(v * 1000, 4))
+    if v > 5:
+        return ("warn", "σ מעל 5 1/km - ערפל כבד; הטווחים יהיו קצרים מאוד.")
+    T = 2.718281828 ** (-v * 5)
+    return ("ok", "σ = %s 1/km: העברה של %.0f%% ב-5 ק\"מ." % (_n(v), 100 * T))
+
+
+def _check_V(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v <= 0:
+        return ("warn", "טווח הראות חייב להיות חיובי.")
+    if v < 1:
+        return ("ok", "טווח ראות מתחת ל-1 ק\"מ: ערפל. הטווחים יוגבלו מאוד.")
+    return _range(0.05, 100, "km", "יום בהיר: 20-40 km")(v, p)
+
+
+def _check_jitter(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    det = p.get("detector", {})
+    f = p.get("optics", {}).get("f_mm") or 0
+    pitch = det.get("pitch_h_um") or 0
+    if not (f and pitch):
+        return None
+    ifov = pitch / f                                       # mrad (um / mm)
+    ratio = v / ifov if ifov else 0
+    if v < 0:
+        return ("warn", "ריצוד לא יכול להיות שלילי.", 0.0)
+    if v >= 1 and ratio > 5:
+        return ("warn", "%s mrad זה ריצוד עצום (פי %.0f מהפיקסל) - נראה שהוזן ב-µrad בשדה של mrad." % (_n(v), ratio),
+                round(v / 1000.0, 4))
+    if ratio > 1:
+        return ("warn", "הריצוד (%s mrad) גדול מה-IFOV (%.3g mrad): התמונה נמרחת על יותר מפיקסל בכל חשיפה, והוא "
+                        "יגביל את ההכרה והזיהוי מאוד." % (_n(v), ifov))
+    if v == 0 and ifov < 0.21:
+        return ("warn", "IFOV של %.3g mrad (שדה צר) בלי ריצוד - התחזית אופטימית: כל מערכת אמיתית רועדת. שקלו "
+                        "0.07 mrad (נוהג NV-IPM), או הזינו מדידת ייצוב." % ifov, 0.07)
+    return ("ok", "ריצוד / IFOV = %.2f." % ratio)
+
+
+def _check_snr(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v <= 0:
+        return ("warn", "סף SNR חייב להיות חיובי.", 2.5)
+    if v < 1.5 or v > 6:
+        return ("warn", "סף SNR של %s מחוץ לתחום המקובל (2.5-3). זה קבוע כיול של הצופה: סף נמוך מנפח את הטווח, סף "
+                        "גבוה מקצר אותו. השאירו 2.5 אלא אם יש כיול." % _n(v), 2.5)
+    return ("ok", "הערך %s בתחום הסביר (מקובל: 2.5-3)." % _n(v))
+
+
+def _check_size(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v <= 0:
+        return ("warn", "ממד המטרה חייב להיות חיובי (0 נותן מטרה בגודל אפס).")
+    if v > 60:
+        return ("warn", "יותר מ-60 מ' - חריג. ייתכן שהוזן בס\"מ. מטרה גדולה פי 100 נותנת טווח ארוך בהרבה.",
+                round(v / 100.0, 3))
+    return ("ok", "%s מ'." % _n(v))
+
+
+def _check_cn2(v, p):
+    if not isinstance(v, (int, float)):
+        return None
+    if v < 0:
+        return ("warn", "Cn² לא יכול להיות שלילי.")
+    if v >= 1:
+        return ("warn", "Cn² של %s - נראה שהוזן המעריך במקום הערך: 1e-%s m^-2/3." % (_n(v), _n(v)), 10.0 ** -v)
+    if v > 1e-11:
+        return ("warn", "Cn² מעל 1e-11 - חריג מאוד (חום קיצוני מעל אספלט). טורבולנציה כזו מטשטשת כמעט כל פרט "
+                        "בנתיב של קילומטרים.")
+    lvl = "חלשה" if v < 1e-15 else ("בינונית" if v < 1e-13 else "חזקה")
+    return ("ok", "טורבולנציה %s (%s m^-2/3)." % (lvl, "%.1e" % v))
+
+
+# ---------------------------------------------------------------------------------------------
+# knowledge base
+# ---------------------------------------------------------------------------------------------
+PARAMS = {
+    "category": {
+        "title": "קטגוריית החיישן (תחום ספקטרלי)",
+        "what": "קובע איך המודל מתאר את הסצנה. Thermal: טמפרטורות בלבד (MWIR / LWIR). Visible: החזרות ומקור "
+                "הארה (נראה, NIR, SWIR). General: גם החזרה וגם פליטה (למשל MWIR ביום).",
+        "why": "ההחלטה הראשונה בפרויקט. היא קובעת אילו פרמטרים מוצגים ואיזו רדיומטריה מחושבת.",
+        "impact": 3, "impact_note": "קובע את כל מבנה החישוב",
+        "typical": ["מצלמה תרמית מקוררת או לא-מקוררת: Thermal.", "מצלמת יום, NIR או SWIR לילה: Visible.",
+                    "MWIR שרואה גם השתקפות שמש: General."],
+        "source": "דף הנתונים של המצלמה (תחום הגל).",
+        "mistakes": ["לבחור Thermal למצלמת SWIR - SWIR היא חיישן מחזיר (Visible)."],
+    },
+    "imager_type": {
+        "title": "סוג הגלאי התרמי",
+        "what": "Cooled: גלאי פוטונים מקורר (InSb, MCT, XBn) עם זמן אינטגרציה ובאר אלקטרונים. Uncooled: "
+                "מיקרובולומטר עם NETD וקבוע זמן תרמי.",
+        "why": "קובע את מודל הרעש. בבולומטר הרגישות נקבעת ב-NETD; במקורר היא מחושבת מנתוני הגלאי.",
+        "impact": 2, "impact_note": "בוחר את מודל הרעש",
+        "typical": ["מצלמה שצריכה קירור (Stirling) ו-F/4-F/5.5: Cooled.", "מצלמה קלה, F/1-F/1.4, פסיעה 12-17 µm: Uncooled."],
+        "source": "דף הנתונים: Cooled / Uncooled, VOx / a-Si = Uncooled.",
+        "mistakes": [],
+    },
+    "mode.environment": {
+        "title": "שדה או מעבדה",
+        "what": "Field: ביצועים בטווח דרך האטמוספרה (עקומות טווח). Laboratory: ביצועים בכניסה למצלמה בלי "
+                "אטמוספרה (MRTD / MTDP).",
+        "why": "לחיזוי טווחי DRI בוחרים Field. Laboratory משמש להשוואה למדידות מעבדה.",
+        "impact": 3, "impact_note": "בלי Field אין טווחים בשטח",
+        "typical": ["חיזוי טווחים: Field."], "source": "מטרת הניתוח.",
+        "mistakes": ["לחשב ב-Laboratory ולצפות לטווחים בק\"מ."],
+    },
+    "mode.stream": {
+        "title": "וידאו או תמונה בודדת",
+        "what": "Video: העין משלבת כמה פריימים ומנקה רעש זמני. Still: צופה בפריים בודד.",
+        "why": "בווידאו הרעש האפקטיבי נמוך יותר, ולכן הטווח לרוב ארוך יותר.",
+        "impact": 1, "impact_note": "משנה בעיקר במערכות מוגבלות-רעש",
+        "typical": ["צפייה חיה במסך: Video.", "צילום / מודיעין תמונה: Still."], "source": "אופן השימוש.",
+        "mistakes": [],
+    },
+    "optics.f_mm": {
+        "title": "אורך מוקד (f)",
+        "what": "אורך המוקד האפקטיבי של העדשה. יחד עם פסיעת הגלאי הוא קובע את ה-IFOV (הזווית שכל פיקסל רואה) "
+                "ואת שדה הראייה.",
+        "why": "מוקד ארוך = פיקסל רואה זווית קטנה יותר = יותר פיקסלים על המטרה = טווח ארוך יותר. ב-LWIR "
+               "לא-מקורר זה המנוף החומרתי החזק ביותר (גמישות 0.75-0.87). ב-MWIR מקורר עם קוטר קבוע ההשפעה "
+               "קטנה, כי שם הקוטר מגביל.",
+        "impact": 3, "impact_note": "חזק במיוחד כשהמערכת מוגבלת-דגימה (Fλ/d < 1)",
+        "typical": ["מצלמה תרמית ידנית: 25-75 mm.", "מערכת תצפית יבשתית: 100-300 mm.",
+                    "מערכת ארוכת טווח / מוטסת: 300-1500 mm."],
+        "source": "דף הנתונים של העדשה. בזום - הזינו את המוקד במצב שאותו מנתחים (בדרך כלל NFOV).",
+        "mistakes": ["להזין בס\"מ במקום מ\"מ.", "לשנות מוקד בלי לעדכן את הקוטר - זה משנה גם את ה-F-number."],
+        "check": _check_f,
+    },
+    "optics.aperture": {
+        "title": "איך מגדירים את המפתח",
+        "what": "Clear aperture diameter: מזינים קוטר D מדויק (נכון לעקיפה ולרדיומטריה). F-number: מזינים רק "
+                "F/# ומניחים מפתח עגול ללא הסתרה.",
+        "why": "הקוטר D הוא שקובע את העקיפה ואת כמות האור. כשיש קוטר בדף הנתונים - העדיפו אותו.",
+        "impact": 1, "impact_note": "בחירת צורת קלט",
+        "typical": ["יש D בדף הנתונים: Clear aperture diameter.", "יש רק F/#: F-number."],
+        "source": "דף הנתונים של העדשה.", "mistakes": [],
+    },
+    "optics.D_mm": {
+        "title": "קוטר המפתח (D)",
+        "what": "קוטר אישון הכניסה של העדשה. F-number = f / D.",
+        "why": "קובע את גבול העקיפה ואת כמות האות. ב-MWIR מקורר ובמערכות לילה (SWIR) זה המנוף החזק (גמישות עד "
+               "0.93 בזיהוי). ב-LWIR לא-מקורר ההשפעה קטנה (~0.15).",
+        "impact": 3, "impact_note": "חזק כשהמערכת מוגבלת-עקיפה (Fλ/d > 1.5)",
+        "typical": ["לא-מקורר F/1-F/1.4: D קרוב ל-f.", "מקורר MWIR F/4-F/5.5: D = f / 4 עד f / 5.5."],
+        "source": "דף הנתונים (Aperture / Entrance pupil), או f חלקי ה-F-number.",
+        "mistakes": ["להזין את ה-F-number במקום הקוטר.", "להזין רדיוס במקום קוטר."],
+        "check": _check_D,
+    },
+    "optics.F_general": {
+        "title": "F-number אפקטיבי",
+        "what": "היחס בין אורך המוקד לקוטר המפתח (f/D).",
+        "why": "F קטן = יותר אור ופחות טשטוש עקיפה. במקורר ה-F צריך להתאים למגן הקר (cold shield).",
+        "impact": 2, "impact_note": "דרך הקוטר D",
+        "typical": ["לא-מקורר: F/1-F/1.4.", "MWIR מקורר: F/4-F/5.5.", "מצלמת יום: F/2-F/8."],
+        "source": "דף הנתונים.", "mistakes": [],
+        "check": _range(0.7, 16, "", None),
+    },
+    "optics.tau_opt": {
+        "title": "העברת האופטיקה (τ)",
+        "what": "איזה חלק מהאור עובר דרך העדשות (0-1), בלי הסתרה מרכזית.",
+        "why": "מקטין את האות באופן ישיר. משמעותי במערכות מורעבות-פוטונים (SWIR לילה: גמישות עד 0.36); "
+               "כמעט לא משנה בלא-מקורר.",
+        "impact": 2, "impact_note": "חשוב בלילה ובמערכות חלשות-אות",
+        "typical": ["עדשה תרמית טובה: 0.8-0.9.", "זום מורכב או עם חלון: 0.6-0.75."],
+        "source": "דף הנתונים או מדידה.", "mistakes": ["להזין באחוזים (85) במקום שבר (0.85)."],
+        "check": _range(0.2, 1.0, "", "טיפוסי 0.7-0.9", suggest=lambda v: round(v / 100.0, 4) if 1 < v <= 100 else None),
+    },
+    "detector.n_h": {
+        "title": "מספר פיקסלים אופקי",
+        "what": "מספר העמודות בגלאי (למשל 640 ב-640x512).",
+        "why": "יחד עם הפסיעה והמוקד קובע את שדה הראייה. לא משנה את הטווח עצמו - רק את רוחב השדה.",
+        "impact": 1, "impact_note": "קובע FOV, לא טווח",
+        "typical": ["תרמי: 320, 640, 1280.", "נראה: 1920, 2048, 4096."],
+        "source": "דף הנתונים של הגלאי / המצלמה.", "mistakes": [],
+        "check": _range(64, 20000, "", None),
+    },
+    "detector.pitch_h_um": {
+        "title": "פסיעת הפיקסלים",
+        "what": "המרחק בין מרכזי פיקסלים סמוכים, במיקרון.",
+        "why": "יחד עם המוקד קובע את ה-IFOV (= פסיעה / מוקד). פיקסל קטן יותר באותו מוקד נותן יותר פיקסלים על "
+               "המטרה - אבל רק אם האופטיקה מספיק חדה (Fλ/d). ב-LWIR, מעבר מ-17 ל-12 µm הוסיף 22%-31% לטווח; "
+               "ב-MWIR ב-F/4 כמעט ללא שינוי.",
+        "impact": 2, "impact_note": "תלוי ביחס Fλ/d",
+        "typical": ["לא-מקורר: 10, 12, 17 µm.", "מקורר: 8-15 µm.", "CMOS יום: 1.4-6 µm."],
+        "source": "דף הנתונים של הגלאי (Pixel pitch). אפשר גם Run > Detector lookup.",
+        "mistakes": ["לבלבל בין פסיעה לגודל האזור הרגיש (fill factor)."],
+        "check": _check_pitch,
+    },
+    "detector.noise_mode": {
+        "title": "מקור נתוני הרעש",
+        "what": "Physics model: הרעש מחושב מנתוני הגלאי. Measured camera NETD: ה-NETD שנמדד מחליף את מודל הרעש.",
+        "why": "כשיש NETD מדוד למצלמה השלמה - זה מקור אמין יותר מחישוב.",
+        "impact": 1, "impact_note": "בחירת מקור, לא ערך",
+        "typical": ["יש NETD בדף הנתונים של המצלמה: Measured."], "source": "דף הנתונים או מדידה.",
+        "mistakes": ["להזין NETD של הגלאי (detector-level) כאילו הוא של המצלמה - צריך את ה-F וה-τ שבהם נמדד."],
+    },
+    "detector.netd_mK": {
+        "title": "NETD - רגישות תרמית",
+        "what": "הפרש הטמפרטורה הקטן ביותר שנותן יחס אות-לרעש 1. ככל שהוא קטן - המצלמה רגישה יותר.",
+        "why": "משפיע פחות ממה שמצפים: |גמישות| ≤ 0.2 ברוב המקרים. הוא חשוב כשהניגוד ΔT נמוך, במזג אוויר "
+               "גרוע או במוקד ארוך.",
+        "impact": 1, "impact_note": "חשוב בניגוד נמוך ובמזג אוויר גרוע",
+        "typical": ["לא-מקורר: 30-80 mK.", "מקורר: 15-40 mK."],
+        "source": "דף הנתונים. חשוב: באיזה F, טמפרטורת רקע וקצב פריימים נמדד.",
+        "mistakes": ["להשוות NETD שנמדדו ב-F שונה.", "להזין ב-K במקום ב-mK."],
+        "check": _check_netd,
+    },
+    "detector.tint_ms": {
+        "title": "זמן אינטגרציה",
+        "what": "כמה זמן הגלאי אוסף פוטונים בכל פריים.",
+        "why": "יותר זמן = יותר אות ופחות רעש, עד שהבאר מתמלאת. חשוב ב-SWIR לילה (גמישות עד 0.32); "
+               "במקורר ביום הבאר מגבילה.",
+        "impact": 2, "impact_note": "חשוב במערכות מורעבות-אור",
+        "typical": ["MWIR / LWIR מקורר: 0.1-10 ms.", "SWIR לילה: 10-33 ms.", "יום: 0.01-5 ms."],
+        "source": "הגדרות המצלמה בתרחיש.", "mistakes": ["זמן אינטגרציה ארוך מזמן הפריים (1/קצב)."],
+        "check": _check_tint,
+    },
+    "detector.noise_floor_e": {
+        "title": "רעש קריאה",
+        "what": "רעש אלקטרוני קבוע שלא תלוי באות, באלקטרונים (rms).",
+        "why": "במערכות לילה (SWIR) זה מנוף מרכזי: מעבר מ-30 ל-300 e- קיצר את הטווח ב-57%. ביום כמעט לא משפיע.",
+        "impact": 2, "impact_note": "חשוב בלילה",
+        "typical": ["CMOS מודרני: 1-5 e-.", "InGaAs: 20-100 e-.", "מקורר IR: 50-500 e-."],
+        "source": "דף הנתונים של הגלאי (Read noise).", "mistakes": [],
+        "check": _range(0, 5000, "e-", None),
+    },
+    "basic.frame_rate": {
+        "title": "קצב פריימים",
+        "what": "מספר פריימים בשנייה.",
+        "why": "קובע את זמן האינטגרציה המקסימלי וכמה פריימים העין משלבת. השפעה קטנה בתחום הרגיל.",
+        "impact": 1, "impact_note": "משני",
+        "typical": ["25, 30, 50 או 60 Hz."], "source": "דף הנתונים.", "mistakes": [],
+        "check": _range(1, 1000, "Hz", None),
+    },
+    "display.observation": {
+        "title": "אופן הצפייה",
+        "what": "צפייה ישירה במסך, או דרך עינית.",
+        "why": "קובע את ההגדלה הזוויתית שהעין רואה. תצוגה שהוגדרה לא נכון היא מקור נפוץ לטעות.",
+        "impact": 2, "impact_note": "דרך ההגדלה",
+        "typical": ["מסך בעמדה: Direct.", "כוונת / משקפת: Eyepiece."], "source": "תצורת המערכת.", "mistakes": [],
+    },
+    "display.distance_cm": {
+        "title": "מרחק צפייה במסך",
+        "what": "המרחק מעין הצופה למסך.",
+        "why": "קובע את ההגדלה הזוויתית. מסך קרוב יותר = פרטים גדולים יותר לעין (זום x2: עד +13.5%).",
+        "impact": 2, "impact_note": "מנוף תצוגה",
+        "typical": ["מסך שולחני: 50-70 cm.", "טאבלט / מסך ידני: 30-40 cm."],
+        "source": "תצורת העמדה.", "mistakes": [],
+        "check": _range(5, 300, "cm", None),
+    },
+    "display.snr_th": {
+        "title": "סף SNR של הצופה",
+        "what": "יחס האות-לרעש שהצופה צריך כדי להבחין בדפוס.",
+        "why": "קבוע כיול של מודל הצופה. ערך גבוה = צופה זהיר = טווח קצר יותר (גמישות עד -0.37 ב-SWIR).",
+        "impact": 2, "impact_note": "קבוע כיול - לא לשנות בלי סיבה",
+        "typical": ["ברירת המחדל: 2.5 (מקובל 2.5-3)."],
+        "source": "השאירו את ברירת המחדל, אלא אם יש כיול של צופים.",
+        "mistakes": ["להוריד את הסף כדי \"לקבל טווח\"."],
+        "check": _check_snr,
+    },
+    "stab.jitter_preset": {
+        "title": "ריצוד קו הראייה (preset)",
+        "what": "ממלא ריצוד אקראי טיפוסי: 70 µrad rms - הנוהג ב-NV-IPM.",
+        "why": "בלי ריצוד, מערכות עם שדה צר (IFOV < 210 µrad) מקבלות תחזית אופטימית מדי.",
+        "impact": 3, "impact_note": "חשוב בשדה צר",
+        "typical": ["אין מדידה של המייצב: 70 µrad (NV-IPM).", "יש מדידה: הזינו אותה."],
+        "source": "מדידת ייצוב / דף נתונים של הגימבל.", "mistakes": [],
+        "check": _check_jitter_preset,
+    },
+    "stab.rand_h_mrad": {
+        "title": "ריצוד אקראי (rms)",
+        "what": "עוצמת הריצוד האקראי בזמן האינטגרציה, ב-mrad rms.",
+        "why": "מה שקובע הוא היחס לגודל הפיקסל (IFOV). ריצוד של 0.6 IFOV קיצר זיהוי ב-18.5%; 50 µrad קיצרו ב-47%.",
+        "impact": 3, "impact_note": "ביחס ל-IFOV, לא בערך המוחלט",
+        "typical": ["גימבל מיוצב טוב: 0.005-0.02 mrad.", "חצובה / רכב: 0.05-0.2 mrad."],
+        "source": "מדידת ייצוב.", "mistakes": ["להזין ב-µrad בשדה של mrad (70 במקום 0.07)."],
+        "check": _check_jitter,
+    },
+    "target.preset": {
+        "title": "מודל מטרה תקני",
+        "what": "מטרה מוכנה עם מידות, ניגוד וקריטריונים. STANAG 4347: רכב 2.3x2.3 m, ΔT = 2 K.",
+        "why": "נקודת התחלה עקבית להשוואה בין מערכות.",
+        "impact": 3, "impact_note": "קובע מידות וקריטריונים",
+        "typical": ["רכב: STANAG 4347.", "אדם: Persons (0.6x1.7 m).", "חפץ ביד: Handheld objects."],
+        "source": "דרישות המערכת / התרחיש.", "mistakes": [],
+    },
+    "target.W_m": {
+        "title": "רוחב המטרה",
+        "what": "רוחב המטרה במטרים, כפי שרואים אותו מכיוון הצפייה.",
+        "why": "גאומטריה טהורה: מטרה גדולה פי 2 נותנת טווח ארוך כמעט פי 2 במערכות מוגבלות-דגימה. "
+               "גמישות 0.2-0.5 לכל ממד.",
+        "impact": 3, "impact_note": "המנוף השני בחשיבותו",
+        "typical": ["רכב: 2.3 m.", "אדם: 0.5-0.6 m.", "משאית: 2.5 m."],
+        "source": "הגדרת המטרה בדרישות.", "mistakes": ["להזין בס\"מ.", "להשאיר 0."],
+        "check": _check_size,
+    },
+    "target.H_m": {
+        "title": "גובה המטרה",
+        "what": "גובה המטרה במטרים.",
+        "why": "יחד עם הרוחב קובע את הממד הקריטי (שורש השטח). אותה השפעה גבוהה כמו הרוחב.",
+        "impact": 3, "impact_note": "המנוף השני בחשיבותו",
+        "typical": ["רכב: 2.3 m.", "אדם עומד: 1.7-1.8 m."], "source": "הגדרת המטרה.", "mistakes": [],
+        "check": _check_size,
+    },
+    "target.D_m": {
+        "title": "עומק (אורך) המטרה",
+        "what": "אורך המטרה - נראה רק בצפייה מהצד, באלכסון או מלמעלה.",
+        "why": "משנה את השטח הנראה לפי זווית הצפייה.",
+        "impact": 2, "impact_note": "תלוי בזווית הצפייה",
+        "typical": ["רכב: 4-7 m.", "0 = לא בשימוש (צפייה מלפנים)."], "source": "הגדרת המטרה.", "mistakes": [],
+        "check": lambda v, p: None if not isinstance(v, (int, float)) else (
+            ("warn", "העומק לא יכול להיות שלילי.") if v < 0 else ("ok", "%s מ'." % _n(v))),
+    },
+    "target.aspect": {
+        "title": "זווית הצפייה במטרה",
+        "what": "מאיזה צד רואים את המטרה: חזית, צד או אלכסון.",
+        "why": "בוחר אילו ממדים יוצרים את השטח הנראה. מהצד רכב נראה גדול יותר מאשר מלפנים.",
+        "impact": 2, "impact_note": "דרך השטח הנראה",
+        "typical": ["מקרה גרוע: Front."], "source": "התרחיש.", "mistakes": [],
+    },
+    "target.dT_K": {
+        "title": "ניגוד תרמי ΔT",
+        "what": "הפרש הטמפרטורה הנראה בין המטרה לרקע, בקלווין.",
+        "why": "במודל הגמישות נמוכה יחסית (0.04-0.2), אבל אי-הוודאות בשטח עצומה: פי 2-5. בשחר ובדמדומים "
+               "ΔT קורס לאפס. חציית ΔT מ-2 ל-1 K מקצרת גילוי ב-MWIR בכ-13%.",
+        "impact": 2, "impact_note": "אי-ודאות גבוהה בשטח",
+        "typical": ["תקן STANAG: 2 K.", "רכב עם מנוע פועל: 3-10 K.", "מעבר תרמי: 0-0.5 K."],
+        "source": "מדידה בשטח או דרישת המערכת. אם לא ידוע - 2 K, ובדקו גם 1 K.",
+        "mistakes": ["להזין את טמפרטורת המטרה במקום ההפרש."],
+        "check": _check_dT,
+    },
+    "target.T_bg_K": {
+        "title": "טמפרטורת הרקע",
+        "what": "טמפרטורת הסצנה מאחורי המטרה, בקלווין.",
+        "why": "קובעת את קרינת הרקע ואת הרעש. בגלאי MWIR בפס צר (XBn) היא חשובה מאוד (גמישות ~1.15): ב-243 K "
+               "הגילוי ירד ב-26%.",
+        "impact": 2, "impact_note": "חשובה מאוד ב-MWIR בפס צר",
+        "typical": ["ממוצע: 288 K (15 °C).", "קיץ במדבר: 305-320 K.", "חורף: 270-280 K."],
+        "source": "תנאי התרחיש.", "mistakes": ["להזין בצלזיוס (15 במקום 288)."],
+        "check": _check_Tbg,
+    },
+    "target.t_refl": {
+        "title": "החזרות המטרה",
+        "what": "איזה חלק מהאור המטרה מחזירה בתחום הגל (0-1).",
+        "why": "בחיישן מחזיר, הניגוד נוצר מההפרש בין החזרות המטרה לרקע. החזרות שוות = אין ניגוד = אין טווח.",
+        "impact": 3, "impact_note": "יוצר את הניגוד בחיישן מחזיר",
+        "typical": ["רכב צבאי: 0.1-0.3.", "צמחייה ב-NIR: 0.4-0.6.", "אספלט: 0.05-0.1."],
+        "source": "ספריית חומרים / מדידה.", "mistakes": ["להזין באחוזים."],
+        "check": _check_refl,
+    },
+    "target.b_refl": {
+        "title": "החזרות הרקע",
+        "what": "איזה חלק מהאור הרקע מחזיר בתחום הגל (0-1).",
+        "why": "הניגוד הוא ההפרש בינה לבין החזרות המטרה.",
+        "impact": 3, "impact_note": "יוצר את הניגוד בחיישן מחזיר",
+        "typical": ["אדמה יבשה: 0.2-0.35.", "צמחייה (נראה): 0.05-0.15."], "source": "ספריית חומרים / מדידה.",
+        "mistakes": [], "check": _check_refl,
+    },
+    "target.t_refl_preset": {
+        "title": "חומר המטרה (החזרות ספקטרלית)",
+        "what": "חומר שעקומת ההחזרות שלו לאורך הגל משמשת למטרה: דשא, יער, אספלט, בטון, חול ועוד.",
+        "why": "בחיישן מחזיר הניגוד הוא ההפרש בין החזרות המטרה לרקע בתחום הגל של המצלמה. אותם שני חומרים "
+               "יכולים להיראות שונים מאוד ב-SWIR וכמעט זהים בנראה.",
+        "impact": 3, "impact_note": "יוצר את הניגוד בחיישן מחזיר",
+        "typical": ["מטרה צבועה / רכב: בחרו חומר קרוב, או עברו ל-Effective והזינו ערך."],
+        "source": "ספריית החומרים של התוכנה, או מדידה ספקטרלית.",
+        "mistakes": ["לבחור לאותה מטרה ולרקע את אותו החומר - הניגוד יהיה אפס."],
+        "check": lambda v, p: _check_materials(p),
+    },
+    "target.b_refl_preset": {
+        "title": "חומר הרקע (החזרות ספקטרלית)",
+        "what": "חומר שעקומת ההחזרות שלו משמשת לרקע שמאחורי המטרה.",
+        "why": "הניגוד הוא ההפרש בינו לבין חומר המטרה.",
+        "impact": 3, "impact_note": "יוצר את הניגוד בחיישן מחזיר",
+        "typical": ["שטח פתוח: Dry / Green grassland.", "עירוני: Asphalt / Concrete.", "מדבר: Dark Sand."],
+        "source": "התרחיש.", "mistakes": [],
+        "check": lambda v, p: _check_materials(p),
+    },
+    "target.task_preset": {
+        "title": "גרסת קריטריוני המשימה",
+        "what": "כמה זוגות קווים צריך על המטרה כדי לגלות / להכיר / לזהות. ברירת המחדל: 1/3/6 (TRM4 / STANAG).",
+        "why": "זה המנוף החזק ביותר בכל המערכות. מעבר מ-1/3/6 ל-1/4/8 מקצר את ההכרה ב-18% ואת הזיהוי ב-22% - "
+               "יותר מרוב שדרוגי החומרה.",
+        "impact": 3, "impact_note": "המנוף החזק ביותר",
+        "typical": ["השוואה לתוצאות TRM4: 1/3/6.", "דרישה לפי Johnson: 1/4/6.4."],
+        "source": "דרישות הלקוח / התקן. תמיד ציינו בדוח באיזה סט השתמשתם.",
+        "mistakes": ["להשוות טווחים של שתי מערכות שחושבו עם סטים שונים."],
+    },
+    "target.tasks.N.lp": {
+        "title": "זוגות קווים למשימה",
+        "what": "מספר זוגות הקווים (מחזורים) על הממד הקריטי שנדרש למשימה בהסתברות 50%.",
+        "why": "יותר זוגות קווים = משימה קשה יותר = טווח קצר יותר. במערכת מוגבלת-דגימה הטווח הפוך-יחסי "
+               "לערך (גמישות עד -0.99).",
+        "impact": 3, "impact_note": "המנוף החזק ביותר",
+        "typical": ["גילוי: 1.", "הכרה: 3-4.", "זיהוי: 6-8."], "source": "קריטריוני המשימה.",
+        "mistakes": [], "check": _check_lp,
+    },
+    "irradiance.preset": {
+        "title": "מקור ההארה הטבעי",
+        "what": "השמש, הירח או אור הכוכבים - הספקטרום והעוצמה של ההארה.",
+        "why": "בחיישן מחזיר ההארה קובעת כמה אות יש. בלילה (ירח / כוכבים) המערכת הופכת למורעבת-אור, ושם "
+               "הקוטר, זמן האינטגרציה ורעש הקריאה מכריעים.",
+        "impact": 3, "impact_note": "קובע את רמת האות",
+        "typical": ["יום: Direct sunlight.", "יום מעונן: Overcast.", "לילה: Full / Quarter moon, Star light."],
+        "source": "התרחיש.", "mistakes": [],
+    },
+    "atmosphere.preset": {
+        "title": "מצב אטמוספרה מהיר",
+        "what": "הנחתה טיפוסית לתחום הגל: Clear / Average / Adverse. Compare ממלא את שלושתם להשוואה.",
+        "why": "האטמוספרה שולטת בגילוי וכמעט לא נוגעת בזיהוי. מ-σ = 0.2 ל-0.35 הגילוי מתקצר ב-22%-40%.",
+        "impact": 3, "impact_note": "שולטת בטווח הגילוי",
+        "typical": ["דוח לדרישה: Compare - מציג את שלושת המצבים."],
+        "source": "אלה הנחות הנדסיות. נתוני מזג אוויר או MODTRAN עדיפים.", "mistakes": [],
+    },
+    "atmosphere.atm.N.sigma": {
+        "title": "מקדם הנחתה σ",
+        "what": "העברה = τ0 · exp(-σ · טווח). ערך גבוה = מזג אוויר גרוע = טווח קצר.",
+        "why": "גמישות הגילוי ב-MWIR: -0.6 במזג טוב ועד -0.82 בגרוע. בזיהוי ההשפעה קטנה בהרבה.",
+        "impact": 3, "impact_note": "שולט בגילוי",
+        "typical": ["MWIR: בהיר 0.15, ממוצע 0.3, גרוע 0.8 1/km.", "VIS/NIR: 0.17 / 0.39 / 1.3 1/km.",
+                    "SWIR: 0.1 / 0.25 / 0.9 1/km."],
+        "source": "MODTRAN / נתוני מזג אוויר / ה-preset.", "mistakes": ["להזין 1/m במקום 1/km."],
+        "check": _check_sigma,
+    },
+    "atmosphere.atm.N.V_km": {
+        "title": "טווח ראות מטאורולוגי",
+        "what": "טווח הראות (Visual range) - מומר למקדם הנחתה.",
+        "why": "בתחום הנראה גמישות 0.41 בגילוי (במזג טוב) ועד 0.78 במזג גרוע.",
+        "impact": 3, "impact_note": "שולט בגילוי",
+        "typical": ["בהיר: 23-40 km.", "אובך: 5-10 km.", "ערפל: פחות מ-1 km."],
+        "source": "תחנה מטאורולוגית.", "mistakes": [],
+        "check": _check_V,
+    },
+    "turbulence.on": {
+        "title": "טורבולנציה",
+        "what": "כולל את הטשטוש שנגרם מתנודות במקדם השבירה של האוויר.",
+        "why": "חשובה בעיקר בתחום הנראה, בנתיב קרקעי ארוך וביום חם: עשור ב-Cn² ≈ ±35% בטווח. בתרמי ההשפעה "
+               "קטנה בהרבה.",
+        "impact": 3, "impact_note": "חשובה ב-VIS/SWIR, יום, נתיב קרקעי",
+        "typical": ["נתיב אופקי מעל 2 ק\"מ ביום: להפעיל."], "source": "התרחיש.", "mistakes": [],
+    },
+    "turbulence.cn2_preset": {
+        "title": "תרחיש Cn²",
+        "what": "Cn² טיפוסי לפי אקלים, יום / לילה, עונה ואחוזון (TRM4 טבלה C.2).",
+        "why": "ב-Cn² של 1e-12 (אספלט חם בצהריים) הטווח בתחום הנראה התקצר ב-66%-69%.",
+        "impact": 3, "impact_note": "חשוב ב-VIS/SWIR",
+        "typical": ["ישראל, נגב: Arid.", "צפון / מרכז: Moderate."], "source": "טבלה C.2, או מדידה (r0 מווידאו).",
+        "mistakes": [],
+    },
+    "turbulence.cn2": {
+        "title": "עוצמת הטורבולנציה Cn²",
+        "what": "קבוע המבנה של מקדם השבירה, ב-m^-2/3.",
+        "why": "1e-15 חלשה, 1e-14 בינונית, 1e-13 חזקה, 1e-12 קיצונית.",
+        "impact": 3, "impact_note": "חשוב ב-VIS/SWIR",
+        "typical": ["לילה: 1e-16-1e-15.", "יום ממוצע: 1e-14.", "צהריים מעל מדבר: 1e-13-1e-12."],
+        "source": "מדידה (scintillometer) או preset.", "mistakes": ["להזין 1e-14 כ-14 או כ-1e14."],
+        "check": _check_cn2,
+    },
+}
+
+
+for _k, _e in MORE.items():
+    PARAMS.setdefault(_k, _e)
+
+_ADDITIONAL = re.compile(r"additional\.(pre|post)_[hv]_(type|par)$")
+
+
+def param(path):
+    """Knowledge-base entry of a parameter path, or None."""
+    m = _ADDITIONAL.match(path or "")
+    if m:
+        return PARAMS.get("additional." + m.group(2))
+    return PARAMS.get(path) or PARAMS.get(re.sub(r"\.\d+\.", ".N.", path or ""))
+
+
+def suggestion(res):
+    """Suggested value of a check result, or None."""
+    return res[2] if res and len(res) > 2 else None
+
+
+def check(path, value, project):
+    """('ok' | 'warn', message[, suggested value]) for the entered value, or None."""
+    e = param(path)
+    fn = e.get("check") if e else None
+    if not fn:
+        return None
+    try:
+        return fn(value, project)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------------------------
+# lessons
+# ---------------------------------------------------------------------------------------------
+# step keys: title, blocks (RtlCanvas blocks), workflow, page, path, cond(project), tab (result tab), action
+def _s(title, *blocks, **kw):
+    d = {"title": title, "blocks": list(blocks)}
+    d.update(kw)
+    return d
+
+
+P_ = lambda t: ("p", t)
+LI = lambda t: ("li", t)
+H_ = lambda t: ("h", t)
+
+# The lessons in the order a new user meets the application: what is on the screen, a first calculation, what the
+# result says, entering the whole system (every field, the critical ones emphasised), improving the range, and the
+# advanced system considerations.  "group" is the heading the home page shows the lesson under.
+LESSONS = [
+    {"id": "intro", "title": "מה רואים במסך", "short": "מה רואים במסך", "minutes": 4,
+     "group": "מתחילים",
+     "summary": "מה התוכנה מחשבת, מצבי העבודה, הטופס והעמודים, מקור הנתונים בכל שדה, איך מקבלים הסבר על שדה ואיך קוראים את התוצאות.",
+     "steps": [
+         _s("מה התוכנה מחשבת",
+            P_("TRM_HADMAA מחשבת עד איזה מרחק המצלמה יכולה לבצע משימת תצפית על מטרה: טווח הגילוי, טווח ההכרה וטווח "
+               "הזיהוי (DRI)."),
+            LI("גילוי: הבחנה בכך שקיימת מטרה. הכרה: הבחנה בין סוגי מטרות (רכב או אדם). זיהוי: קביעה מדויקת יותר של "
+               "סוג המטרה (סוג הרכב)."),
+            LI("כל טווח מחושב עבור הסתברות הצלחה של 50%, בהתאם לקריטריון המשימה שנבחר."),
+            LI("החישוב מתבסס על מאפייני המערכת (אופטיקה, גלאי, תצוגה, ייצוב), על מאפייני המטרה ועל תנאי האטמוספרה."),
+            workflow="quick", page="Quick setup"),
+         _s("שלושה מצבי עבודה",
+            P_("בסרגל הצד השמאלי, תחת WORKFLOW, בוחרים את מצב העבודה. הוא קובע אילו עמודים ואילו תוצאות מוצגים."),
+            LI("Quick Prediction - בעמוד אחד השדות המרכזיים. מתאים לחישוב ראשוני ולהערכה מהירה."),
+            LI("Engineering Analysis - כל עמודי הטופס, לפי נושאים. כאן מזינים את נתוני המערכת."),
+            LI("Laboratory & Image Evaluation - מוסיף נתוני מדידה מהמעבדה, להשוואה עם תחזית המודל."),
+            workflow="quick", page="Quick setup",
+            show=[(("WORKFLOW", "Workflow"), "wf"), ("Quick", "workflow:quick"), ("Engineering", "workflow:engineering"),
+                  ("Lab", "workflow:lab")]),
+         _s("היכרות עם הטופס והעמודים",
+            P_("בסרגל הצד, תחת PARAMETERS, מופיעה רשימת העמודים. בחירה בעמוד מציגה את השדות שלו. כל עמוד מתמקד "
+               "בנושא אחר: אופטיקה, גלאי, מטרה, אטמוספרה ועוד."),
+            LI("שדות שאינם רלוונטיים להגדרות שבחרתם (למשל הארה במצלמה תרמית) מוסתרים."),
+            LI("'Show advanced parameters' בתחתית סרגל הצד מציג גם את השדות המתקדמים."),
+            LI("בתחתית העמודים Camera profile ו-Quick setup מופיעים ערכים שהתוכנה מחשבת באופן אוטומטי (IFOV, שדה "
+               "הראייה ועוד), לקריאה בלבד."),
+            workflow="engineering", page="Optics",
+            show=[(("PARAMETERS", "Parameters"), "pages"), (("בחירה באחד", "Choosing one"), "page:Detector geometry"),
+                  (("מסתירה שדות", "hides fields"), "advanced"), (("ערכים שהתוכנה מחשבת", "calculates automatically"), "derived")]),
+         _s("מקור הנתונים בכל שדה",
+            P_("ליד כל שדה יש תג קטן שמציין את מקור הנתון. לחיצה עליו משנה את הסיווג."),
+            LI("preset - ערך ברירת מחדל. datasheet - נתון ממפרט היצרן. measured - ערך שנמדד. assumed - ערך שהונח "
+               "לצורך החישוב."),
+            LI("הדוחות מציגים על אילו נתונים מתבסס כל טווח."),
+            LI("ערך preset אינו בהכרח מייצג את המערכת שלכם: עדכנו את הפרמטרים המשפיעים ביותר על הטווח, ככל שיש בידיכם "
+               "נתונים אמינים יותר."),
+            workflow="engineering", page="Optics",
+            show=[(("התג", "tag"), "badge:optics.f_mm"), (("לחיצה על התג", "Clicking the tag"), "badgemenu:optics.f_mm")]),
+         _s("איך מקבלים הסבר על שדה",
+            P_("כשהמדריך פתוח, לחיצה על שדה בטופס מציגה כאן כרטיס הסבר: מה משמעות השדה, כיצד הוא משפיע על התוצאה, "
+               "ערכים טיפוסיים, בדיקה של הערך שהזנתם וחישוב חי של ההשפעה."),
+            LI("סימן השאלה שליד כל שדה מציג הסבר קצר עליו, גם כשהמדריך סגור."),
+            LI("המנחה הקולי מקריא את ההסבר: כפתור ההשמעה בחלק העליון של המדריך, או F9."),
+            LI("'הסבר על העמוד' מקריא ברצף את ההסברים על כל השדות בעמוד הפתוח."),
+            workflow="engineering", page="Optics",
+            show=[(("לחיצה על שדה", "clicking a field"), "card:optics.f_mm"),
+                  (("סימן השאלה", "question mark"), "help:optics.f_mm"),
+                  (("כפתור ההשמעה", "play button"), "guide:play"), (("הסבר על העמוד", "Explain page"), "guide:walk")]),
+         _s("ביצוע החישוב וקריאת התוצאות",
+            P_("מבצעים חישוב עם Calculate או F5. מימין לטופס נמצאות לשוניות התוצאות, והן מתעדכנות לאחר כל חישוב."),
+            LI("Summary - שלושת הטווחים, והגורם המרכזי המשפיע על כל אחד מהם."),
+            LI("Range - כיצד הסתברות ההצלחה במשימה משתנה ככל שהמרחק למטרה גדל."),
+            LI("Messages - האזהרות וההנחות ששימשו בחישוב. קוראים אותן לפני שמסתמכים על התוצאות."),
+            ("box", "ok", ["סיימתם", "הכרנו את מבנה המסך ואת שלבי העבודה המרכזיים. בשיעור הבא נזין נתונים ונחשב את "
+                                    "הטווח הראשון שלנו."], True),
+            workflow="quick", tab="Summary",
+            show=[("F5", "calculate"), (("לשוניות התוצאות", "result tabs"), "tabs"), ("Summary", "tab:Summary"),
+                  ("Range", "tab:Range"), ("Messages", "tab:Messages")]),
+     ]},
+    {"id": "first", "title": "החישוב הראשון: מתבנית לטווח", "short": "החישוב הראשון", "minutes": 8,
+     "group": "מתחילים",
+     "summary": "מתבנית מוכנה לטווחי גילוי, הכרה וזיהוי - בתהליך Quick Prediction.",
+     "steps": [
+         _s("לפני שמתחילים",
+            P_("המדריך יוביל אתכם בחישוב טווחים מלא: נעבור על השדות החשובים, נסביר מה כל אחד אומר ונבדוק שהערך "
+               "שהזנתם סביר."),
+            H_("שלושה כללים להזנה חכמה"),
+            LI("מתחילים מתבנית קרובה למערכת שלכם, ומחליפים רק את מה שידוע."),
+            LI("קודם הפרמטרים המשפיעים - המשימה, המטרה, האופטיקה והאטמוספרה. פרמטרי הרעש באים אחר כך."),
+            LI("לכל ערך שתג המקור שלו preset או assumed - עדיף להחליף בנתון של המערכת."),
+            ("box", "tip", ["איך עובדים עם המדריך",
+                            "השדה הרלוונטי מסומן בטופס. מזינים ערך, והמדריך בודק אותו מיד. 'הבא' ממשיך לשלב "
+                            "הבא; אפשר לסגור ולחזור בכל רגע."], True),
+            workflow="quick", page="Quick setup",
+            show=[(("preset",), "badge:optics.f_mm")]),
+         _s("בחרו תבנית",
+            P_("התבנית ממלאת את כל מאות הפרמטרים בערכים עקביים. בחרו את הקרובה למערכת שלכם דרך "
+               "File > New from template, או בכפתור New בסרגל הכלים."),
+            LI("Thermal LWIR uncooled - מצלמה תרמית לא-מקוררת."),
+            LI("Thermal MWIR / LWIR cooled - מצלמה תרמית מקוררת."),
+            LI("Visible CMOS - מצלמת יום; Visible/SWIR InGaAs - מצלמת לילה."),
+            ("box", "info", ["יש לכם פרופיל מצלמה שמור? בחרו אותו בראש העמוד Quick setup."]),
+            workflow="quick", page="Quick setup",
+            # the template list stays open while every kind of camera is explained, the highlight on the template
+            # of the sentence; the profile closes it
+            show=[("New", "menu:File>New from template>Thermal - LWIR cooled staring 640x512 (CMT)"),
+                  ("LWIR uncooled", "menuitem:Thermal - LWIR uncooled microbolometer 640x480"),
+                  ("LWIR cooled", ["menuitem:Thermal - MWIR cooled staring 640x512 (InSb)",
+                                   "menuitem:Thermal - LWIR cooled staring 640x512 (CMT)"]),
+                  ("CMOS", "menuitem:Visible - CMOS daylight camera 1920x1080"),
+                  ("SWIR", "menuitem:Visible/SWIR - InGaAs night camera 640x512"),
+                  (("פרופיל", "profile"), "profile")]),
+         _s("קטגוריית החיישן", workflow="quick", page="Quick setup", path="category"),
+         _s("סוג הגלאי", workflow="quick", page="Quick setup", path="imager_type", cond=_thermal),
+         _s("אורך המוקד", workflow="quick", page="Quick setup", path="optics.f_mm"),
+         _s("המטרה", P_("בחרו מטרה תקנית - היא ממלאת מידות, ניגוד וקריטריונים בבת אחת."),
+            workflow="quick", page="Quick setup", path="target.preset"),
+         _s("רוחב המטרה", workflow="quick", page="Quick setup", path="target.W_m"),
+         _s("גובה המטרה", workflow="quick", page="Quick setup", path="target.H_m"),
+         _s("הניגוד התרמי", workflow="quick", page="Quick setup", path="target.dT_K", cond=_thermal),
+         _s("טמפרטורת הרקע", workflow="quick", page="Quick setup", path="target.T_bg_K", cond=_thermal),
+         _s("החזרות המטרה", workflow="quick", page="Quick setup", path="target.t_refl",
+            cond=lambda p: not _thermal(p) and _refl_mode(p, "t") == "effective"),
+         _s("חומר המטרה", workflow="quick", page="Quick setup", path="target.t_refl_preset",
+            cond=lambda p: not _thermal(p) and _refl_mode(p, "t") != "effective"),
+         _s("החזרות הרקע", workflow="quick", page="Quick setup", path="target.b_refl",
+            cond=lambda p: not _thermal(p) and _refl_mode(p, "b") == "effective"),
+         _s("חומר הרקע", workflow="quick", page="Quick setup", path="target.b_refl_preset",
+            cond=lambda p: not _thermal(p) and _refl_mode(p, "b") != "effective"),
+         _s("ההארה", workflow="quick", page="Quick setup", path="irradiance.preset",
+            cond=lambda p: not _thermal(p)),
+         _s("האטמוספרה", workflow="quick", page="Quick setup", path="atmosphere.preset", cond=_field),
+         _s("טורבולנציה", workflow="quick", page="Quick setup", path="turbulence.on",
+            cond=lambda p: _field(p) and not _thermal(p)),
+         _s("שדה או מעבדה", workflow="quick", page="Quick setup", path="mode.environment"),
+         _s("קריטריון הזיהוי", P_("שלוש המשימות (גילוי, הכרה, זיהוי) מופיעות בתחתית העמוד. זה השדה של "
+                                  "הזיהוי - המשימה הקשה ביותר."),
+            workflow="quick", page="Quick setup", path="target.tasks.2.lp"),
+         _s("מחשבים",
+            P_("לחצו Calculate בסרגל הכלים (או F5), או השתמשו בכפתור 'חשב עכשיו' כאן. החישוב לוקח כמה שניות."),
+            ("box", "info", ["אם מופיעה הודעת Calculation error - היא אומרת איזה ערך לא תקין. תקנו וחשבו שוב."]),
+            workflow="quick", page="Quick setup", action="calculate",
+            show=[(("Calculate", "F5"), ["calculate", "gbtn:חשב עכשיו"])]),
+         _s("קוראים את התוצאה",
+            P_("בעמוד Summary מופיעים טווחי הגילוי, ההכרה והזיהוי בק\"מ."),
+            LI("גילוי: יש משהו שם. הכרה: סוג (רכב / אדם). זיהוי: איזה רכב."),
+            LI("כל טווח הוא בהסתברות 50%, עם הקריטריונים שבחרתם."),
+            LI("עקומת Range מראה איך הביצועים יורדים עם הטווח."),
+            workflow="quick", tab="Summary",
+            show=[("Summary", "tab:Summary"), (("עקומת הטווח", "range curve"), "tab:Range")]),
+         _s("לפני שמשתמשים במספר",
+            P_("עברו על Messages: שם כל האזהרות וההנחות שעליהן נשען החישוב."),
+            ("box", "warn", ["חשוב", "מספר שנראה טוב אינו בהכרח נכון. טווח בלי ההנחות שלו לא שווה הרבה."], True),
+            workflow="quick", tab="Messages",
+            show=[("Messages", "tab:Messages")]),
+         _s("שומרים את העבודה",
+            P_("File > Save (או Ctrl+S) שומר את הפרויקט כקובץ json, עם כל הערכים ותגי המקור. File > Open פותח אותו "
+               "שוב."),
+            ("box", "ok", ["סיימתם את השיעור", "בשיעור הבא נלמד מה אומרת התוצאה ומה מגביל אותה."], True),
+            workflow="quick", tab="Summary",
+            show=[("Save", ["menu:File>Save", "tool:Save"]), ("Open", ["menu:File>Open project...", "tool:Open"])]),
+     ]},
+    {"id": "results", "title": "מה אומרת התוצאה ומה מגביל אותה", "short": "מה אומרת התוצאה", "minutes": 4,
+     "group": "מתחילים",
+     "summary": "Summary, הערכים המחושבים של המערכת, ואיך מוצאים את הגורם שמגביל את הטווח.",
+     "steps": [
+         _s("המסך Summary",
+            P_("Summary מציג את טווחי ה-DRI לכל אטמוספרה, את רמת הביטחון ואת הסיבה העיקרית לכל טווח."),
+            ("box", "info", ["אם עוד לא חישבתם - לחצו 'חשב עכשיו'."]),
+            workflow="engineering", tab="Summary", action="calculate",
+            show=[("Summary", "tab:Summary"), (("חשב עכשיו", "Calculate now"), "gbtn:חשב עכשיו")]),
+         _s("System data", P_("כל הערכים המחושבים: IFOV, FOV, Fλ/d, NETD אפקטיבי, מילוי באר ועוד. כאן בודקים "
+                              "שהמערכת שהזנתם היא באמת המערכת שהתכוונתם אליה."),
+            LI("IFOV ו-FOV תואמים לדף הנתונים?"), LI("מילוי הבאר סביר (לא 0% ולא 100%)?"),
+            workflow="engineering", tab="System data",
+            show=[(("System data", "All the calculated values"), "tab:System data")]),
+         _s("מה מגביל את הטווח",
+            P_("Run > Limiting factors מראה לכל משימה מה מגביל אותה: אטמוספרה, עקיפה, דגימה, רעש או ריצוד."),
+            ("box", "tip", ["למה זה חשוב", "שדרוג של גורם שאינו מגביל לא ישנה את הטווח. קודם מוצאים את "
+                            "צוואר הבקבוק."], True),
+            ("box", "ok", ["סיימתם את השיעור", "בשיעור הבא נזין את המערכת שלכם, כל הפרמטרים, עם הדגשה של "
+                           "הקריטיים לטווח."], True),
+            workflow="engineering", tab="Sensitivity",
+            show=[("Limiting factors", "menudo:Run>Limiting factors"),
+                  (("צוואר הבקבוק", "bottleneck"), "sens:limiting")]),
+     ]},
+    {"id": "engineering", "title": "הזנת המערכת שלכם: כל הפרמטרים, והקריטיים מודגשים", "short": "הזנת המערכת",
+     "minutes": 25, "group": "מתחילים", "dynamic": True,
+     "summary": "כל עמודי הטופס בתהליך Engineering Analysis, שדה אחר שדה. השדות הקריטיים לטווח מסומנים באדום, "
+                "ובסוף מקבלים רשימה שלהם.",
+     "steps": []},
+    {"id": "improve", "title": "שיפור הטווח, אי-ודאות ודוח", "short": "שיפור הטווח", "minutes": 4,
+     "group": "עבודה עם התוצאות",
+     "summary": "מה הכי כדאי לשפר, איך פרמטר אחד משנה את הטווח, טווח עם אי-ודאות, ודוח בעברית.",
+     "steps": [
+         _s("יועץ השיפור",
+            P_("Run > Improve performance (advisor) מדרג שינויים אפשריים לפי התועלת בטווח, עם כרטיס לכל פעולה."),
+            LI("היועץ מייעץ בלבד - הוא לא משנה את הפרויקט."),
+            LI("'Measure first' מסמן פרמטרים שכדאי למדוד לפני שמשקיעים בחומרה."),
+            workflow="engineering", tab="Sensitivity",
+            show=[("Improve performance", "menu:Run>Improve performance (advisor)"),
+                  (("רק מייעץ", "only advises"), ["sens:advisor", "sensbtn:Run analysis"]),
+                  ("Measure first", "sens:advisor")]),
+         _s("סריקת פרמטר ואי-ודאות",
+            LI("Parameter sweep: איך פרמטר אחד משנה את הטווח - עקומה וטבלה."),
+            LI("Uncertainty study: טווח עם אי-ודאות (RSS או Monte Carlo). הזינו ± לפרמטרים הלא-ודאיים: "
+               "ΔT, σ וקריטריון המשימה."),
+            LI("Scenario comparison: כמה תרחישים זה לצד זה."),
+            workflow="engineering", tab="Sensitivity",
+            show=[("Parameter sweep", "menudo:Run>Parameter sweep..."), ("Uncertainty", "menudo:Run>Uncertainty study..."),
+                  (("Scenario comparison", "Scenarios"), "menudo:Run>Scenario comparison...")]),
+         _s("דוח ושמירה",
+            LI("File > Export Hebrew DRI report (PDF) - דוח מלא בעברית."),
+            LI("File > Export report - דוח טקסט עם כל ההנחות."),
+            LI("File > Save - שומר את הפרויקט (json) עם תגי המקור."),
+            ("box", "ok", ["סיימתם!", "אפשר לפתוח את המדריך שוב בכל עת מ-Help > Interactive guide, או "
+                           "להשאיר אותו פתוח: בלחיצה על שדה מוצג כרטיס הסבר שלו."], True),
+            workflow="engineering", tab="Summary",
+            show=[("Export Hebrew DRI report", "menu:File>Export Hebrew DRI report (PDF)..."),
+                  ("Export report", ["menu:File>Export report...", "tool:Report"]), ("Save", ["menu:File>Save", "tool:Save"])]),
+     ]},
+]
+
+
+# system considerations of the parameters: the research "חקר פרמטרי מערכת עם שיקולים מערכתיים", checked against
+# datasheets and the literature (research_notes/system_parameters_review_he.md).  Nothing here changes the ranges.
+LESSONS.append(
+    {"id": "system", "title": "שיקולים מתקדמים: טווח מול משקל, עלות וייצור", "short": "שיקולים מתקדמים",
+     "minutes": 12, "group": "מתקדמים",
+     "summary": "מי מגביל את החדות (Fλ/d), ומה כל פרמטר מחייב מהמערכת - משקל, נתונים, ייצור וייצוא - ואיך מאמתים "
+                "אותו במדידה.",
+     "steps": [
+         _s("מה השיעור הזה מוסיף",
+            P_("הטווח הוא רק חצי מהתמונה. כל פרמטר שמשפר את הטווח מחייב משהו מהמערכת: משקל, אורך, הספק, עלות או "
+               "מורכבות ייצור. השיעור מבוסס על המחקר 'חקר פרמטרי מערכת עם שיקולים מערכתיים', אחרי בדיקה מול דפי "
+               "נתונים של יצרנים ומקורות מדעיים."),
+            H_("מה שימרנו, מה שינינו ומה הוספנו"),
+            LI("שימרנו: הקשר D = f/F, ההשוואה בין VOx ל-a-Si, נתוני Basler IMX174 ו-FLIR Lepton, נוסחת הטווח "
+               "הדינמי ועקרון הבדיקות (גוף שחור, טבלת MTF, מדידה בחושך)."),
+            LI("שינינו: כללי המשקל (המשקל גדל כמו f³, לא ליניארית), רעש הקריאה של IMX174 (כ-7 אלקטרונים ולא 2.6), "
+               "'VOx מקורר' (VOx הוא תמיד לא-מקורר), השוואת ה-TCR וזרם החושך."),
+            LI("הוספנו: NETD ∝ F², סף הייצוא של 9 Hz, קצב הנתונים, תקני מדידה (EMVA 1288, ISO 12233, ASTM E1543) "
+               "וניתוח רגישות חי בכרטיס של כל שדה."),
+            ("box", "info", ["חשוב לדעת", "שום דבר בשיעור הזה לא משנה את הטווח של TRM4. אלה שיקולים שמלווים את "
+                             "הטווח: מה הוא עולה במשקל, בכסף ובמורכבות."], True),
+            workflow="engineering", page="General"),
+         _s("Fλ/d - מי מגביל?",
+            P_("היחס Fλ/d (F-number כפול אורך הגל, חלקי הפסיעה) אומר מה מגביל את המערכת:"),
+            LI("Fλ/d < 1: הגלאי מגביל (מוגבל-דגימה). מוקד ארוך יותר או פיקסל קטן יותר עוזרים מאוד."),
+            LI("Fλ/d > 1.5: האופטיקה מגבילה (עקיפה). קוטר גדול יותר עוזר; פיקסל קטן יותר כמעט לא."),
+            ("box", "info", ["הערך מוצג בפאנל הערכים המחושבים בתחתית עמוד Optics."]),
+            workflow="engineering", page="Optics"),
+         _s("מוקד ו-F: כללי הגדילה",
+            P_("קוטר המפתח הוא D = f/F. למשל, עדשה של 50 mm ב-F/1.4 צריכה מפתח של כ-36 mm, וב-F/4 של כ-12.5 mm."),
+            LI("באותו F, מוקד ארוך יותר הוא גם קוטר גדול יותר. משקל הזכוכית גדל בערך כמו D³ (שטח כפול עובי), ולכן "
+               "מוקד ארוך ב-10% שוקל כ-33% יותר, וב-50% - פי 3.4. המחקר המקורי העריך 15% ו-50%: נמוך מדי."),
+            LI("מעבר מ-F/4 ל-F/8 חוצה את הקוטר, ומשקל הזכוכית יורד לשמינית עד רבע - לא ב-20%."),
+            LI("בתמורה: האות לפיקסל ∝ 1/F², ובמצלמה תרמית ה-NETD ∝ F²."),
+            ("box", "tip", ["ניתוח רגישות חי", "בכרטיס של אורך המוקד, הקוטר וה-F מופיע 'ניתוח רגישות' עם המספרים "
+                            "של המערכת שלכם, ל-±10%, ±25% ו-±50%."], True),
+            workflow="engineering", page="Optics"),
+         _s("פיקסל ופורמט",
+            LI("פיקסל קטן ב-25% באותו מוקד: IFOV קטן ב-25%, אבל האות לפיקסל יורד לכ-56% (∝ שטח), וגם הבאר "
+               "(full well) קטנה."),
+            LI("באותו IFOV, פיקסל קטן מאפשר מוקד וקוטר קטנים באותו יחס, ומשקל העדשה יורד כמו פסיעה³ - פי 0.42 "
+               "בפיקסל קטן ב-25%. זה היתרון המערכתי הגדול של פיקסל קטן, והמחקר המקורי לא הזכיר אותו."),
+            LI("פורמט גדול ב-10% בכל ציר הוא 21% יותר פיקסלים ושטח שבב - לא 10%. שבב גדול = פחות שבבים בפרוסה "
+               "ותפוקה נמוכה יותר."),
+            ("box", "info", ["דוגמה מאומתת: Sony IMX174 (Basler ace)",
+                             "פיקסל 5.86 µm, 1920x1200, QE כ-70% ב-545 nm, רעש קריאה כ-7 e⁻, באר כ-32,000 e⁻, טווח "
+                             "דינמי כ-74 dB, ועד 155 fps ב-USB3 ו-50 fps ב-GigE."], True),
+            workflow="engineering", page="Detector geometry"),
+         _s("NETD וחומר הגלאי",
+            LI("NETD ∝ F²: מעבר מ-F/1.4 ל-F/1.0 חוצה את ה-NETD (Teledyne FLIR). לכן לפני שעוברים לגלאי מקורר, "
+               "בודקים עדשה מהירה יותר."),
+            LI("VOx ו-a-Si הם שניהם מיקרובולומטרים לא-מקוררים - 'VOx מקורר' לא קיים. גלאים מקוררים הם InSb, MCT "
+               "או T2SL / XBn, עם מקרר Stirling."),
+            LI("ה-TCR דומה בשניהם (כ-2%-3% לקלווין); היתרון של VOx הוא רעש 1/f נמוך יותר. VOx דורש קו ייצור ייעודי, "
+               "ו-a-Si נוח יותר לייצור בקו CMOS."),
+            LI("המספרים של היום: Lepton 3.5 (160x120, 12 µm) - פחות מ-50 mK; Boson+ (VOx, 12 µm) - 20 mK ופחות "
+               "בגרסת Industrial. הטענה ש-a-Si מוגבל ל-50-80 mK מיושנת."),
+            ("box", "warn", ["השוו באותם תנאים", "NETD בדף נתונים נמדד ב-F מסוים (בדרך כלל F/1.0) ובטמפרטורת רקע "
+                             "מסוימת. ערכים בתנאים שונים לא ניתנים להשוואה ישירה."], True),
+            workflow="engineering", page="Detector sensitivity", cond=_thermal),
+         _s("רעש, זרם חושך וטווח דינמי",
+            LI("טווח דינמי = 20 log(באר / רעש קריאה). ב-IMX174: 20 log(32,000 / 7) ≈ 73 dB."),
+            LI("זרם החושך בחיישן CMOS מודרני הוא יחידות עד עשרות אלקטרונים לשנייה לפיקסל בטמפרטורת החדר - לא "
+               "עשרות אלפים, כמו שנכתב במחקר המקורי. הוא מוכפל בערך כל 6-8 מעלות."),
+            LI("לכן בחשיפה של מילישניות זרם החושך זניח; בחשיפה ארוכה ובמארז חם הוא נהיה חשוב."),
+            workflow="engineering", page="Detector sensitivity", cond=lambda p: not _thermal(p)),
+         _s("קצב פריימים, נתונים וייצוא",
+            LI("קצב הנתונים = פיקסלים x ביטים x קצב. 640x512 ב-14 ביט וב-60 Hz הם כ-275 Mbit/s; 1920x1080 ב-50 Hz "
+               "הם כ-1.45 Gbit/s - יותר מ-GigE, ולכן צריך USB3, CoaXPress או דחיסה."),
+            LI("המחקר המקורי נתן לקצב 'עלות +5%-30%' בלי מקור. החלפנו את זה בחישוב של קצב הנתונים."),
+            LI("מצלמה תרמית לא-מקוררת עד 9 Hz מסווגת בארה\"ב 6A993; מעל 9 Hz היא 6A003.b.4.b ודורשת רישיון ייצוא "
+               "לרוב היעדים. זו הסיבה ש-Lepton נמכר ב-8.7 Hz - לא מגבלה טכנית."),
+            ("box", "warn", ["רקע הנדסי, לא ייעוץ משפטי", "הסיווג משתנה עם הזמן ובין מדינות. בדקו אותו עם גורם "
+                             "הייצוא לפני שקובעים קצב."], True),
+            workflow="engineering", page="Basic imager"),
+         _s("איך מאמתים: מדידות ותקנים",
+            LI("EMVA 1288 - מצלמות נראה ו-SWIR: QE, רעש קריאה, באר, זרם חושך וטווח דינמי, בשיטת photon transfer. "
+               "בקשו מהספק את הדוח."),
+            LI("ISO 12233 - MTF בשיטת קצה נטוי (slanted edge, כ-5°), במרכז ובפינות השדה."),
+            LI("NETD - מול גוף שחור, ב-F ובקצב ידועים. ASTM E1543 מגדיר נוהל, ו-ASTM E1213 את ה-MRTD."),
+            LI("רעש קריאה - בחושך מוחלט, מהשונות בין שני פריימים."),
+            ("box", "tip", ["מזינים עם תג", "ערך שמדדתם מזינים עם תג המקור measured. כך הדוח מראה שהטווח נשען על "
+                            "מדידה ולא על הנחה."], True),
+            workflow="engineering", page="General"),
+         _s("סיכום: איזון בין הטווח למערכת",
+            LI("טווח ארוך: מוקד ארוך ו-F קטן, ובתרמי גלאי רגיש. המחיר: משקל ועלות שגדלים מהר, כמו f³."),
+            LI("מערכת קלה וזולה: פיקסל קטן לאותו IFOV, גלאי לא-מקורר ב-F/1.0-1.2, וקצב לפי הצורך."),
+            LI("עלות: במצלמה תרמית הגלאי והעדשה הם רוב העלות. מחיר אמיתי מגיע מהצעת מחיר; לשם השוואה, Lepton 3.5 "
+               "נמכר ביחידה בודדת בכ-$164 (GroupGets)."),
+            ("box", "ok", ["סיימתם", "המספרים בשיעור הם כללי אצבע מסדר ראשון. תכנון אופטי, דפי נתונים ומדידה "
+                           "מחליפים אותם."], True),
+            workflow="engineering", page="Optics"),
+     ]})
+
+
+# The full tour is not a lesson of the home page any more (lesson 4 covers every field); it stays for "הסבר על העמוד",
+# which walks by voice through every field of the open page.
+HIDDEN_LESSONS = []
+HIDDEN_LESSONS.append(
+    {"id": "tour", "title": "הסבר על העמוד", "minutes": 30, "dynamic": True,
+     "summary": "כל העמודים וכל השדות שהפרויקט שלכם מציג, קבוצה אחר קבוצה: מה כל שדה אומר, בדיקה של הערך שלכם "
+                "וההשפעה שלו על הטווח.",
+     "steps": []})
+
+# Hebrew name and purpose of every page of the form (the tour)
+PAGE_HE = {
+    "General": ("כללי", "ההחלטות הראשונות: קטגוריית החיישן, שדה או מעבדה, וידאו או תמונה בודדת."),
+    "Basic imager": ("המצלמה הבסיסית", "קצב פריימים, בדיקת FOV, מיקרו-סריקה, איחוד פיקסלים ותזמון החשיפה."),
+    "Optics": ("אופטיקה", "המפתח, אורך המוקד, ה-MTF של העדשה וההעברה. כאן נקבעים ה-IFOV, העקיפה וכמות האור - "
+                          "מהמנופים החזקים של הטווח."),
+    "Detector geometry": ("גאומטריית הגלאי", "מספר הפיקסלים, הפסיעה והגודל הפעיל. הפסיעה יחד עם המוקד קובעת את "
+                                             "ה-IFOV."),
+    "Detector sensitivity": ("רגישות הגלאי", "התחום הספקטרלי, הרעש (NETD או מודל פיזיקלי), זמן האינטגרציה, הבאר "
+                                             "והמגן הקר. חשוב בעיקר במערכות מוגבלות-רעש: לילה, ניגוד נמוך."),
+    "Signal processing": ("עיבוד אות", "מיצוע פריימים, מסננים, זום, דחיסה ועקומת טון. רוב השדות כאן כבויים "
+                                       "בברירת המחדל."),
+    "Display & observer": ("תצוגה וצופה", "איך הצופה רואה את התמונה: מסך או עינית, מרחק, בהירות וקבועי הכיול של "
+                                          "הצופה."),
+    "Stabilization & MTFs": ("ייצוב ו-MTF נוספים", "תנועת קו הראייה: ריצוד, תנועה ליניארית ורטט. בשדה צר זה מנוף "
+                                                   "חשוב."),
+    "Target & scenario": ("מטרה ותרחיש", "המטרה, הניגוד, הגאומטריה וקריטריוני המשימה - המנופים החזקים ביותר על "
+                                         "הטווח."),
+    "Irradiance": ("הארה", "מקור האור בחיישן מחזיר (נראה / SWIR / General). בתרמי העמוד לא בשימוש."),
+    "Atmosphere & turbulence": ("אטמוספרה וטורבולנציה", "ההנחתה שולטת בגילוי; הטורבולנציה מטשטשת בעיקר בנראה "
+                                                        "ובנתיב קרקעי ארוך ביום."),
+    "Metadata": ("מטא-דאטה", "תיעוד של נתונים מיובאים ומצבי עבודה. לא משתתף בחישוב, אבל נכנס לדוח."),
+    "Validation data": ("נתוני אימות", "מדידות מעבדה (MTDP / MRTD, MTF, NETD) להשוואה עם התחזית."),
+}
+
+
+def _visible_fields(fields, project, visible):
+    """[(header, [field])] of one page with the fields the form shows for the project (each path once)."""
+    groups, cur, seen = [], None, set()
+    for f in fields:
+        if f.get("kind") == "header":
+            cur = [f, []]
+            groups.append(cur)
+            continue
+        path = f.get("path")
+        if not path or f.get("kind") in ("derived", "profile", "profile_manager") or path in seen:
+            continue
+        if cur is None:
+            cur = [None, []]
+            groups.append(cur)
+        try:
+            show = visible(f, cur[0], project)
+        except Exception:
+            show = True
+        if show:
+            seen.add(path)
+            cur[1].append(f)
+    return [(h, fl) for h, fl in groups if fl]
+
+
+def tour_steps(pages, project, visible):
+    """Steps of the full tour: an introduction, then one step per shown group of fields of every page.
+    pages: [(page name, fields, workflow)]; visible(field, header, project) is the form's own rule."""
+    out = [_s("איך עובד הסיור",
+              P_("נעבור על כל עמודי הטופס במצב Engineering, קבוצה אחר קבוצה. בכל שלב מופיעים השדות של הקבוצה: הערך "
+                 "שלכם, בדיקה שלו, וכמה הוא משפיע על הטווח."),
+              LI("לחיצה על שדה ברשימה פותחת את הכרטיס המלא שלו, עם חישוב חי של ההשפעה על טווחי הגילוי, ההכרה "
+                 "והזיהוי."),
+              LI("שדה שמסומן ⚠ דורש בדיקה. ⓘ = שדה שלא משפיע על הטווח (תיעוד או בדיקה צולבת)."),
+              LI("מוצגים רק השדות שהפרויקט שלכם משתמש בהם. 'Show advanced parameters' מוסיף את השדות המתקדמים."),
+              ("box", "tip", ["טיפ", "לא צריך לשנות כל שדה. שדה עם ★ אחד או בלי כוכב אפשר להשאיר בברירת המחדל אם "
+                              "אין נתון טוב יותר."], True),
+              workflow="engineering", page="General")]
+    for name, fields, wf in pages:
+        groups = _visible_fields(fields, project, visible)
+        he, desc = PAGE_HE.get(name, (name, ""))
+        for gi, (hdr, fl) in enumerate(groups):
+            blocks = []
+            if gi == 0:
+                blocks.append(("box", "info", ["עמוד %s (%s)" % (he, name), desc], True))
+            if hdr is not None:
+                blocks.append(("muted", "קבוצה: " + hdr["label"]))
+            out.append(_s("%s · %d/%d" % (he, gi + 1, len(groups)), *blocks, workflow=wf, page=name,
+                          path=fl[0]["path"], fields=[f["path"] for f in fl], group=True))
+    out.append(_s("בדיקת כל הערכים",
+                  P_("סיימתם את הסיור. כאן מופיעות כל ההערות על הערכים שלכם, מסודרות לפי ההשפעה על הטווח. לחיצה על "
+                     "שורה פותחת את השדה."),
+                  workflow="engineering", page="General", review=True, action="calculate"))
+    return out
+
+
+# lesson 4: the chapters (pages of the form in the order a new user fills them) and the tips of some fields
+ENTRY_CHAPTERS = [
+    ("החלטות ראשונות", ["General"]),
+    ("המטרה והמשימה", ["Target & scenario"]),
+    ("אופטיקה", ["Optics"]),
+    ("הגלאי", ["Detector geometry", "Detector sensitivity"]),
+    ("המצלמה ועיבוד האות", ["Basic imager", "Signal processing"]),
+    ("תצוגה וצופה", ["Display & observer"]),
+    ("ייצוב", ["Stabilization & MTFs"]),
+    ("הארה ואטמוספרה", ["Irradiance", "Atmosphere & turbulence"]),
+    ("תיעוד ואימות", ["Metadata", "Validation data"]),
+]
+ENTRY_TIPS = {
+    "detector.pitch_h_um": "טיפ: Run > Detector lookup (Ctrl+D) ממלא את נתוני הגלאי מהקטלוג.",
+    "atmosphere.atm.0.sigma": "כאן מזינים את האטמוספרה 1. אפשר להפעיל עד שלוש אטמוספרות להשוואה.",
+}
+GUESS_SOURCES = ("preset", "assumption")             # source tags that mean "not a datum of this system"
+CRITICAL = 3                                          # impact rating of a field critical to the range
+
+
+def _source_of(project, path):
+    return ((project or {}).get("provenance") or {}).get(path, "preset")
+
+
+def is_guess(project, path):
+    """A numeric value whose source tag is still preset / assumed (a choice, such as the category, is not data)."""
+    try:
+        v = project
+        for k in path.split("."):
+            v = v[int(k)] if isinstance(v, list) else v[k]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and _source_of(project, path) in GUESS_SOURCES
+
+
+def critical_box(path, project):
+    """The emphasis of a field critical to the range (lesson 4): why, and a warning when its value is still a guess."""
+    e = param(path) or {}
+    lines = ["קריטי לטווח", (e.get("impact_note") or "השפעה גבוהה על הטווח") + ". ערך שגוי כאן משנה את הטווח "
+             "מאוד, ולכן בדקו אותו מול דף הנתונים של המערכת."]
+    src = _source_of(project, path)
+    if is_guess(project, path):
+        lines.append("הערך עדיין מסומן %s - זה ניחוש כללי. הזינו את הנתון של המערכת שלכם, ושנו את התג (datasheet "
+                     "או measured)." % ("preset" if src == "preset" else "assumed"))
+    return ("box", "crit", lines, True)
+
+
+def _instance(path, labels):
+    """Which one of a repeated field: the task (detection / recognition / identification), the atmosphere 1-3."""
+    m = re.search(r"\.(\d+)\.", path)
+    if m and path.startswith("target.tasks."):
+        return ("גילוי", "הכרה", "זיהוי")[int(m.group(1))] if int(m.group(1)) < 3 else "משימה %d" % (int(m.group(1)) + 1)
+    if m and path.startswith("atmosphere.atm."):
+        return "אטמוספרה %d" % (int(m.group(1)) + 1)
+    if m:
+        return "%s %d" % (labels.get(path, "").strip(), int(m.group(1)) + 1)
+    return labels.get(path, path).strip()
+
+
+def entry_steps(pages, project, visible):
+    """Steps of lesson 4: every shown field of the form, page by page in the order of ENTRY_CHAPTERS.  A field of high
+    or medium impact gets its own step (a critical one is emphasised); the low-impact fields of a page are listed
+    together in one step.  The last step lists the critical fields.  pages / visible as in tour_steps."""
+    out = [_s("סדר העבודה",
+              P_("בשיעור הזה נעבור על כל עמודי הטופס במצב Engineering, עמוד אחר עמוד, ונזין את המערכת שלכם. בכל שדה "
+                 "המדריך מסמן אותו בטופס, מסביר אותו ובודק את הערך."),
+              H_("לא כל השדות שווים"),
+              ("chips", [("קריטי לטווח", "high"), ("השפעה בינונית", "mid"), ("השפעה קטנה", "low")]),
+              LI("שדה קריטי מסומן באדום, בטופס ובכרטיס. אותו בודקים מול דף הנתונים ומחליפים בנתון אמיתי."),
+              LI("שדה בהשפעה בינונית מקבל שלב משלו, כמו שדה קריטי."),
+              LI("השדות בהשפעה קטנה של כל עמוד מוצגים יחד בשלב אחד. אפשר להשאיר אותם בברירת המחדל אם אין נתון טוב "
+                 "יותר."),
+              ("box", "tip", ["אפשר לעצור", "השיעור ארוך ומחולק לפרקים. סגרו בכל רגע, ובפעם הבאה תמשיכו מאותו שלב."],
+               True),
+              workflow="engineering", page="General")]
+    by_name = {n: (fl, wf) for n, fl, wf in (pages or [])}
+    order = [n for _t, names in ENTRY_CHAPTERS for n in names]
+    chapters = [(t, [n for n in names if n in by_name]) for t, names in ENTRY_CHAPTERS]
+    rest = [n for n in by_name if n not in order]
+    if rest:
+        chapters[-1] = (chapters[-1][0], chapters[-1][1] + rest)
+    chapters = [(t, names) for t, names in chapters if names]
+    critical, labels = [], {}
+    for ci, (chapter, names) in enumerate(chapters):
+        for name in names:
+            fields, wf = by_name[name]
+            shown = []
+            for _h, fl in _visible_fields(fields, project, visible):
+                for f in fl:
+                    if param(f["path"]):
+                        shown.append(f["path"])
+                        labels[f["path"]] = f.get("label") or f["path"]
+            if not shown:
+                continue
+            imp = {p: param(p).get("impact", 1) for p in shown}
+            crit = [p for p in shown if imp[p] >= CRITICAL]
+            mid = [p for p in shown if imp[p] == 2]
+            low = [p for p in shown if imp[p] < 2]
+            critical += crit
+            he, desc = PAGE_HE.get(name, (name, ""))
+            chips = [("%d קריטיים לטווח" % len(crit), "high")] if crit else []
+            chips += [("%d בהשפעה בינונית" % len(mid), "mid")] if mid else []
+            chips += [("%d בהשפעה קטנה" % len(low), "low")] if low else []
+            intro = [("box", "info", ["פרק %d מתוך %d: %s · עמוד %s (%s)" % (ci + 1, len(chapters), chapter, he, name),
+                                      desc], True), ("chips", chips)]
+            first = True
+            for p in shown:
+                if imp[p] < 2:
+                    continue
+                blocks = list(intro) if first else []
+                if imp[p] >= CRITICAL:
+                    blocks.append(critical_box(p, project))
+                if ENTRY_TIPS.get(p):
+                    blocks.append(("box", "tip", [ENTRY_TIPS[p]]))
+                out.append(_s(param(p)["title"], *blocks, workflow=wf, page=name, path=p, entry=True,
+                              page_intro=first, critical=imp[p] >= CRITICAL))
+                first = False
+            if low:
+                blocks = list(intro) if first else [("chips", [("השפעה קטנה · אפשר להשאיר ברירת מחדל", "low")])]
+                blocks.append(("p", "השדות האלה משפיעים מעט על הטווח. עברו עליהם, ושנו רק את מה שידוע לכם."))
+                out.append(_s("%s · שדות בהשפעה קטנה" % he, *blocks, workflow=wf, page=name, path=low[0],
+                              fields=low, group=True, entry=True, page_intro=first))
+    count = {}
+    for st in out:                                  # the same card twice (the three tasks, atmospheres 1-3)
+        if st.get("entry") and not st.get("group"):
+            count[st["title"]] = count.get(st["title"], 0) + 1
+    for st in out:
+        if st.get("entry") and not st.get("group") and count.get(st["title"], 0) > 1:
+            st["title"] = "%s · %s" % (st["title"], _instance(st["path"], labels))
+    out.append(_s("סיכום: השדות הקריטיים",
+                  P_("אלה השדות שקובעים את הטווח של המערכת שלכם. ליד כל אחד: הערך, הבדיקה שלו ותג המקור."),
+                  LI("שדה שמסומן ⚠ דורש בדיקה."),
+                  LI("ערך שהמקור שלו עדיין preset או assumed נשען על ניחוש. כדאי להחליף אותו בנתון של המערכת."),
+                  workflow="engineering", page="General", fields=critical, summary=True, action="calculate",
+                  after=[("box", "ok", ["סיימתם את השיעור", "חשבו (F5). בשיעור הבא נשפר את הטווח ונוציא דוח."],
+                          True)]))
+    return out
+
+
+def field_summary(path, value, project):
+    """(state 'warn' | 'ok' | 'info', title, text, meta) of a field for the lists of the tour and the review."""
+    e = param(path)
+    if not e:
+        return None
+    res = check(path, value, project)
+    imp = e.get("impact", 1)
+    state = "warn" if res and res[0] == "warn" else ("info" if imp == 0 else "ok")
+    mark = {"warn": "⚠ ", "info": "ⓘ ", "ok": ""}[state]
+    text = res[1] if res else e["why"].split(". ")[0].rstrip(".") + "."
+    meta = "ערך: %s · %s" % (_value_text(value), ("★" * imp + " " if imp else "") + IMPACT_TEXT[imp])
+    return state, mark + e["title"], text, meta
+
+
+def review(pages, project, visible, value):
+    """Check every shown field of a project -> {"warn": [(impact, path, page, check)], "ok": n, "n": n}.
+    value(path) returns the entered value."""
+    warns, n, ok, seen = [], 0, 0, set()
+    for name, fields, _wf in pages:
+        for _h, fl in _visible_fields(fields, project, visible):
+            for f in fl:
+                path = f["path"]
+                if path in seen or not param(path):
+                    continue
+                seen.add(path)
+                res = check(path, value(path), project)
+                if not res:
+                    continue
+                n += 1
+                if res[0] == "warn":
+                    warns.append((param(path).get("impact", 1), path, name, res))
+                else:
+                    ok += 1
+    warns.sort(key=lambda w: -w[0])
+    return {"warn": warns, "ok": ok, "n": n}
+
+
+def lesson(lesson_id):
+    for les in LESSONS + HIDDEN_LESSONS:
+        if les["id"] == lesson_id:
+            return les
+    return None
+
+
+def steps(lesson_id, project, pages=None, visible=None):
+    """Steps of a lesson that apply to the project (cond).  Lesson 4 and the tour need the form (pages, visible)."""
+    les = lesson(lesson_id)
+    if les and les.get("dynamic"):
+        if pages is None or visible is None:
+            return []
+        out = (entry_steps if lesson_id == "engineering" else tour_steps)(pages, project, visible)
+        if out and lesson_id == "engineering":
+            out[0] = dict(out[0], lesson_start=True)
+        return out
+    out = []
+    for st in (les["steps"] if les else []):
+        try:
+            ok = st.get("cond") is None or st["cond"](project)
+        except Exception:
+            ok = True
+        if ok:
+            out.append(st)
+    if out:
+        out[0] = dict(out[0], lesson_start=True)        # the narrator welcomes to the lesson here
+    return out
+
+
+def _value_text(v):
+    if isinstance(v, bool):
+        return "מופעל" if v else "כבוי"
+    if isinstance(v, dict):                         # imported file
+        return v.get("name") or "לא יובא קובץ"
+    if isinstance(v, list):
+        return ", ".join(_n(x) for x in v)
+    if v is None or v == "":
+        return "ריק"
+    return _n(v)
+
+
+def field_blocks(path, value=None, project=None, extra=()):
+    """RtlCanvas blocks of the field card of a parameter.  `extra` (the live effect on the ranges) is placed right
+    after the check of the value."""
+    e = param(path)
+    if not e:
+        return []
+    imp = e.get("impact", 1)
+    chips = [(("★" * imp + "  " if imp else "") + IMPACT_TEXT[imp], IMPACT_STYLE[imp])]
+    if e.get("impact_note"):
+        chips.append((e["impact_note"], "info"))
+    out = [("chips", chips)]
+    res = check(path, value, project) if project is not None else None
+    if res:                                         # the live check first, where it is seen
+        lines = ["הערך שלכם" if res[0] == "ok" else "כדאי לבדוק", res[1]]
+        s = suggestion(res)
+        if s is not None:
+            lines.append("מה לעשות: נסו %s - הכפתור 'החל את הערך המוצע' מזין אותו, ו'בטל' מחזיר." % _value_text(s))
+        out.append(("box", "ok" if res[0] == "ok" else "warn", lines, True))
+    out += list(extra)
+    out += [("p", e["what"]), ("h", "למה זה חשוב"), ("p", e["why"])]
+    calc = FO.card_lines(path)
+    if calc:                                        # the step of the calculation the field enters, and the formula
+        out += [("h", "איך זה נכנס לחישוב"), ("p", "%s. %s" % (calc[0], calc[1]))]
+        out += [("p", line) for line in calc[2:]]
+    if e.get("typical"):
+        out.append(("h", "ערכים טיפוסיים"))
+        out += [("li", t) for t in e["typical"]]
+    if e.get("source"):
+        out += [("h", "מאיפה לוקחים את הערך"), ("p", e["source"])]
+    if project is not None:
+        try:
+            out += DS.blocks(path, project)             # size, weight and image defects
+        except Exception:
+            pass
+    if e.get("mistakes"):
+        out.append(("box", "tip", ["טעויות נפוצות"] + list(e["mistakes"]), True))
+    return out

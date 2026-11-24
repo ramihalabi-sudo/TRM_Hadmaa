@@ -6,6 +6,6 @@ Technical Report 2021/04.
 from .model import TRM4Model, ModelError, run_project
 from .presets import DEFAULT_PROJECT, TEMPLATES, make_template, deep_merge
 
-__version__ = "2.2.0"
+from .version import VERSION as __version__
 __all__ = ["TRM4Model", "ModelError", "run_project", "DEFAULT_PROJECT", "TEMPLATES", "make_template",
            "deep_merge"]

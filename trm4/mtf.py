@@ -70,6 +70,59 @@ class DiffractionMTF:
         return np.interp(disp, self.d, self.o, right=0.0)
 
 
+def _pupil_rows(D, D_obsc, W_along, W_perp, n_rows):
+    """Rows of the pupil parallel to the shift direction: (starts, ends) of the two intervals per row [mm], the row
+    height dy [mm] and the largest displacement [mm] - the geometry of `pupil_overlap`."""
+    R, Ro = 0.5 * D, 0.5 * D_obsc
+    if D <= 0:
+        if W_along <= 0 or W_perp <= 0:
+            raise ValueError("Rectangular aperture needs both truncation widths > 0")
+        T_along, y_max = 0.5 * W_along, 0.5 * W_perp
+    else:
+        T_along = 0.5 * W_along if W_along > 0 else R
+        y_max = min(R, 0.5 * W_perp if W_perp > 0 else R)
+    y = (np.arange(n_rows) + 0.5) / n_rows * 2 * y_max - y_max
+    xo = np.full_like(y, T_along) if D <= 0 else np.minimum(np.sqrt(np.maximum(R * R - y * y, 0.0)), T_along)
+    xi = np.minimum(np.where(np.abs(y) < Ro, np.sqrt(np.maximum(Ro * Ro - y * y, 0.0)), 0.0), xo)
+    return np.stack([-xo, xi]), np.stack([-xi, xo]), 2 * y_max / n_rows, 2 * T_along
+
+
+class DefocusMTF:
+    """Optical transfer function of a defocused, otherwise perfect pupil for one direction (extension).
+
+    A focus error dz of the image plane is the wavefront error OPD = dz (x^2 + y^2) / (2 f^2) in the pupil.  For two
+    copies of the pupil displaced by d the phase difference is linear in the coordinate u along the shift (measured
+    from the middle between the copies): 2 pi dz u d / (lambda f^2).  The pupil is symmetric, so the OTF is real:
+
+        OTF(d) = Int_overlap cos(k u) du dy / pupil area,   k = 2 pi dz d / (lambda f^2) = 2 pi dz r / f^2
+
+    (dz and lambda in um, u, d, f in mm, r in 1/mrad, d = lambda r) - Hopkins, Proc. R. Soc. A 231, 91 (1955), by the
+    row integration of `pupil_overlap`, so every aperture shape is covered.  dz = 0 gives the diffraction MTF; a large
+    dz gives the geometric blur disc of angular diameter dz / (F f).  The value is signed: beyond its first zero the
+    image is contrast-reversed."""
+
+    def __init__(self, D, D_obsc, W_along, W_perp, n_rows=500):
+        self.starts, self.ends, self.dy, self.d_max = _pupil_rows(D, D_obsc, W_along, W_perp, n_rows)
+        self.area = float(np.clip(self.ends - self.starts, 0.0, None).sum())
+
+    def __call__(self, r, lam_um, dz_um, f_mm):
+        r = np.abs(np.asarray(r, float)).ravel()
+        d = r * float(lam_um)
+        k = 2 * np.pi * float(dz_um) * r / float(f_mm) ** 2            # [1/mm] along u
+        total = np.zeros_like(d)
+        kk = np.where(np.abs(k) > 1e-12, k, 1.0)[:, None]
+        small = (np.abs(k) <= 1e-12)[:, None]
+        for a in range(2):
+            for b in range(2):
+                lo = np.maximum(self.starts[a][None, :], self.starts[b][None, :] + d[:, None])
+                hi = np.minimum(self.ends[a][None, :], self.ends[b][None, :] + d[:, None])
+                ok = hi > lo
+                u0, u1 = lo - 0.5 * d[:, None], hi - 0.5 * d[:, None]
+                val = np.where(small, u1 - u0, (np.sin(kk * u1) - np.sin(kk * u0)) / kk)
+                total += np.where(ok, val, 0.0).sum(axis=1)
+        return np.where(d <= self.d_max, total / self.area, 0.0)
+
+
 # ---------------------------------------------------------------------------------------------
 # 4.2.1 Optics aberrations
 # ---------------------------------------------------------------------------------------------
