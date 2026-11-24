@@ -74,6 +74,15 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.36 - colour camera with a Bayer colour filter array (U9, PROVISIONAL)
+
+Off by default: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation | Source / limits |
+|---|---|---|
+| U9 Bayer colour filter array | *Colour filter array* and *Interpolation of the colour image* (Detector geometry page, `detector.cfa`, `detector.demosaic`, Visible and General): the perceived noise power is x 2 (`TRM4Model.psi`); with bilinear interpolation the digital MTF is x (3 + cos(2 pi r alpha)) / 4 (`extensions.bayer_bilinear_mtf`), with adaptive interpolation it is unchanged along the axes. Daylight template: Detection 14.73 -> 13.93 km (adaptive), 13.24 km (bilinear); Identification 5.00 -> 4.77 / 4.22 km. | Palum, "Image sampling with the Bayer color filter array", IS&T PICS 2001: the resolution comes from the green plane, Nyquist on the axes as for the monochrome array, half on the diagonals and for red and blue; adaptive interpolation along the smaller gradient. The bilinear transfer is derived and checked on a simulated mosaic (test). The noise factor is an assumption (luminance from the green plane alone). Colour contrast, colour aliasing and the red and blue planes are not modelled; there is no validated range model for colour cameras. |
+| Tests | `tests/test_colour_camera.py` (12 tests). The two new fields have help, a Hebrew guide card without a recording and a formula entry. | - |
+
 ## Version 2.35 - wavefront error (U5), contrast threshold of the eye (U6), search in a limited time (U10)
 
 Off by default: template ranges are unchanged; the run IDs change with the version number.

@@ -769,6 +769,32 @@ def search_time_factor(t_s, tau_fov_s, n_fov):
 
 
 # ---------------------------------------------------------------------------------------------
+# Colour camera: Bayer colour filter array
+# ---------------------------------------------------------------------------------------------
+# Half of the pixels of a Bayer array are green, on a quincunx lattice, and the resolution of the image comes from
+# the green plane (Palum, "Image sampling with the Bayer color filter array", IS&T PICS 2001).  On the horizontal
+# and the vertical axis the green plane has the Nyquist frequency of the monochrome array, on the diagonals half of
+# it; the red and the blue plane have half of it in every direction.
+# The missing green values are interpolated:
+#   adaptive - the average of the two green neighbours in the direction of the smaller gradient (Palum).  For a bar
+#              pattern along an axis that direction is along the bars, so the pattern is reproduced without loss:
+#              "resolutions very close to the resolution of the monochrome sensor";
+#   bilinear - the average of the four green neighbours, i.e. the kernel [[0,1,0],[1,4,1],[0,1,0]] / 4 on the
+#              zero-filled green plane.  Its transfer on an axis is (3 + cos(2 pi r alpha)) / 4: 1 at zero, 1/2 at
+#              Nyquist (derived here; checked against a simulated mosaic in tests/test_colour_camera.py).
+# Noise: only half of the pixels carry an independent luminance sample, so the noise power that the eye integrates
+# is twice that of a monochrome array with the same pixel noise - an assumption (luminance from the green plane
+# alone), not a measured model.
+BAYER_NOISE_POWER = 2.0
+
+
+def bayer_bilinear_mtf(r, alpha_mrad):
+    """Transfer of the bilinear interpolation of the green plane of a Bayer array along an axis; r [1/mrad],
+    alpha = sampling distance of the pixels [mrad]."""
+    return 0.75 + 0.25 * np.cos(2.0 * math.pi * np.asarray(r, float) * float(alpha_mrad))
+
+
+# ---------------------------------------------------------------------------------------------
 # Rain, and an extinction that falls off with height (slant paths)
 # ---------------------------------------------------------------------------------------------
 # Specific attenuation of rain gamma = k R^alpha [dB/km], R the rain rate [mm/h]: Recommendation ITU-R P.1814-1

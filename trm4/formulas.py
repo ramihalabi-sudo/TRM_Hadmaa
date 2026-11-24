@@ -138,6 +138,8 @@ FIELD = {
     # ---------------------------------------------------------------- detector geometry
     "detector.n_h": (_G, "FOV_h = [(n_h - 1) p_h + a_h] / f (Eq. 3.11). It does not enter the range."),
     "detector.n_v": (_G, "FOV_v = [(n_v - 1) p_v + a_v] / f (Eq. 3.11). It does not enter the range."),
+    "detector.cfa": (_N, "Bayer: perceived noise power x 2; Nyquist of the green plane on the axes = f / (2 p)."),
+    "detector.demosaic": ("mtf_post", "Bilinear: MTF x (3 + cos(2 pi r alpha)) / 4;  adaptive: x 1 along the axes."),
     "detector.square": (_G, "The vertical pitch and active size follow the horizontal ones."),
     "detector.pitch_h_um": (_G, "IFOV_h = p_h / f;  Nyquist r_N = f / (2 p_h)."),
     "detector.pitch_v_um": (_G, "IFOV_v = p_v / f;  Nyquist r_N = f / (2 p_v)."),

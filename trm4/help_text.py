@@ -669,6 +669,17 @@ HELP = {
     "turbulence.r0_L_km": "Path length over which r0 was measured or specified.",
 
     # ---------------------------------------------------------------- fields documented in version 2.5
+    "detector.cfa": "Extension (PROVISIONAL): colour camera with a Bayer colour filter array. Half of the pixels are "
+                    "green and the image resolution comes from them: on the horizontal and the vertical axis the "
+                    "Nyquist frequency stays that of the monochrome array, on the diagonals and for red and blue it "
+                    "is half. The perceived noise power is doubled, because only half of the pixels carry an "
+                    "independent luminance sample (assumption). Enter the quantum efficiency of the green channel "
+                    "including its filter. There is no validated range model for colour cameras: colour contrast "
+                    "and colour aliasing are not modelled. Not available in the Thermal category.",
+    "detector.demosaic": "How the camera fills in the missing colour values. Adaptive (edge-directed, the usual "
+                         "choice): bar patterns along the axes are reproduced without loss. Bilinear (average of "
+                         "the four neighbours): the MTF is multiplied by (3 + cos(2 pi r alpha)) / 4, which is 1/2 "
+                         "at the Nyquist frequency.",
     "detector.square": "Ticked: one entry for the pixel pitch and the active size, used for both axes. Unticked: "
                        "separate vertical values (rectangular pixels). Set from the values when a project is loaded; "
                        "the calculation itself only sees the horizontal and vertical values.",

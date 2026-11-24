@@ -278,6 +278,7 @@ class TRM4Model:
         self.r_s = {z: 1.0 / self.alpha_s[z] for z in "hv"}
         self.r_N = {z: 0.5 * self.r_s[z] for z in "hv"}
         self.das = {z: a_eff[z] / self.f[z] for z in "hv"}
+        self._setup_cfa()
 
         if b["fov_mode"] == "measured":
             for z, key in (("h", "fov_h_deg"), ("v", "fov_v_deg")):
@@ -394,6 +395,30 @@ class TRM4Model:
         self._setup_operating_point()
         if self.contrast:
             self._setup_contrast_span()
+
+    def _setup_cfa(self):
+        """Colour camera with a Bayer colour filter array (extension, PROVISIONAL, off by default)."""
+        d = self.p["detector"]
+        cfa, mode = d.get("cfa", "none"), d.get("demosaic", "adaptive")
+        self.cfa = None
+        if cfa not in ("none", "bayer") or mode not in ("adaptive", "bilinear"):
+            raise ModelError("Colour filter array: 'none' or 'bayer', interpolation 'adaptive' or 'bilinear'")
+        if cfa == "none":
+            return
+        if self.cat == "Thermal":
+            self.assume("Colour filter array ignored: it does not apply to the Thermal category. %s" % X.EXTENSION)
+            return
+        self.cfa = mode
+        self.assume("Colour camera, Bayer array (PROVISIONAL): the image resolution comes from the green plane (Palum, "
+                    "Kodak 2001) - on the horizontal and the vertical axis its Nyquist frequency is that of the "
+                    "monochrome array, on the diagonals and for red and blue half of it. Interpolation '%s': %s The "
+                    "perceived noise power is taken x %.3g, because only half of the pixels carry an independent "
+                    "luminance sample (assumption). Enter the quantum efficiency of the green channel including its "
+                    "filter. Colour contrast, colour aliasing on diagonal structures and the red and blue planes are "
+                    "not modelled. %s" % (
+                        mode, "bar patterns along the axes are reproduced without loss." if mode == "adaptive" else
+                        "the MTF is multiplied by (3 + cos(2 pi r alpha)) / 4, 1/2 at Nyquist.",
+                        X.BAYER_NOISE_POWER, X.EXTENSION))
 
     def _setup_contrast_span(self):
         """Signal span that the display shows from black to white, for the contrast threshold of the eye (extension,
@@ -2102,6 +2127,8 @@ class TRM4Model:
 
     def mtf_dig(self, r, z):
         m = np.ones_like(np.asarray(r, float)) if self.boost_off else self._fir(r, z)   # sharpening (field map SP-01)
+        if getattr(self, "cfa", None) == "bilinear":
+            m = m * X.bayer_bilinear_mtf(r, self.alpha_s[z])     # interpolation of the green plane (extension)
         s = self.compression_blur_px()
         if s > 0:
             m = m * X.mtf_compression(r, s, self.alpha_s[z])      # lossy compression as per-pixel blur
@@ -2258,7 +2285,7 @@ class TRM4Model:
         if ies > 0:
             psi_i = ies ** 2 * self.g_type / (self.df_I["h"] * self.df_I["v"]) * \
                 self._e(self.EI, (z, 1), rp) * self._e(self.EI, (zp, 7), rp)
-        return psi_n + psi_i
+        return (psi_n + psi_i) * (X.BAYER_NOISE_POWER if getattr(self, "cfa", None) else 1.0)
 
     def mdsp(self, R_km, rp, z, nes, ies, amop_val=None):
         """MTDP / MDSP, Eqs. (3.175), (3.176)."""
@@ -4198,6 +4225,11 @@ class TRM4Model:
         add(g, "Detector angular subtense h x v", "%.4f x %.4f" % (self.das["h"], self.das["v"]), "mrad")
         add(g, "Sampling distance h x v", "%.4f x %.4f" % (self.alpha_s["h"], self.alpha_s["v"]), "mrad")
         add(g, "Nyquist frequency h x v", "%.3f x %.3f" % (self.r_N["h"], self.r_N["v"]), "1/mrad")
+        if getattr(self, "cfa", None):
+            add(g, "Bayer array (extension): Nyquist of the green plane on the axes / on the diagonals, red and blue",
+                "%.3f / %.3f" % (self.r_N["h"], 0.5 * self.r_N["h"]), "1/mrad")
+            add(g, "Bayer array (extension): interpolation / noise power factor",
+                "%s / %.3g" % (self.cfa, X.BAYER_NOISE_POWER))
         add(g, "Sensitive detector area", "%.3g" % (self.A_det * 1e12), "um^2")
         add(g, "Frame interval / maximum integration time", "%.4g / %.4g" % (1e3 / self.frame_rate, self.t_max * 1e3),
             "ms")
