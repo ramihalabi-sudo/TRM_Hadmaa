@@ -232,7 +232,7 @@ def qe_shape(rec):
     elif "mct" in tech or "cmt" in tech:
         name = "CMT %s generic" % band
     elif "cmos" in tech or "ccd" in tech or (band == "DAY" and tech in ("", "not verified")):
-        name = "CCD Silicon generic"
+        name = "Silicon (CCD / CMOS) generic"
     else:
         return None
     return name if name in P.DETECTOR_QE else None

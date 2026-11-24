@@ -74,6 +74,10 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.40 - the silicon curve is called by its name
+
+No effect on ranges: a rename only. *CCD Silicon generic* in the *Spectral quantum efficiency* list is now *Silicon (CCD / CMOS) generic* - the list names detector materials, and the curve has always served CMOS cameras too. Projects saved with the earlier name load as before (`presets.QE_ALIASES`, applied in `deep_merge`). The help of the field says so, and that an uncooled microbolometer uses *Flat response* (8 - 14 um by default) instead of a curve of the list. Tests: `tests/test_detector_names.py` (5 tests).
+
 ## Version 2.39 - the sidebar fits itself to a low window
 
 No effect on ranges: interface only. On a display of 768 lines the page list of the Engineering and Lab workflows filled the sidebar and *Show advanced parameters* below it was pushed off the screen (it stayed reachable from the menu only). The sidebar now fits its height (`App._fit_sidebar`): the two version lines go first, then the rows of the page list get tighter step by step. Found through the CI runner, whose screen is that low: `test_frames_in_the_window` had failed there since 2.30. Tests: `tests/test_sidebar_fit.py` (4 tests).

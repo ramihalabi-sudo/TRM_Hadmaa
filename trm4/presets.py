@@ -10,7 +10,7 @@ phosphor/eye parameters) is reproduced exactly.
 # C.1 Detector spectral quantum efficiencies [um, %]
 # ---------------------------------------------------------------------------------------------
 DETECTOR_QE = {
-    "CCD Silicon generic": [(0.25, 0), (0.3, 8), (0.35, 35), (0.4, 50), (0.45, 68), (0.5, 72), (0.55, 76),
+    "Silicon (CCD / CMOS) generic": [(0.25, 0), (0.3, 8), (0.35, 35), (0.4, 50), (0.45, 68), (0.5, 72), (0.55, 76),
                             (0.6, 78), (0.65, 75), (0.7, 67), (0.75, 55), (0.8, 43), (0.85, 32), (0.9, 23),
                             (0.95, 15), (1.0, 8), (1.05, 3), (1.12, 0)],
     "InGaAs generic": [(0.88, 0), (0.92, 5), (0.95, 30), (0.98, 68), (1.02, 71), (1.3, 71), (1.4, 67),
@@ -155,6 +155,9 @@ PHOSPHOR = {"P43": (0.237, 3.455e-5, 6.205e-4), "P46": (0.139, 5.917e-7, 6.875e-
             "P47": (5.470e-2, 3.662e-7, 4.200e-8), "P20": (0.914, 1.639e-3, 4.552e-2)}
 
 QE_NAMES = list(DETECTOR_QE.keys()) + ["Custom"]
+# names that saved projects may still carry: the silicon curve was called "CCD Silicon generic" up to 2.39,
+# although it is the response of the material and serves CCD and CMOS sensors alike
+QE_ALIASES = {"CCD Silicon generic": "Silicon (CCD / CMOS) generic"}
 MATERIAL_NAMES = list(REFLECTIVITY.keys())
 SOURCE_NAMES = list(NATURAL_SOURCES.keys())
 
@@ -497,6 +500,9 @@ def deep_merge(base, override):
             out[k] = deep_merge(out[k], v)
         else:
             out[k] = copy.deepcopy(v)
+    name = out.get("qe_preset")
+    if isinstance(name, str) and name in QE_ALIASES:            # a project saved with an earlier name of a curve
+        out["qe_preset"] = QE_ALIASES[name]
     return out
 
 
@@ -535,7 +541,7 @@ TEMPLATES = {
         "basic": {"frame_rate": 50.0},
         "optics": {"D_mm": 25.0, "f_mm": 100.0, "lambda_diff_um": 0.55, "tau_opt": 0.85},
         "detector": {"a_h_um": 5.0, "a_v_um": 5.0, "pitch_h_um": 5.0, "pitch_v_um": 5.0, "n_h": 1920,
-                     "n_v": 1080, "qe_preset": "CCD Silicon generic", "tint_mode": "direct", "tint_ms": 0.25,
+                     "n_v": 1080, "qe_preset": "Silicon (CCD / CMOS) generic", "tint_mode": "direct", "tint_ms": 0.25,
                      "storage_e": 2.0e4, "dark_A": 3e-16, "noise_floor_e": 5.0, "lsb_e": 5.0,
                      "fpn_mode": "measured", "prnu_pct": 0.5, "dsnu_A": 4e-17},
         "display": {"n_h": 1920, "n_v": 1080, "pitch_h_mm": 0.3, "pitch_v_mm": 0.3, "luminance": 100.0,
@@ -589,7 +595,7 @@ TEMPLATES = {
         "mode": {"niirs": True, "stream": "still"},
         "optics": {"D_mm": 100.0, "f_mm": 500.0, "lambda_diff_um": 0.6, "tau_opt": 0.85},
         "detector": {"a_h_um": 5.5, "a_v_um": 5.5, "pitch_h_um": 5.5, "pitch_v_um": 5.5, "n_h": 4096,
-                     "n_v": 3072, "qe_preset": "CCD Silicon generic", "tint_mode": "direct", "tint_ms": 0.2,
+                     "n_v": 3072, "qe_preset": "Silicon (CCD / CMOS) generic", "tint_mode": "direct", "tint_ms": 0.2,
                      "storage_e": 3.0e4, "dark_A": 3e-16, "noise_floor_e": 5.0, "lsb_e": 8.0,
                      "fpn_mode": "measured"},
         "display": {"n_h": 4096, "n_v": 3072, "pitch_h_mm": 0.2, "pitch_v_mm": 0.2, "luminance": 100.0},

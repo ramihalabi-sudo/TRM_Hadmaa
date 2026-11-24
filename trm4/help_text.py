@@ -148,7 +148,11 @@ HELP = {
     "detector.cuton_um": "Shortest wavelength the detector responds to. Defines the spectral band.",
     "detector.cutoff_um": "Longest wavelength the detector responds to. Defines the spectral band.",
     "detector.qe_preset": "Spectral quantum efficiency curve of the detector material (e.g. InSb, MCT). It also "
-                          "defines the spectral band used for all radiometry.",
+                          "defines the spectral band used for all radiometry. The list names materials, not sensor "
+                          "architectures: 'Silicon (CCD / CMOS) generic' serves CCD and CMOS sensors alike - what "
+                          "differs between them (read noise, full well, fill factor) is entered in their own "
+                          "fields. An uncooled microbolometer has no curve here: it uses 'Flat response' with a "
+                          "cut-on and a cut-off wavelength (8 - 14 um by default).",
     "detector.qe_scale": "Multiplies the QE curve, to match the measured QE of your detector (1 = as preset).",
     "detector.qe_custom": "Your own QE curve: one line per point, 'wavelength[um] QE[%]'.",
     "detector.noise_mode": "Noise / sensitivity source - which data are the truth for the temporal noise.\n"
