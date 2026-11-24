@@ -325,6 +325,7 @@ DEFAULT_PROJECT = {
               "exp_overlap": True, "guard_ms": 0.0, "exp_min_ms": 0.0, "exp_max_ms": 0.0, "bin_kind": "charge",
               "roi": ""},
     "optics": {"defocus_um": 0.0,            # focus error at the image plane [um], 0 = in focus (extension)
+               "wfe_rms_um": 0.0,            # rms wavefront error of the optics [um of optical path], 0 = none
                "aperture": "circular", "D_mm": 50.0, "D_obsc_mm": 0.0, "W_trunc_h_mm": 0.0,
                "W_trunc_v_mm": 0.0, "f_mm": 100.0, "diff_focal": False, "f_v_mm": 100.0, "F_general": 2.0,
                "diffraction": "spectral", "lambda_diff_um": 0.0, "aberration": "none", "q": 1.3,
@@ -393,7 +394,9 @@ DEFAULT_PROJECT = {
                 # algorithm criterion: lp = TRM4 line pairs (uncalibrated), pot = pixels on target + pixel CNR
                 "algo_criterion": "lp", "algo_cnr_min": 3.0,
                 # ambient light on the screen (diagnostic, 0 = dark room) and its diffuse reflectance
-                "ambient_lux": 0.0, "reflectance": 0.04},
+                "ambient_lux": 0.0, "reflectance": 0.04,
+                # contrast threshold of the eye (Barten) for the displayed span and the ambient light (extension)
+                "contrast_limit": False},
     "stab": {"neglect": False, "random_on": False, "rand_h_mrad": 0.0, "rand_v_mrad": 0.0,
              "lin_on": False, "lin_h": 0.0, "lin_v": 0.0, "sin_on": False, "sin_h": 0.0, "sin_v": 0.0,
              "jitter_mode": "model", "jitter_file": dict(_NOFILE), "jitter_unit": "urad", "jitter_rate_hz": 0.0,
@@ -421,7 +424,11 @@ DEFAULT_PROJECT = {
                # TTP / V50 ranges, geometric (Nyquist / diffraction) reference range
                "prob_levels": True, "clutter_model": False, "ttp": False, "geo_limit": True,
                # detection range of the target as a point (sub-pixel) source and its single-pixel SNR criterion
-               "point": False, "point_snr": 5.0},
+               "point": False, "point_snr": 5.0,
+               # detection with search in a limited time (extension): search time [s], mean acquisition time of one
+               # field of view [s] (no default - from experiments) and the field of regard [deg] (0 = the field of view)
+               "search": False, "search_time_s": 10.0, "search_tau_s": 0.0, "search_for_h_deg": 0.0,
+               "search_for_v_deg": 0.0},
     "irradiance": {"mode": "none", "type": "broadband", "spectrum": "colour", "T_colour_K": 5800.0,
                    "E_peak": 1239.0, "E_eff": 100.0, "preset": "Direct sunlight", "lambda_um": 0.85,
                    "E_mono": 1.0, "T_bb_K": 6000.0, "geometry": "extended", "beta_h_deg": 0.0,

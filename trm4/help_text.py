@@ -92,6 +92,12 @@ HELP = {
                          "closer than the focus distance, or a temperature change of a lens that is not athermal - "
                          "a germanium lens of focal length f shifts by about f x 132e-6 per kelvin. 0 = in focus. "
                          "Not applied to an imported optics MTF.",
+    "optics.wfe_rms_um": "Extension: rms wavefront error of the lens, as optical path in micrometres (0.07 wave at "
+                         "10 um = 0.7 um; at 0.55 um = 0.039 um). The optics MTF is multiplied by "
+                         "exp{-(2 pi sigma / lambda)^2 [1 - rho(s)]}: mid and high frequencies fall by the Strehl "
+                         "ratio exp[-(2 pi sigma / lambda)^2] - 0.8 at lambda / 14 rms (the Marechal criterion). "
+                         "Take it from the lens specification or the interferometer report. Above 0.1 wave the "
+                         "result is only a rough guide. 0 = none. Not applied to an imported optics MTF.",
     "optics.blur_um": "Standard deviation of a Gaussian blur spot in the image plane that represents the "
                       "optical aberrations.",
     "optics.zemax_mtf": "Import an MTF table: Zemax OpticStudio FFT/Huygens MTF export, or a measured / simulated "
@@ -235,6 +241,16 @@ HELP = {
                           "image appears to the eye.",
     "display.pitch_v_mm": "Vertical size of one display pixel.",
     "display.luminance": "Average brightness of the display. The eye's contrast sensitivity depends on it.",
+    "display.contrast_limit": "Extension (PROVISIONAL): a bar pattern must exceed not only the noise but also the "
+                              "contrast threshold of the eye on the display (Barten model of DICOM PS3.14). The "
+                              "displayed modulation is the signal difference divided by the span shown from black to "
+                              "white - the AGC span in kelvin of the Image processing page - times the ambient "
+                              "contrast factor L / (L + L_reflected). Thermal category only. A camera with local "
+                              "contrast enhancement (DDE, local AGC) shows details with a much narrower span than the "
+                              "whole scene: enter that local span as the AGC span. The contrast threshold is added in "
+                              "quadrature to the TRM4 threshold. With a narrow span (high display gain) it has no "
+                              "effect, which is the TRM4 assumption of an optimally adjusted display; with a wide span "
+                              "or strong ambient light it shortens the ranges.",
     "display.ambient_lux": "Extension (diagnostic): illuminance of the ambient light falling on the screen. A "
                            "diffusely reflecting screen adds the luminance reflectance x illuminance / pi, which "
                            "lowers every displayed contrast by L / (L + L_reflected). The TRM4 observer has no "
@@ -618,6 +634,19 @@ HELP = {
     "target.tasks.N.v50": "V50 of the TTP metric for this task [cycles on target] (defaults 2.7 / 14.5 / 20.8; "
                           "identification ~ 20 is the order of the NVESD tracked-vehicle set, the others are typical "
                           "orders of magnitude). Calibrate for the target set.",
+    "target.search": "Extension: also report the Detection range when the target has to be found by searching within "
+                     "a limited time. P(t) = P_inf (1 - exp(-t / (N tau))): P_inf is the probability with unlimited "
+                     "time (Johnson TTPF of the resolved cycles), tau the mean acquisition time of one field of view "
+                     "and N the number of fields of view in the field of regard. The reported range is the one with "
+                     "a 50 % chance within the search time. This is where the field of view, and so the number of "
+                     "pixels, pays off. The TRM4 ranges are not changed.",
+    "target.search_time_s": "Time available for the search.",
+    "target.search_tau_s": "Mean time an observer needs to find the target in one field of view when it can be "
+                           "found. There is no formula for it - it is measured in search experiments and grows with "
+                           "clutter and range (a few seconds in uncluttered scenes). No default: it must be entered.",
+    "target.search_for_h_deg": "Horizontal extent of the area to be searched. N = field of regard / field of view. "
+                               "0 = one field of view.",
+    "target.search_for_v_deg": "Vertical extent of the area to be searched. 0 = one field of view.",
     "target.point": "Extension: also report the range at which the target is detected as a point source - the pixel "
                     "that holds it exceeds the noise by the SNR criterion. For targets smaller than a pixel (drones, "
                     "distant aircraft), where the line-pair criterion does not describe the task. Signal = "

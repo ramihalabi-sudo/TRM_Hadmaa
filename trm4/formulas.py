@@ -103,6 +103,8 @@ FIELD = {
     "optics.blur_um": (_P, "MTF_optics = MTF_diff x exp[-2 (pi sigma r / f)^2], sigma in um, f in mm."),
     "optics.defocus_um": (_P, "OTF(r) = Int_overlap cos(2 pi dz r u / f^2) du dy / pupil area; depth of focus "
                               "+-2 lambda F^2; blur disc dz / (F f)."),
+    "optics.wfe_rms_um": (_P, "MTF x exp{-(2 pi sigma / lambda)^2 [1 - rho(s)]}; mid and high frequencies x Strehl = "
+                              "exp[-(2 pi sigma / lambda)^2]."),
     "optics.tau_mode": (_S, "Constant transmission or an imported tau_opt(lambda)."),
     "optics.tau_opt": (_S, "N ~ tau_opt.  Thermal: the optics also emit (1 - tau_opt) L_BB(T_optics) (Eq. 3.104)."),
     "optics.zemax_tau": (_S, "tau_opt(lambda) from the file, inside the spectral integral."),
@@ -260,6 +262,8 @@ FIELD = {
     "display.pitch_v_mm": (_Q, "M_sys = n_v p_disp / (FOV_v d): a larger element gives a larger image."),
     "display.luminance": (_Q, "Gamma(L) of the eye, Table 4.2: 2.28 at 0.01 fL to 0.81 at 1000 fL; "
                               "MTF_eye = exp(-Gamma r / M_sys)."),
+    "display.contrast_limit": ("threshold", "MTDP = sqrt(MTDP_noise^2 + (m_t x span / (C x AMOP))^2), m_t = 1 / S of "
+                                            "the Barten model, C = L / (L + L_refl)."),
     "display.ambient_lux": ("check", "L_refl = reflectance x E / pi; displayed contrast x L / (L + L_refl)."),
     "display.reflectance": ("check", "L_refl = reflectance x E / pi."),
     "display.snr_th": ("threshold", "MTDP = (pi / 2) SNR_th sqrt(Psi) / AMOP."),
@@ -325,6 +329,11 @@ FIELD = {
     "target.prob_levels": ("output", "N80 = 1.45 N50, N90 = 1.75 N50 (Johnson TTPF)."),
     "target.ttp": ("output", "TTP = Int sqrt(signal / threshold) dr."),
     "target.geo_limit": ("output", "R_geo = sqrt(W H) / (N_task x max(2 IFOV, lambda / D))."),
+    "target.search": ("output", "P(t) = P_inf (1 - exp(-t / (N tau))); range where P(t) = 50 %."),
+    "target.search_time_s": ("output", "t in P(t) = P_inf (1 - exp(-t / (N tau)))."),
+    "target.search_tau_s": ("output", "tau in P(t) = P_inf (1 - exp(-t / (N tau)))."),
+    "target.search_for_h_deg": ("output", "N = (field of regard / field of view), horizontal x vertical."),
+    "target.search_for_v_deg": ("output", "N = (field of regard / field of view), horizontal x vertical."),
     "target.point": ("output", "SNR = signal x (target solid angle / pixel solid angle) x pixel energy / noise."),
     "target.point_snr": ("output", "Point target: range where the single-pixel SNR equals this value."),
     "target.clutter": (_C, "With the clutter model: N_detection x C [(C / dT)^2 + 1] / [(1 / dT)^2 + 1]."),

@@ -74,6 +74,18 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.35 - wavefront error (U5), contrast threshold of the eye (U6), search in a limited time (U10)
+
+Off by default: template ranges are unchanged; the run IDs change with the version number.
+
+| Item | Implementation | Source / limits |
+|---|---|---|
+| U5 Wavefront error | *Wavefront error rms* (Optics page, `optics.wfe_rms_um`, um of optical path): the optics MTF is multiplied by exp{-(2 pi sigma / lambda)^2 [1 - rho(s)]}, spectrally weighted (`extensions.wfe_transfer`); mid and high frequencies fall by the Strehl ratio. LWIR template: 0.7 um (lambda/14, Strehl 0.80) Detection 9.13 -> 8.81 km; 1.4 um (Strehl 0.41) -> 7.89 km. | Harvey & Kotha, Proc. SPIE 2576 (1995), Eq. 2; Juergens, OPTI 517. rho is Gaussian with a correlation length of 0.25 x the aperture (assumption that only shapes the lowest frequencies). Above 0.1 wave only a rough guide (noted). Not applied to an imported optics MTF. |
+| U6 Contrast threshold of the eye (PROVISIONAL) | *Include the contrast threshold of the eye* (Display page, `display.contrast_limit`, Thermal only): MTDP = sqrt(MTDP_noise^2 + (m_t x span / (C x AMOP))^2) with m_t = 1 / S of the Barten model, span = the AGC span and C = L / (L + L_reflected) (`TRM4Model.contrast_floor`). LWIR template, 20 K span: Detection 9.13 -> 4.01 km, with 5000 lux on the display 3.24 km; a very narrow span returns the TRM4 range. | Barten model as printed in DICOM PS3.14 Annex A; reproduces Table B-1 of the standard within 4 % (test). The quadrature combination, the linear span mapping and the constant sensitivity below its best frequency are assumptions, not TRM4. Not applied to Visible / General (no input for the displayed span) or to an algorithm observer. |
+| U10 Search in a limited time | *Also report the detection range with search in a limited time* (Target page, `target.search*`): P(t) = P_inf (1 - e^(-t / (N tau_FOV))), N = field of regard / field of view; the reported range is where P(t) = 50 %, i.e. the cycle criterion x TTPF^-1(0.5 / (1 - e^(-t / (N tau)))). MWIR template, 30 x 10 deg, tau = 3 s: 13.83 km in 300 s (14.48 km without search); in 60 s "not reached". | Friedman, Mark & Skirlo, Opt. Eng. 58(9) 093103 (2019), Eqs. 2-3 (random search). tau_FOV has no analytical model, so it is an input without a default. The TRM4 ranges are not changed. |
+| Still blocked | U9 colour camera: no verified model (Palum, Kodak 2001: on the axes the green plane keeps the monochrome Nyquist frequency, so the "/ 1.4" estimate of the report was too pessimistic). U4 gas absorption tables: ITU-R P.1814 gives none; the manual extra extinction stays. | - |
+| Tests | `tests/test_observer_search.py` (25 tests). The seven new fields have help, a Hebrew guide card without a recording and a formula entry. | - |
+
 ## Version 2.34 - electronic stabilization and the documented processing steps (U12); U14 closed by a check
 
 Off by default: template ranges are unchanged; the run IDs change with the version number.

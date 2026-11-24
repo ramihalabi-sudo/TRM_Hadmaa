@@ -692,6 +692,83 @@ AMBIENT_WARN_FACTOR = 0.5         # displayed contrast factor below which the di
 
 
 # ---------------------------------------------------------------------------------------------
+# Random wavefront error of the optics
+# ---------------------------------------------------------------------------------------------
+# Transfer function of a random wavefront error with the rms sigma_w [waves] and the normalized autocovariance
+# rho(s) at the pupil displacement s:  H(s) = exp{-(2 pi sigma_w)^2 [1 - rho(s)]}  -  the surface transfer function
+# of Harvey & Kotha, "Scattering effects from residual optical fabrication errors", Proc. SPIE 2576 (1995), Eq. (2)
+# (there with 4 pi sigma for a mirror surface, whose wavefront error is twice the surface error).  At displacements
+# beyond the correlation length it is the plateau exp[-(2 pi sigma_w)^2], the Strehl ratio of the Marechal
+# approximation: "the MTF in the mid-range spatial frequencies is reduced by the Strehl ratio" (Juergens, OPTI 517).
+# rho is taken Gaussian, exp[-(s / l)^2], with the correlation length l = WFE_CORR_FRACTION x aperture - an
+# assumption that only shapes the lowest frequencies.
+WFE_CORR_FRACTION = 0.25
+
+
+def wfe_transfer(sep_mm, sigma_um, lam_um, corr_mm):
+    """Transfer function of a random wavefront error: sigma [um rms of optical path], wavelength [um], pupil
+    displacement and correlation length [mm]."""
+    s = np.abs(np.asarray(sep_mm, float))
+    phase2 = (2.0 * math.pi * float(sigma_um) / np.asarray(lam_um, float)) ** 2
+    rho = np.exp(-(s / float(corr_mm)) ** 2) if corr_mm > 0 else np.zeros_like(s)
+    return np.exp(-phase2 * (1.0 - rho))
+
+
+def strehl(sigma_um, lam_um):
+    """Strehl ratio exp[-(2 pi sigma / lambda)^2] of an rms wavefront error (Marechal; good below 0.1 wave)."""
+    return math.exp(-(2.0 * math.pi * float(sigma_um) / float(lam_um)) ** 2)
+
+
+# ---------------------------------------------------------------------------------------------
+# Contrast sensitivity of the eye: Barten's model
+# ---------------------------------------------------------------------------------------------
+# Contrast sensitivity S = 1 / threshold modulation of a grating of u cycles/degree, mean luminance L [cd/m2] and
+# size X0 x X0 degrees, as used for the DICOM Grayscale Standard Display Function (DICOM PS3.14, Annex A.2, after
+# P. G. J. Barten):
+#   S(u) = M_opt(u) / k / sqrt{ (2 / T) (1 / X0^2 + 1 / XE^2 + u^2 / NE^2) [1 / (eta h I_L) + Phi0 / (1 - e^-(u/u0)^2)] }
+#   M_opt = exp(-2 pi^2 sigma^2 u^2), sigma = sqrt(sigma0^2 + (C_sph d^3)^2), I_L = pi d^2 L / 4 [td],
+#   pupil d = 4.6 - 2.8 tanh(0.4 log10(0.625 L)) mm.
+# Constants as printed in the standard; h = 357.36 photons / (td s) per square arc minute, i.e. x 3600 per square
+# degree.  With them the function reproduces Table B-1 of the standard (the luminance step of one JND for the
+# standard target, 4 c/deg, 2 x 2 deg) within 4 % from 0.05 to 3400 cd/m2 (tests/test_observer_search.py).
+# Stated validity: 1e-4 <= L <= 1e3 cd/m2, 0.5 <= X0 <= 60 deg, 0.2 <= u <= 50 c/deg.
+BARTEN = {"k": 3.3, "T": 0.1, "eta": 0.025, "h": 357.36 * 3600.0, "phi0": 3e-8, "XE": 12.0, "NE": 15.0,
+          "sigma0": 0.0133, "Csph": 1e-4, "u0": 8.0}
+
+
+def barten_sensitivity(u_cpd, L_cd_m2, X0_deg):
+    """Contrast sensitivity of the eye (Barten, DICOM PS3.14 Annex A) - see the constants above."""
+    b = BARTEN
+    u, L, X0 = max(float(u_cpd), 1e-6), max(float(L_cd_m2), 1e-9), max(float(X0_deg), 1e-6)
+    d = 4.6 - 2.8 * math.tanh(0.4 * math.log10(0.625 * L))
+    sigma = math.hypot(b["sigma0"], b["Csph"] * d ** 3)
+    m_opt = math.exp(-2.0 * math.pi ** 2 * sigma ** 2 * u ** 2)
+    il = math.pi / 4.0 * d ** 2 * L
+    geo = 1.0 / X0 ** 2 + 1.0 / b["XE"] ** 2 + u ** 2 / b["NE"] ** 2
+    noise = 1.0 / (b["eta"] * b["h"] * il) + b["phi0"] / (1.0 - math.exp(-(u / b["u0"]) ** 2))
+    return m_opt / b["k"] / math.sqrt(2.0 / b["T"] * geo * noise)
+
+
+MRAD_PER_DEG = 1000.0 * math.pi / 180.0
+
+
+# ---------------------------------------------------------------------------------------------
+# Search: probability of detection within a limited time
+# ---------------------------------------------------------------------------------------------
+# P(t) = P_inf (1 - e^(-t / tau)); for random search over a field of regard of N fields of view tau_FOR = N tau_FOV
+# (Friedman, Mark & Skirlo, "What probability distribution describes search?", Opt. Eng. 58(9), 093103 (2019),
+# Eqs. 2 and 3; also Sjaardema, Smith & Birch, Sandia SAND2015-6368, Eq. 1).  P_inf is the probability with
+# unlimited time, here the Johnson TTPF of the resolved cycles.  tau_FOV has no analytical model - "usually obtained
+# experimentally by curve fitting" (Friedman et al.) - so it is an input.
+def search_time_factor(t_s, tau_fov_s, n_fov):
+    """1 - exp(-t / (N tau_FOV)): the fraction of the unlimited-time probability reached after t seconds."""
+    tau = float(tau_fov_s) * max(float(n_fov), 1.0)
+    if not (tau > 0 and t_s > 0):
+        raise ValueError("Search needs a search time and a mean acquisition time > 0")
+    return 1.0 - math.exp(-float(t_s) / tau)
+
+
+# ---------------------------------------------------------------------------------------------
 # Rain, and an extinction that falls off with height (slant paths)
 # ---------------------------------------------------------------------------------------------
 # Specific attenuation of rain gamma = k R^alpha [dB/km], R the rain rate [mm/h]: Recommendation ITU-R P.1814-1
