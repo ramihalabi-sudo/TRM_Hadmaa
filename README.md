@@ -74,6 +74,10 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.38 - guide recordings for every field added since 2.32
+
+No effect on ranges: voice files only. The 151 Hebrew guide sentences that had no recording (the cards of the 23 fields added in 2.32 - 2.37 and the corrected card of the IIR weight) are recorded with the Gemini voice; all 2414 fixed Hebrew sentences of the guide are recorded and `test_every_fixed_sentence_is_recorded` passes again. Recordings that no sentence uses any more were not deleted.
+
 ## Version 2.37 - the partly implemented items extended: systematic search, scene-following AGC span, stabilization interpolation and crop, IIR filter text corrected
 
 Off by default: template ranges are unchanged; the run IDs change with the version number.
