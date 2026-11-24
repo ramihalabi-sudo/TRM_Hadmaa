@@ -74,6 +74,10 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.41 - the version is shown in the Properties of the program and of the installer
+
+No effect on ranges: packaging only. *Properties > Details* of `TRM_HADMAAv1.exe` now shows the file version (2.41.0.0), the product version (2.41), the product name and a comment with the version and its date; the Setup file shows file and product version too. The numbers are read from `trm4/version.py` at packaging time (`packaging/version_info.py`), so no further place has to be kept in step. Tests: four new ones in `tests/test_version.py`.
+
 ## Version 2.40 - the silicon curve is called by its name
 
 No effect on ranges: a rename only. *CCD Silicon generic* in the *Spectral quantum efficiency* list is now *Silicon (CCD / CMOS) generic* - the list names detector materials, and the curve has always served CMOS cameras too. Projects saved with the earlier name load as before (`presets.QE_ALIASES`, applied in `deep_merge`). The help of the field says so, and that an uncooled microbolometer uses *Flat response* (8 - 14 um by default) instead of a curve of the list. Tests: `tests/test_detector_names.py` (5 tests).
