@@ -74,6 +74,10 @@ run ID); `CHANGELOG.md` lists in Hebrew what each version changed against the pr
 `trm4/version.py`, the installer (`packaging/TRM_HADMAAv1.iss`), the top `CHANGELOG.md` entry and the newest section
 below agree.
 
+## Version 2.39 - the sidebar fits itself to a low window
+
+No effect on ranges: interface only. On a display of 768 lines the page list of the Engineering and Lab workflows filled the sidebar and *Show advanced parameters* below it was pushed off the screen (it stayed reachable from the menu only). The sidebar now fits its height (`App._fit_sidebar`): the two version lines go first, then the rows of the page list get tighter step by step. Found through the CI runner, whose screen is that low: `test_frames_in_the_window` had failed there since 2.30. Tests: `tests/test_sidebar_fit.py` (4 tests).
+
 ## Version 2.38 - guide recordings for every field added since 2.32
 
 No effect on ranges: voice files only. The 151 Hebrew guide sentences that had no recording (the cards of the 23 fields added in 2.32 - 2.37 and the corrected card of the IIR weight) are recorded with the Gemini voice; all 2414 fixed Hebrew sentences of the guide are recorded and `test_every_fixed_sentence_is_recorded` passes again. Recordings that no sentence uses any more were not deleted.

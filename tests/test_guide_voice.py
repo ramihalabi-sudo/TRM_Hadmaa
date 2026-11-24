@@ -542,6 +542,10 @@ class PointAtScreen(unittest.TestCase):
 
     @unittest.skipIf(G is None, "no tkinter")
     def test_frames_in_the_window(self):
+        # the real mouse pointer may rest over a field of the test window: the tip that hovering opens is not the
+        # guide's.  Hovering is switched off before the window is built - the widgets bind the method they find then
+        hover, G.Tooltip._schedule = G.Tooltip._schedule, lambda self, _e=None: None
+        self.addCleanup(setattr, G.Tooltip, "_schedule", hover)
         try:
             app = G.App()
         except tk.TclError as e:

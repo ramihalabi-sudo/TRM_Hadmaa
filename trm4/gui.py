@@ -1237,6 +1237,14 @@ class SidebarItem(tk.Frame):
         self.selected = on
         self._paint()
 
+    def text_height(self):
+        """Height of the icon and the name without the padding of the row."""
+        return max(w.winfo_reqheight() for w in self.parts[1:])
+
+    def set_pad(self, pad):
+        for w in self.parts[1:]:
+            w.pack_configure(pady=pad)
+
 
 class PlotTab(ttk.Frame):
     def __init__(self, master, nrows=1, ncols=1):
@@ -3121,6 +3129,8 @@ class App(tk.Tk):
         side = tk.Frame(body, bg=SIDEBAR, width=int(240 * self.k))
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
+        self.side, self._side_fit = side, None
+        side.bind("<Configure>", self._fit_sidebar)
         tk.Label(side, text="WORKFLOW", font=("Segoe UI Semibold", 8), fg="#7f8ba0", bg=SIDEBAR,
                  anchor="w").pack(fill="x", padx=18, pady=(16, 6))
         seg = tk.Frame(side, bg=SIDEBAR)
@@ -3150,10 +3160,50 @@ class App(tk.Tk):
         Tooltip(self.adv_check, "Advanced parameters change the result only for special hardware or detailed "
                                 "studies. Groups that are in use stay visible anyway; hiding a field never changes, "
                                 "resets or bypasses its value or checks.", wrap=int(300 * self.k))
-        tk.Label(foot, text="TRM4.v3 model  ·  v%s" % __version__, font=("Segoe UI", 8), fg="#6f7b90",
-                 bg=SIDEBAR, anchor="w").pack(fill="x")
-        tk.Label(foot, text="Fraunhofer IOSB TR 2021/04", font=("Segoe UI", 8), fg="#6f7b90", bg=SIDEBAR,
-                 anchor="w").pack(fill="x")
+        self.foot_labels = [
+            tk.Label(foot, text="TRM4.v3 model  ·  v%s" % __version__, font=("Segoe UI", 8), fg="#6f7b90",
+                     bg=SIDEBAR, anchor="w"),
+            tk.Label(foot, text="Fraunhofer IOSB TR 2021/04", font=("Segoe UI", 8), fg="#6f7b90", bg=SIDEBAR,
+                     anchor="w")]
+        for w in self.foot_labels:
+            w.pack(fill="x")
+
+    SIDE_PADS = (7, 6, 5, 4, 3, 2, 1)    # padding of a row of the page list, from roomy to tight
+
+    def _fit_sidebar(self, _event=None):
+        """Keep the page list and 'Show advanced parameters' on the screen in a low window (a 768-line display):
+        the two version lines go first, then the rows of the page list get tighter."""
+        items = list(self.side_items.values())
+        avail = self.side.winfo_height()
+        if not items or avail <= 1:
+            return
+        if self.side_list.winfo_y() <= 0:                       # the sidebar is not laid out yet: once it is
+            self._side_tries = getattr(self, "_side_tries", 0) + 1
+            if self._side_tries <= 25:
+                self.after(20, self._fit_sidebar)
+            return
+        self._side_tries = 0
+        adv = self.adv_check.winfo_reqheight() + 10 if self.adv_check.winfo_manager() else 0
+        lines = sum(w.winfo_reqheight() for w in self.foot_labels)
+        fixed = self.side_list.winfo_y() + 28 + adv              # 28: the padding above and below the footer
+        text = items[0].text_height()
+
+        def need(labels, pad):
+            return fixed + (lines if labels else 0) + len(items) * (text + 2 * pad)
+        # roomy rows matter more than the version lines: the lines stay only with (nearly) full rows; after that
+        # the rows get tighter step by step, and the tightest ones are used when nothing fits
+        choices = [(True, p) for p in self.SIDE_PADS[:2]] + [(False, p) for p in self.SIDE_PADS]
+        fit = next((c for c in choices if need(*c) <= avail), (False, self.SIDE_PADS[-1]))
+        if fit == self._side_fit:
+            return
+        self._side_fit = fit
+        for it in items:
+            it.set_pad(fit[1])
+        for w in self.foot_labels:
+            if fit[0] and not w.winfo_manager():
+                w.pack(fill="x")
+            elif not fit[0] and w.winfo_manager():
+                w.pack_forget()
 
     def set_workflow(self, key, initial=False):
         if key not in WORKFLOWS:
@@ -3173,8 +3223,11 @@ class App(tk.Tk):
             self.side_items[name] = it
         if key == "quick":
             self.adv_check.pack_forget()
-        elif not self.adv_check.winfo_ismapped():
-            self.adv_check.pack(fill="x", pady=(0, 10), before=self.adv_check.master.winfo_children()[1])
+        elif not self.adv_check.winfo_manager():
+            first = self.foot_labels[0]
+            self.adv_check.pack(fill="x", pady=(0, 10), **({"before": first} if first.winfo_manager() else {}))
+        self._side_fit = None                                   # new rows: fit them to the height again
+        self.after_idle(self._fit_sidebar)
         # result tabs: compact set for Quick Prediction, engineering views otherwise
         visible = RESULT_TABS[key]
         for name, w in self.result_tabs.items():
