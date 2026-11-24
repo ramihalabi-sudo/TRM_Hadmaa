@@ -64,5 +64,53 @@ class VersionConsistency(unittest.TestCase):
         self.assertIn("/compare/", page)
 
 
+class PropertiesVersion(unittest.TestCase):
+    """Explorer > Properties > Details of TRM_HADMAAv1.exe and of the Setup file shows the version; the numbers are
+    read from trm4/version.py at packaging time (packaging/version_info.py)."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, os.path.join(ROOT, "packaging"))
+        import version_info
+        cls.VI = version_info
+
+    def test_reads_the_single_source(self):
+        from trm4.version import VERSION_DATE
+        self.assertEqual(self.VI.read_version(ROOT), (VERSION, VERSION_DATE))
+        entries = dict(self.VI.strings(VERSION, VERSION_DATE))
+        self.assertEqual(entries["FileVersion"], VERSION)
+        self.assertEqual(entries["ProductVersion"], VERSION)
+        self.assertEqual(entries["OriginalFilename"], "TRM_HADMAAv1.exe")
+        self.assertIn(VERSION, entries["Comments"])
+
+    def test_four_numbers_of_a_windows_file_version(self):
+        self.assertEqual(self.VI.version_tuple("2.40"), (2, 40, 0, 0))
+        self.assertEqual(self.VI.version_tuple("2.41.3"), (2, 41, 3, 0))
+        self.assertEqual(self.VI.version_tuple("3"), (3, 0, 0, 0))
+        self.assertEqual(self.VI.version_tuple(VERSION)[:2], tuple(int(x) for x in VERSION.split(".")[:2]))
+        with self.assertRaises(ValueError):
+            self.VI.version_tuple("")
+
+    def test_build_files_use_it_and_carry_no_number_of_their_own(self):
+        spec = _read("packaging", "TRM_HADMAAv1.spec")
+        self.assertIn("version=VERSION_FILE", spec)
+        self.assertIn("version_info.write(", spec)
+        self.assertIsNone(re.search(r"\d+\.\d{2}", spec), "a version number written into the spec file")
+        iss = _read("packaging", "TRM_HADMAAv1.iss")
+        for key in ("VersionInfoVersion", "VersionInfoProductVersion", "VersionInfoProductTextVersion"):
+            self.assertIn("%s={#AppVersion}" % key, iss)
+
+    def test_resource_text(self):
+        try:
+            res = self.VI.resource(ROOT)
+        except ImportError:
+            self.skipTest("PyInstaller is not installed here")
+        text = str(res)
+        numbers = self.VI.version_tuple(VERSION)
+        self.assertIn("filevers=%r" % (numbers,), text)
+        self.assertIn("prodvers=%r" % (numbers,), text)
+        self.assertIn("StringStruct('ProductVersion', '%s')" % VERSION, text)
+
+
 if __name__ == "__main__":
     unittest.main()

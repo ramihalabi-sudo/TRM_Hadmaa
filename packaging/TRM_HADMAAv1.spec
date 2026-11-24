@@ -2,8 +2,15 @@
 # Build: packaging\build_exe.bat (or: python -m PyInstaller --noconfirm packaging\TRM_HADMAAv1.spec)
 # The data folders keep their place next to the trm4 package, where the code looks for them.
 import os
+import sys
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
+
+# version shown by Explorer under Properties > Details: taken from trm4/version.py (packaging/version_info.py)
+sys.path.insert(0, SPECPATH)
+import version_info
+
+VERSION_FILE = version_info.write(os.path.join(ROOT, "build", "version_info.txt"), ROOT)
 
 
 def tree(src, dst):
@@ -26,5 +33,5 @@ a = Analysis([os.path.join(SPECPATH, "trm_entry.py")], pathex=[ROOT], datas=data
              excludes=["PyQt5", "PyQt6", "PySide2", "PySide6", "IPython", "pytest"])
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TRM_HADMAAv1", console=False,
-          icon=os.path.join(ROOT, "trm4", "assets", "trm4.ico"))
+          icon=os.path.join(ROOT, "trm4", "assets", "trm4.ico"), version=VERSION_FILE)
 coll = COLLECT(exe, a.binaries, a.datas, name="TRM_HADMAAv1")

@@ -4,7 +4,7 @@
 ; stays writable (camera profiles are stored next to the program).  Settings stay in %APPDATA%\TRM4 on uninstall.
 
 #define AppName "TRM_HADMAAv1"
-#define AppVersion "2.40"
+#define AppVersion "2.41"
 #define AppPublisher "TRM_HADMAA"
 #define AppExe "TRM_HADMAAv1.exe"
 
@@ -14,6 +14,14 @@ AppName={#AppName} Thermal Range Model
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
+; shown by Explorer under Properties > Details of the Setup file
+VersionInfoVersion={#AppVersion}
+VersionInfoProductVersion={#AppVersion}
+VersionInfoProductTextVersion={#AppVersion}
+VersionInfoTextVersion={#AppVersion}
+VersionInfoProductName={#AppName} Thermal Range Model
+VersionInfoDescription={#AppName} Thermal Range Model Setup
+VersionInfoCompany={#AppPublisher}
 DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
